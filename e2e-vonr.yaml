@@ -1,3 +1,5 @@
+name: vonr-e2e
+
 # Docker Compose for E2E VoNR voice test using UERANSIM + pjsua
 #
 # Prerequisites:
@@ -72,4 +74,4 @@ services:
 networks:
   default:
     external: true
-    name: docker_open5gs_default
+    name: vonr-net

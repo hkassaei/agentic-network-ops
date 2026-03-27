@@ -32,6 +32,7 @@ _OPERATE_DIR = Path(__file__).resolve().parents[1]  # operate/
 _AGENT_LOG_DIRS = {
     "v1.5": _OPERATE_DIR / "agentic_ops" / "docs" / "agent_logs",
     "v3": _OPERATE_DIR / "agentic_ops_v3" / "docs" / "agent_logs",
+    "v4": _OPERATE_DIR / "agentic_ops_v4" / "docs" / "agent_logs",
 }
 
 

@@ -126,8 +126,8 @@ class ChallengeAgent(BaseAgent):
             scenario=scenario,
         )
 
-        if agent_version == "v3":
-            rca_model = f"v3-adk/{_get_v3_models()}"
+        if agent_version in ("v3", "v4"):
+            rca_model = f"{agent_version}-adk/{_get_v3_models()}"
         else:
             rca_model = f"v1.5-pydantic/{os.environ.get('AGENT_MODEL', 'google-vertex:gemini-2.5-pro')}"
 
@@ -165,8 +165,8 @@ class ChallengeAgent(BaseAgent):
         if ops_path not in sys.path:
             sys.path.insert(0, ops_path)
 
-        if agent_version == "v3":
-            # v3 uses Google ADK (Vertex AI)
+        if agent_version in ("v3", "v4"):
+            # v3/v4 use Google ADK (Vertex AI)
             has_key = bool(
                 os.environ.get("GOOGLE_CLOUD_PROJECT")
                 or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")
@@ -174,7 +174,10 @@ class ChallengeAgent(BaseAgent):
             if not has_key:
                 return False
             try:
-                from agentic_ops_v3.orchestrator import investigate  # noqa: F401
+                if agent_version == "v4":
+                    from agentic_ops_v4.orchestrator import investigate  # noqa: F401
+                else:
+                    from agentic_ops_v3.orchestrator import investigate  # noqa: F401
                 return True
             except ImportError:
                 return False
@@ -212,8 +215,8 @@ class ChallengeAgent(BaseAgent):
         if ops_path not in sys.path:
             sys.path.insert(0, ops_path)
 
-        if agent_version == "v3":
-            return await self._run_v3_agent(question)
+        if agent_version in ("v3", "v4"):
+            return await self._run_adk_agent(question, agent_version)
         return await self._run_v15_agent(question)
 
     async def _run_v15_agent(self, question: str) -> dict:
@@ -246,9 +249,12 @@ class ChallengeAgent(BaseAgent):
 
         return {"_raw_diagnosis": "Agent produced no output"}
 
-    async def _run_v3_agent(self, question: str) -> dict:
-        """Run the v3 (ADK multi-phase) troubleshooting agent."""
-        from agentic_ops_v3.orchestrator import investigate
+    async def _run_adk_agent(self, question: str, version: str = "v3") -> dict:
+        """Run an ADK multi-phase troubleshooting agent (v3 or v4)."""
+        if version == "v4":
+            from agentic_ops_v4.orchestrator import investigate
+        else:
+            from agentic_ops_v3.orchestrator import investigate
 
         result = await investigate(question)
 

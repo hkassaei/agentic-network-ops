@@ -54,7 +54,8 @@ Then open **http://localhost:8073** in your browser.
 |---------|-----|--------|-------------|
 | v1.5 | Investigate | Pydantic AI (Claude/Gemini) | Single agent with tools |
 | v2 | Investigate V2 | Google ADK (Gemini) | Multi-phase pipeline with specialist agents |
-| v3 | Investigate V3 | Google ADK (Gemini) | Context-isolated multi-phase (latest) |
+| v3 | Investigate V3 | Google ADK (Gemini) | Context-isolated multi-phase |
+| v4 | Investigate V4 | Google ADK (Gemini 2.5) | Topology-aware, context-isolated multi-phase with dynamic specialist dispatch (latest) |
 
 ## E2E VoNR Voice Test
 
@@ -208,6 +209,46 @@ python -m agentic_chaos -v run "P-CSCF Latency" --agent v1.5
 | AMF Restart | core | single | Restarts AMF (simulates upgrade) |
 | Cascading IMS Failure | IMS | multi | Multiple IMS faults in sequence |
 
+## Custom Grafana Dashboards
+
+Custom Grafana dashboards are stored in the **parent repo** (not the `network/` submodule) and mounted into the Grafana container via a Docker Compose override. This keeps the upstream `docker_open5gs` submodule untouched.
+
+### How It Works
+
+The `docker-compose.grafana.yml` override adds two volume mounts to the Grafana container:
+
+1. `grafana/custom_dashboards.yml` → `/etc/grafana/provisioning/dashboards/custom_dashboards.yml` — tells Grafana to load dashboards from a custom path
+2. `grafana/dashboards/` → `/var/lib/grafana/custom-dashboards/` — the actual dashboard JSON files
+
+Grafana picks up both the submodule's dashboards (under "Services" folder) and custom dashboards (under "5G Core" folder) on startup.
+
+### Dashboards
+
+| Dashboard | File | Description |
+|-----------|------|-------------|
+| 5G Core | `grafana/dashboards/5g_core_dashboard.json` | AMF, SMF, UPF, PCF metrics from Prometheus |
+| IMS | Planned — see `grafana/ims-metrics-plan.md` | P-CSCF, I-CSCF, S-CSCF, RTPEngine, PyHSS (requires exporter) |
+
+### Adding a New Dashboard
+
+1. Create a dashboard JSON file in `grafana/dashboards/`
+2. Use datasource UID `PA240B69645956401` (the provisioned Prometheus datasource)
+3. Redeploy or restart Grafana — the new dashboard is automatically discovered
+
+### Grafana Access
+
+- **URL:** `http://<DOCKER_HOST_IP>:3000`
+- **Username:** `open5gs`
+- **Password:** `open5gs`
+
+### Manual Stack Start (with custom dashboards)
+
+The deploy scripts already include the override, but if starting manually:
+
+```bash
+docker compose -p vonr -f network/sa-vonr-deploy.yaml -f docker-compose.grafana.yml up -d
+```
+
 ## Directory Structure
 
 ```
@@ -228,10 +269,20 @@ agentic-network-ops/
 ├── agentic_ops_v3/             # v3: Context-isolated multi-phase
 │   ├── orchestrator.py         # Same pipeline, fresh sessions per phase
 │   └── agents/                 # Specialist agent definitions
+├── agentic_ops_v4/             # v4: Topology-aware multi-phase (latest)
+│   ├── orchestrator.py         # Session-per-phase + dynamic specialist dispatch
+│   ├── agents/                 # 8 agents: triage, tracer, dispatcher, 4 specialists, synthesis
+│   └── tools.py                # Reuses v1.5 tools + get_network_topology
 ├── agentic_chaos/              # Fault injection + RCA challenge framework
 │   ├── cli.py                  # CLI: run scenarios, list episodes, heal
 │   ├── engine.py               # Fault injection engine (triple-lock safety)
 │   └── scenarios/              # Pre-built failure scenarios
+├── grafana/                    # Custom Grafana dashboards (overlay on submodule)
+│   ├── dashboards/             # Dashboard JSON files
+│   │   └── 5g_core_dashboard.json
+│   ├── custom_dashboards.yml   # Provisioning config for custom dashboards
+│   └── ims-metrics-plan.md     # Plan for IMS metrics exporter
+├── docker-compose.grafana.yml  # Compose override: mounts custom dashboards into Grafana
 ├── network/                    # Full 5G SA + IMS stack (from docker_open5gs)
 │   ├── sa-vonr-deploy.yaml     # Docker Compose: core + IMS (17 containers)
 │   ├── nr-gnb.yaml             # Docker Compose: gNB

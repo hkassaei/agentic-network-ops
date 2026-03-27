@@ -28,19 +28,19 @@ export GOOGLE_CLOUD_LOCATION="northamerica-northeast1"
 export GOOGLE_GENAI_USE_VERTEXAI="TRUE"
 
 # List available scenarios
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli list-scenarios
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos list-scenarios
 
 # Run a scenario
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli run "DNS Failure"
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos run "DNS Failure"
 
 # List recorded episodes
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli list-episodes
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos list-episodes
 
 # Show episode details
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli show-episode ep_20260318_...
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos show-episode ep_20260318_...
 
 # Emergency: heal all active faults
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli heal-all
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos heal-all
 ```
 
 ## 10 Pre-Built Scenarios

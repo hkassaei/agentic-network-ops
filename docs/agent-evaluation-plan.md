@@ -19,17 +19,17 @@ Each scenario is run individually, on-demand, via the CLI. This gives full contr
 **Step 1 — List available scenarios:**
 
 ```bash
-python -m agentic_chaos.cli list-scenarios
+python -m agentic_chaos list-scenarios
 ```
 
 **Step 2 — Run a single scenario against a specific agent:**
 
 ```bash
 # Run with v1.5 agent
-python -m agentic_chaos.cli run "DNS Failure" --agent v1.5
+python -m agentic_chaos run "DNS Failure" --agent v1.5
 
 # Run with v3 agent
-python -m agentic_chaos.cli run "DNS Failure" --agent v3
+python -m agentic_chaos run "DNS Failure" --agent v3
 ```
 
 Each run executes the full orchestrator pipeline:
@@ -44,16 +44,16 @@ The orchestrator captures a pre-fault baseline, injects the fault(s), observes s
 
 ```bash
 # List all recorded episodes
-python -m agentic_chaos.cli list-episodes
+python -m agentic_chaos list-episodes
 
 # Show full details of a specific episode
-python -m agentic_chaos.cli show-episode ep_20260324_143022_dns_failure
+python -m agentic_chaos show-episode ep_20260324_143022_dns_failure
 ```
 
 **Emergency — heal all active faults if something goes wrong:**
 
 ```bash
-python -m agentic_chaos.cli heal-all
+python -m agentic_chaos heal-all
 ```
 
 ### Per-Scenario Procedure
@@ -64,12 +64,12 @@ For each scenario, the operator follows this workflow:
 1. Bring up clean stack (docker compose up)
 2. Register both UEs, verify calls work (establishes the healthy baseline)
 3. Run the scenario against v1.5:
-     python -m agentic_chaos.cli run "<scenario>" --agent v1.5
+     python -m agentic_chaos run "<scenario>" --agent v1.5
    → Pipeline runs: baseline → inject → observe → challenge → heal → record
    → Outputs: JSON log + markdown summary in agentic_ops/docs/agent_logs/
 4. Verify stack is healthy again (faults were healed in step 3)
 5. Run the same scenario against v3:
-     python -m agentic_chaos.cli run "<scenario>" --agent v3
+     python -m agentic_chaos run "<scenario>" --agent v3
    → Outputs: JSON log + markdown summary in agentic_ops_v3/docs/agent_logs/
 6. Compare the two markdown summaries side by side
 ```
@@ -242,13 +242,13 @@ Add a `run-all` CLI command that executes every scenario (or a filtered subset) 
 
 ```bash
 # Run all scenarios against v3
-python -m agentic_chaos.cli run-all --agent v3
+python -m agentic_chaos run-all --agent v3
 
 # Run only Phase 1 (easy) scenarios
-python -m agentic_chaos.cli run-all --agent v3 --phase 1
+python -m agentic_chaos run-all --agent v3 --phase 1
 
 # Run only network fault scenarios
-python -m agentic_chaos.cli run-all --agent v3 --category network
+python -m agentic_chaos run-all --agent v3 --category network
 ```
 
 Each scenario in the suite would follow the same pipeline (baseline → inject → observe → challenge → heal → record) with an automatic stack health check between runs. The suite produces a roll-up summary in addition to the per-scenario JSON + markdown pairs.

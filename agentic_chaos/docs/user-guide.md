@@ -96,13 +96,13 @@ The fastest way to run your first chaos experiment:
 # From the docker_open5gs root directory:
 
 # 1. List what scenarios are available
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli list-scenarios
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos list-scenarios
 
 # 2. Run a safe scenario against the v1.5 agent
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli run "DNS Failure" --agent v1.5
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos run "DNS Failure" --agent v1.5
 
 # 3. Check the recorded episode
-PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli list-episodes
+PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos list-episodes
 ```
 
 You should see output like:
@@ -147,7 +147,7 @@ All commands are run from the `docker_open5gs` root directory:
 
 ```bash
 # Shorthand used in this guide:
-alias chaos='PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos.cli'
+alias chaos='PYTHONPATH=operate operate/.venv/bin/python -m agentic_chaos'
 ```
 
 ### `chaos list-scenarios`

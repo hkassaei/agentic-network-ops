@@ -8,19 +8,19 @@ Usage:
     export GOOGLE_GENAI_USE_VERTEXAI="TRUE"
 
     # Run a scenario:
-    python -m agentic_chaos.cli run "P-CSCF Latency" --agent v1.5
+    python -m agentic_chaos run "P-CSCF Latency" --agent v1.5
 
     # List available scenarios:
-    python -m agentic_chaos.cli list-scenarios
+    python -m agentic_chaos list-scenarios
 
     # List recorded episodes (scans agent_logs directories):
-    python -m agentic_chaos.cli list-episodes
+    python -m agentic_chaos list-episodes
 
     # Show an episode:
-    python -m agentic_chaos.cli show-episode run_20260324_143022_pcscf_latency
+    python -m agentic_chaos show-episode run_20260324_143022_pcscf_latency
 
     # Emergency: heal all active faults:
-    python -m agentic_chaos.cli heal-all
+    python -m agentic_chaos heal-all
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ async def cmd_list_scenarios(args: argparse.Namespace) -> int:
         print(f"{s['name']:<35} {s['category']:<12} {s['blast_radius']:<12} {s['faults']:<6}")
 
     print(f"\n{len(scenarios)} scenarios available.")
-    print("Run with: python -m agentic_chaos.cli run \"<scenario name>\"")
+    print("Run with: python -m agentic_chaos run \"<scenario name>\"")
     return 0
 
 

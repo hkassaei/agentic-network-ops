@@ -1,0 +1,508 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260327_021858_gnb_radio_link_failure",
+  "timestamp": "2026-03-27T02:18:59.085383+00:00",
+  "duration_seconds": 148.914167,
+  "scenario": {
+    "name": "gNB Radio Link Failure",
+    "description": "Kill the gNB to simulate a radio link failure. All UEs lose 5G registration, PDU sessions drop, and IMS SIP unregisters.",
+    "category": "container",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "container_kill",
+        "target": "nr_gnb",
+        "params": {},
+        "ttl_seconds": 300
+      }
+    ],
+    "expected_symptoms": [
+      "UEs lose RAN connection",
+      "PDU sessions dropped",
+      "SIP REGISTER expires without renewal",
+      "gNB disappears from AMF"
+    ],
+    "escalation": false,
+    "challenge_mode": true,
+    "requires_active_call": false,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 300
+  },
+  "baseline": {
+    "timestamp": "2026-03-27T02:18:59.085383+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 6.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 15375.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 14951.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 4.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 4.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 8.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 8.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 2.0,
+          "core:rcv_requests_options": 396.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 2.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 2.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 399.0,
+          "httpclient:connok": 2.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 2.0,
+          "script:register_time": 714.0,
+          "sl:1xx_replies": 6.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 110.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 6.0,
+          "cdp:replies_response_time": 661.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 2.0,
+          "core:rcv_requests_register": 8.0,
+          "ims_icscf:lir_avg_response_time": 71.0,
+          "ims_icscf:lir_replies_received": 2.0,
+          "ims_icscf:lir_replies_response_time": 143.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 129.0,
+          "ims_icscf:uar_replies_received": 4.0,
+          "ims_icscf:uar_replies_response_time": 518.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "8 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 98.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 392.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 2.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 2.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 2.0,
+          "ims_auth:mar_avg_response_time": 86.0,
+          "ims_auth:mar_replies_received": 2.0,
+          "ims_auth:mar_replies_response_time": 172.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 2.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 110.0,
+          "ims_registrar_scscf:sar_replies_received": 2.0,
+          "ims_registrar_scscf:sar_replies_response_time": 220.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_80535fbd",
+      "fault_type": "container_kill",
+      "target": "nr_gnb",
+      "params": {},
+      "mechanism": "docker kill nr_gnb",
+      "heal_command": "docker start nr_gnb",
+      "injected_at": "2026-03-27T02:18:59.086496+00:00",
+      "ttl_seconds": 300,
+      "expires_at": "2026-03-27T02:23:59.086496+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "Expected 'exited', got 'exited'"
+    }
+  ],
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-03-27T02:18:59.462720+00:00",
+      "elapsed_seconds": 0.377337,
+      "metrics_delta": {},
+      "log_samples": {
+        "amf": [
+          "\u001b[32m03/26 22:18:59.170\u001b[0m: [\u001b[33mamf\u001b[0m] \u001b[1;32mINFO\u001b[0m: gNB-N2[172.22.0.23] connection refused!!! (../src/amf/amf-sm.c:997)"
+        ],
+        "icscf": [
+          "\u001b[0;39;49m\u001b[0;36;49m 9(82) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_result_code: Failed finding avp",
+          "\u001b[0;39;49m\u001b[0;36;49m10(83) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_result_code: Failed finding avp",
+          "\u001b[0;39;49m\u001b[0;31;49m 1(74) ERROR: {1 1857 INVITE vDVm9oal4nXXdpmBR5lVpLs4WZLvL-xf initial_request} <script>: $ru => sip:001011234567891@ims.mnc001.mcc001.3gppnetwork.org",
+          "\u001b[0;39;49m\u001b[0;36;49m11(84) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_experimental_result_code: Failed finding avp",
+          "\u001b[0;39;49m\u001b[0;36;49m12(85) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_result_code: Failed finding avp",
+          "\u001b[0;39;49m\u001b[0;36;49m13(86) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_result_code: Failed finding avp",
+          "\u001b[0;39;49m\u001b[0;31;49m 4(77) ERROR: {1 1716 INVITE 3nRlO7LbarDGy.7m5I4MsOjpjpV4FjBA initial_request} <script>: $ru => sip:001011234567892@ims.mnc001.mcc001.3gppnetwork.org",
+          "\u001b[0;39;49m\u001b[0;36;49m14(87) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_experimental_result_code: Failed finding avp"
+        ],
+        "pyhss": [
+          "2026-03-26 22:18:59,500 INFO sqlalchemy.engine.Engine DESCRIBE `ims_hss_db`.`operation_log`",
+          "2026-03-26 22:18:59,500 INFO sqlalchemy.engine.Engine [raw sql] ()",
+          "2026-03-26 22:18:59,503 INFO sqlalchemy.engine.Engine BEGIN (implicit)",
+          "2026-03-26 22:18:59,503 INFO sqlalchemy.engine.Engine SELECT ims_subscriber.ims_subscriber_id AS ims_subscriber_ims_subscriber_id, ims_subscriber.msisdn AS ims_subscriber_msisdn, ims_subscriber.msisdn_list AS ims_subscriber_msisdn_list, ims_subscriber.imsi AS ims_subscriber_imsi, ims_subscriber.ifc_path AS ims_subscriber_ifc_path, ims_subscriber.pcscf AS ims_subscriber_pcscf, ims_subscriber.pcscf_realm AS ims_subscriber_pcscf_realm, ims_subscriber.pcscf_active_session AS ims_subscriber_pcscf_active_session, ims_subscriber.pcscf_timestamp AS ims_subscriber_pcscf_timestamp, ims_subscriber.pcscf_peer AS ims_subscriber_pcscf_peer, ims_subscriber.xcap_profile AS ims_subscriber_xcap_profile, ims_subscriber.sh_profile AS ims_subscriber_sh_profile, ims_subscriber.scscf AS ims_subscriber_scscf, ims_subscriber.scscf_timestamp AS ims_subscriber_scscf_timestamp, ims_subscriber.scscf_realm AS ims_subscriber_scscf_realm, ims_subscriber.scscf_peer AS ims_subscriber_scscf_peer, ims_subscriber.sh_template_path AS ims_subscriber_sh_template_path, ims_subscriber.last_modified AS ims_subscriber_last_modified "
+        ],
+        "nr_gnb": [
+          "[2026-03-26 21:46:44.580] [ngap] [\u001b[31m\u001b[1merror\u001b[m] Unhandled NGAP initiating-message received (9)",
+          "[2026-03-26 21:46:44.780] [ngap] [\u001b[31m\u001b[1merror\u001b[m] Unhandled NGAP initiating-message received (9)",
+          "[2026-03-26 21:46:44.794] [ngap] [\u001b[31m\u001b[1merror\u001b[m] Unhandled NGAP initiating-message received (9)",
+          "[2026-03-26 21:46:44.802] [ngap] [\u001b[31m\u001b[1merror\u001b[m] Unhandled NGAP initiating-message received (9)"
+        ],
+        "e2e_ue2": [
+          "22:16:44.823           pjsua_core.c  .......TX 1051 bytes Response msg 200/UPDATE/cseq=1718 (tdta0x722350026c88) to UDP 172.22.0.21:5060:"
+        ]
+      },
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-03-27T02:21:27.999550+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 0.0,
+          "gnb": 0.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 6.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 15383.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 14959.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 4.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 4.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 8.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 8.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 2.0,
+          "core:rcv_requests_options": 426.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 2.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 2.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 429.0,
+          "httpclient:connok": 2.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 2.0,
+          "script:register_time": 714.0,
+          "sl:1xx_replies": 6.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 110.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 6.0,
+          "cdp:replies_response_time": 661.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 2.0,
+          "core:rcv_requests_register": 8.0,
+          "ims_icscf:lir_avg_response_time": 71.0,
+          "ims_icscf:lir_replies_received": 2.0,
+          "ims_icscf:lir_replies_response_time": 143.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 129.0,
+          "ims_icscf:uar_replies_received": 4.0,
+          "ims_icscf:uar_replies_response_time": 518.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "8 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 98.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 392.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 2.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 2.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 2.0,
+          "ims_auth:mar_avg_response_time": 86.0,
+          "ims_auth:mar_replies_received": 2.0,
+          "ims_auth:mar_replies_response_time": 172.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 2.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 110.0,
+          "ims_registrar_scscf:sar_replies_received": 2.0,
+          "ims_registrar_scscf:sar_replies_response_time": 220.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 148.913054,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Kill the gNB to simulate a radio link failure. All UEs lose 5G registration, PDU sessions drop, and IMS SIP unregisters.",
+    "affected_components": [
+      "nr_gnb"
+    ],
+    "severity": "degraded",
+    "failure_domain": "data_plane",
+    "protocol_impact": "GTP-U"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v3-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "Here is the final diagnosis of the RCA investigation.\n\n### Cause 1: Misconfigured Subscriber Profile in HSS (Primary)\n\n*   **summary**: The S-CSCF is aborting registrations because the subscriber's profile fetched from the HSS is missing a required data parameter.\n*   **timeline**:\n    1.  UE sends a SIP REGISTER to the P-CSCF.\n    2.  P-CSCF successfully forwards the REGISTER to the S-CSCF.\n    3.  S-CSCF receives the REGISTER and queries the HSS for the user's profile.\n    4.  The S-CSCF attempts to match the user's Initial Filter Criteria (iFC) against its internal routing rules.\n    5.  The S-CSCF's configuration (`isc_match_filter_reg(\"0\",\"location\");`) requires a \"location\" parameter in the iFC.\n    6.  **Failure**: The subscriber's profile in the HSS lacks this \"location\" parameter, causing the match to fail.\n    7.  The S-CSCF logs \"No REGISTER match found in filter criteria\" and aborts processing without sending a SIP response.\n    8.  The P-CSCF times out waiting for a response.\n*   **root_cause**: A data misconfiguration exists in the HSS. The subscriber's Initial Filter Criteria (iFC) profile is missing a \"location\" parameter. The S-CSCF is configured to strictly require this parameter for processing REGISTER requests, and it aborts the entire flow when the parameter is not found in the data retrieved from the HSS.\n*   **affected_components**: `scscf`, `hss`\n*   **recommendation**: Update the affected subscriber profiles in the HSS database. The Initial Filter Criteria (iFC) for each user must be modified to include the required \"location\" parameter that the S-CSCF is configured to expect.\n*   **confidence**: high\n*   **explanation**: The root cause is a mismatch between S-CSCF configuration and HSS subscriber data. The S-CSCF is hard-coded to look for a \"location\" tag within the user profile it gets from the HSS during registration. For the failing user, this tag is missing from their profile data. This causes the S-CSCF to fail an internal check, log an error, and stop processing the registration entirely. Because it stops, it never sends a failure response, causing the P-CSCF to time out. The fix is to add the missing \"location\" data to the user's profile in the HSS.\n\n### Cause 2: Stale S-CSCF Assignment in HSS (Secondary)\n\n*   **summary**: The subscriber's HSS record contains an invalid S-CSCF assignment timestamp from the future, which may disrupt registration state management.\n*   **timeline**:\n    1.  During a registration or re-registration attempt, the I-CSCF or S-CSCF queries the HSS for the user's current S-CSCF assignment.\n    2.  The HSS returns the user's data, which includes `scscf_timestamp: \"2026-03-27T01:46:20Z\"`.\n    3.  **Failure**: An IMS component may interpret this future timestamp as invalid or \"stale,\" potentially leading it to reject the user's state as inconsistent.\n*   **root_cause**: The subscriber data in the HSS contains an anomalous `scscf_timestamp` with a value set in the future. This indicates data corruption or a bug in how timestamps are written to the HSS during previous registration events.\n*   **affected_components**: `hss`, `scscf`\n*   **recommendation**: Purge the invalid S-CSCF assignment data for the affected subscriber (IMSI '001011234567891') from the PyHSS database. This will force a clean registration where a new, valid S-CSCF is assigned with a correct timestamp.\n*   **confidence**: medium\n*   **explanation**: We discovered that the user's profile in the HSS has a timestamp from the future for its S-CSCF assignment. While not the direct cause of the \"filter criteria\" error, this is a significant data anomaly. It can cause unpredictable behavior in the IMS core, as components may see the user's registration state as invalid. This should be cleaned up to prevent future issues, but fixing the missing \"location\" parameter (Cause 1) will resolve the immediate registration failure.",
+    "score": {
+      "root_cause_correct": false,
+      "root_cause_rationale": "The agent completely missed the actual root cause, which was the killing of the 'nr_gnb' container, instead diagnosing HSS misconfigurations.",
+      "component_overlap": 0.0,
+      "component_rationale": "The agent did not identify the 'nr_gnb' container, which was the target of the injected fault.",
+      "severity_correct": false,
+      "severity_rationale": "The agent diagnosed a misconfiguration leading to registration failure, which is a functional impairment, not the complete outage implied by a container kill.",
+      "fault_type_identified": false,
+      "fault_type_rationale": "The agent identified data misconfiguration/corruption as the fault type, not a container kill/crash.",
+      "confidence_calibrated": false,
+      "confidence_rationale": "The agent expressed high confidence in a diagnosis that was entirely incorrect, indicating poor calibration.",
+      "ranking_position": null,
+      "ranking_rationale": "The actual root cause was not identified or ranked by the agent.",
+      "total_score": 0.0,
+      "summary": "The agent completely failed to identify the actual root cause, its affected components, the severity, or the type of fault, and was overconfident in its incorrect diagnosis."
+    },
+    "time_to_diagnosis_seconds": 141.2,
+    "token_usage": {
+      "input_tokens": 80520,
+      "output_tokens": 3692,
+      "thinking_tokens": 17245,
+      "total_tokens": 101457,
+      "per_phase": [
+        {
+          "agent": "TriageAgent",
+          "tokens": 5511,
+          "tool_calls": 2,
+          "llm_calls": 2
+        },
+        {
+          "agent": "EndToEndTracer",
+          "tokens": 50791,
+          "tool_calls": 4,
+          "llm_calls": 5
+        },
+        {
+          "agent": "DispatchAgent",
+          "tokens": 3423,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "TransportSpecialist",
+          "tokens": 16308,
+          "tool_calls": 8,
+          "llm_calls": 4
+        },
+        {
+          "agent": "SubscriberDataSpecialist",
+          "tokens": 5538,
+          "tool_calls": 1,
+          "llm_calls": 2
+        },
+        {
+          "agent": "CoreSpecialist",
+          "tokens": 2102,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "IMSSpecialist",
+          "tokens": 12085,
+          "tool_calls": 2,
+          "llm_calls": 3
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 5699,
+          "tool_calls": 0,
+          "llm_calls": 1
+        }
+      ]
+    }
+  }
+}

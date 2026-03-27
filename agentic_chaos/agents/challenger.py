@@ -95,10 +95,8 @@ class ChallengeAgent(BaseAgent):
         log.info("Challenge Mode: invoking %s agent...", agent_version)
 
         faults_injected = ctx.session.state.get("faults_injected", [])
-        observations = ctx.session.state.get("observations", [])
 
-        # Build a question for the RCA agent based on observed symptoms
-        question = self._build_question(scenario, observations)
+        question = self._build_question()
 
         start_time = time.time()
         try:
@@ -196,52 +194,17 @@ class ChallengeAgent(BaseAgent):
             except ImportError:
                 return False
 
-    # Containers outside the NOC boundary — their logs and metrics must not
-    # leak into the question context passed to the RCA agent.
-    _HIDDEN_CONTAINERS = {"nr_gnb", "e2e_ue1", "e2e_ue2"}
+    def _build_question(self) -> str:
+        """Build a blind diagnostic question for the RCA agent.
 
-    def _build_question(self, scenario: dict, observations: list[dict]) -> str:
-        """Build a diagnostic question from observed symptoms.
-
-        Filters out RAN/UE container data to match the agent's NOC-scoped
-        visibility — the agent cannot see gNB or UE containers via its tools,
-        so it should not receive their logs or metrics in the question either.
+        The agent receives no hints about observed symptoms — it must
+        discover everything on its own using its tools. This makes the
+        challenge a true test of autonomous diagnostic ability.
         """
-        # Collect all notable log lines from observations, excluding hidden containers
-        all_logs: dict[str, list[str]] = {}
-        for obs in observations:
-            for container, lines in obs.get("log_samples", {}).items():
-                if container not in self._HIDDEN_CONTAINERS:
-                    all_logs.setdefault(container, []).extend(lines)
-
-        # Collect metrics deltas, excluding hidden containers
-        all_deltas: dict[str, dict] = {}
-        for obs in observations:
-            for node, delta in obs.get("metrics_delta", {}).items():
-                if node not in self._HIDDEN_CONTAINERS:
-                    all_deltas.setdefault(node, {}).update(delta)
-
-        parts = [
-            "The 5G SA + IMS stack is experiencing issues. ",
-            "Investigate and diagnose the root cause.\n\n",
-        ]
-
-        if all_logs:
-            parts.append("Recent error logs observed:\n")
-            for container, lines in sorted(all_logs.items()):
-                for line in lines[:5]:  # Limit per container
-                    parts.append(f"  [{container}] {line}\n")
-
-        if all_deltas:
-            parts.append("\nMetrics changes detected:\n")
-            for node, deltas in sorted(all_deltas.items()):
-                for metric, vals in deltas.items():
-                    parts.append(
-                        f"  [{node}] {metric}: "
-                        f"{vals.get('baseline', '?')} → {vals.get('current', '?')}\n"
-                    )
-
-        return "".join(parts)
+        return (
+            "The 5G SA + IMS stack is experiencing issues. "
+            "Investigate and diagnose the root cause."
+        )
 
     async def _run_rca_agent(self, question: str, agent_version: str = "v1.5") -> dict:
         """Run the specified troubleshooting agent and return its diagnosis."""

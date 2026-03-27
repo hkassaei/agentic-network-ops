@@ -6,8 +6,7 @@ AI-powered troubleshooting platform for a 5G SA + IMS (VoNR) network stack. Incl
 
 - Docker + Docker Compose v2.14+
 - Python 3.10+
-- For v1.5 agent (Claude): `ANTHROPIC_API_KEY`
-- For v2/v3 agents + chaos engine (Vertex AI / Gemini):
+- For v1.5/v2/v3 agents + chaos engine (Vertex AI / Gemini):
   ```
   GOOGLE_CLOUD_PROJECT=<your-project>
   GOOGLE_CLOUD_LOCATION=<region>
@@ -132,6 +131,82 @@ Defined in `e2e.env`:
 | IMSI | 001011234567891 | 001011234567892 |
 | MSISDN | 0100001111 | 0100002222 |
 | Container IP | 172.22.0.50 | 172.22.0.51 |
+
+## Agentic Chaos (Fault Injection + RCA Challenge)
+
+A chaos engineering framework that injects controlled faults into the running stack, observes symptoms, then challenges an RCA agent to diagnose the root cause — blind, with no hints. The agent's diagnosis is scored against ground truth by an LLM judge.
+
+### How It Works
+
+1. **Baseline** — Captures pre-fault metrics and container state
+2. **Inject** — Applies one or more faults from the scenario (container kill, network latency, config corruption, etc.)
+3. **Observe** — Polls metrics and logs until symptoms appear or timeout
+4. **Challenge** — Prompts the RCA agent with a blind question: *"The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause."* The agent must discover everything using its own tools
+5. **Score** — An LLM judge compares the diagnosis against ground truth (40% root cause, 25% component overlap, 15% severity, 10% fault type, 10% confidence calibration)
+6. **Heal** — Reverses all faults via triple-lock safety (SQLite registry + TTL reaper + signal handlers)
+7. **Record** — Writes a structured JSON episode + markdown report
+
+### Safety
+
+Every injected fault is registered in SQLite before injection. A background TTL reaper auto-heals after 120s. SIGINT/SIGTERM handlers heal all faults on exit. Run `heal-all` if anything gets stuck.
+
+### Setup
+
+The chaos CLI runs independently from the GUI.
+
+```bash
+cd $HOME/agentic-network-ops
+
+# Create a dedicated venv
+python3 -m venv agentic_chaos/.venv
+source agentic_chaos/.venv/bin/activate
+pip install -r agentic_chaos/requirements.txt
+
+# Set Vertex AI credentials (required for the RCA agents and LLM scorer)
+export GOOGLE_CLOUD_PROJECT="<your-project>"
+export GOOGLE_CLOUD_LOCATION="<region>"
+export GOOGLE_GENAI_USE_VERTEXAI="TRUE"
+```
+
+### CLI Usage
+
+The stack must be up (via GUI or scripts) before running scenarios.
+
+```bash
+# List available scenarios
+python -m agentic_chaos list-scenarios
+
+# Run a scenario (challenges the RCA agent and scores the diagnosis)
+python -m agentic_chaos run "DNS Failure" --agent v1.5
+python -m agentic_chaos run "S-CSCF Crash" --agent v3
+
+# List recorded episodes
+python -m agentic_chaos list-episodes
+
+# Show a specific episode
+python -m agentic_chaos show-episode run_20260324_143022_pcscf_latency
+
+# Emergency: heal all active faults
+python -m agentic_chaos heal-all
+
+# Verbose logging
+python -m agentic_chaos -v run "P-CSCF Latency" --agent v1.5
+```
+
+### Scenarios
+
+| Scenario | Category | Blast Radius | What It Does |
+|----------|----------|--------------|--------------|
+| gNB Radio Link Failure | RAN | single | Kills the gNB container |
+| P-CSCF Latency | IMS | single | Adds network latency to P-CSCF |
+| S-CSCF Crash | IMS | single | Stops the S-CSCF container |
+| HSS Unresponsive | IMS | single | Pauses PyHSS |
+| Data Plane Degradation | core | single | Packet loss/latency on UPF |
+| MongoDB Gone | infra | global | Stops MongoDB (affects all NFs) |
+| DNS Failure | infra | global | Kills the DNS container |
+| IMS Network Partition | IMS | multi | Network partition between IMS components |
+| AMF Restart | core | single | Restarts AMF (simulates upgrade) |
+| Cascading IMS Failure | IMS | multi | Multiple IMS faults in sequence |
 
 ## Directory Structure
 

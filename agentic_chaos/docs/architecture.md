@@ -44,13 +44,13 @@ The escalation data is especially valuable for training — it captures not just
 
 ```bash
 # List available scenarios
-python -m agentic_chaos.cli list-scenarios
+python -m agentic_chaos list-scenarios
 
 # Run a scenario
-python -m agentic_chaos.cli run "P-CSCF Latency"
+python -m agentic_chaos run "P-CSCF Latency"
 
 # Emergency: heal all active faults
-python -m agentic_chaos.cli heal-all
+python -m agentic_chaos heal-all
 ```
 
 ---
@@ -184,7 +184,7 @@ python -m agentic_chaos.cli heal-all
 
 ## Data Flow: A Complete Episode
 
-Here's what happens when you run `python -m agentic_chaos.cli run "DNS Failure"`:
+Here's what happens when you run `python -m agentic_chaos run "DNS Failure"`:
 
 ```
 1. INITIALIZE
@@ -322,7 +322,7 @@ Orphaned faults (latency rules, iptables entries, paused containers that never g
 │  │  the TTL reaper will clean up on next startup.              │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 │                                                                  │
-│  Manual escape hatch: python -m agentic_chaos.cli heal-all       │
+│  Manual escape hatch: python -m agentic_chaos heal-all       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

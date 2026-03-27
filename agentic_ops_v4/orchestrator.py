@@ -23,8 +23,6 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from google.adk.agents import ParallelAgent
@@ -353,26 +351,6 @@ async def investigate(question: str, on_event=None) -> dict:
         "investigation_trace": trace_obj.model_dump(),
     }
 
-    _persist_run(result)
-
     log.info("Investigation complete. Total tokens: %d. Diagnosis: %s",
              total_breakdown.total, str(state.get("diagnosis", ""))[:200])
     return result
-
-
-def _persist_run(result: dict) -> None:
-    """Save the full investigation result as JSON to docs/agent_logs/."""
-    try:
-        logs_dir = Path(__file__).resolve().parent / "docs" / "agent_logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Build a slug from the question for a descriptive filename
-        question = result.get("investigation_trace", {}).get("question", "")
-        slug = re.sub(r"[^a-z0-9]+", "_", question.lower().strip())[:40].strip("_")
-        suffix = f"_{slug}" if slug else ""
-        path = logs_dir / f"run_{ts}{suffix}.json"
-        with open(path, "w") as f:
-            json.dump(result, f, indent=2, default=str)
-        log.info("Trace persisted to %s", path)
-    except Exception:
-        log.warning("Failed to persist trace", exc_info=True)

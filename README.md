@@ -6,11 +6,11 @@ AI-powered troubleshooting platform for a 5G SA + IMS (VoNR) network stack. Incl
 
 - Docker + Docker Compose v2.14+
 - Python 3.10+
-- For v1.5/v2/v3 agents + chaos engine (Vertex AI / Gemini):
+- For v1.5/v2/v3/v4 agents + chaos engine (Vertex AI / Gemini):
   ```
-  GOOGLE_CLOUD_PROJECT=<your-project>
-  GOOGLE_CLOUD_LOCATION=<region>
-  GOOGLE_GENAI_USE_VERTEXAI=TRUE
+  export GOOGLE_CLOUD_PROJECT=<your-project>
+  export GOOGLE_CLOUD_LOCATION=<region>
+  export GOOGLE_GENAI_USE_VERTEXAI=TRUE
   ```
 
 ## GUI
@@ -179,7 +179,8 @@ python -m agentic_chaos list-scenarios
 
 # Run a scenario (challenges the RCA agent and scores the diagnosis)
 python -m agentic_chaos run "DNS Failure" --agent v1.5
-python -m agentic_chaos run "S-CSCF Crash" --agent v3
+python -m agentic_chaos run "P-CSCF Latency" --agent v3
+python -m agentic_chaos run "Data Plane Degradation" --agent v4
 
 # List recorded episodes
 python -m agentic_chaos list-episodes

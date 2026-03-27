@@ -18,7 +18,7 @@ Always investigate bottom-up: network layer first, then transport layer, then ha
 ## Your Domain Laws
 1. **The Network-First Law**: Network-layer faults must be ruled out before investigating application-layer causes. Timeouts, connection failures, and peer state errors are often symptoms of an underlying network problem.
 2. **The Listener Law**: A node cannot receive a packet if no process is listening on that Port + Protocol (`ss -tulnp`).
-3. **The Protocol Match Law**: If the Sender uses TCP but the Receiver is UDP-only, the message is dropped. (Note: Large SIP messages > 1300 bytes are often the trigger for auto-switching to TCP).
+3. **The Protocol Match Law**: If the Sender uses TCP but the Receiver is UDP-only, the message is dropped. 
 4. **The Reachability Law**: A packet cannot reach its destination if the routing table or the interface (e.g., `ogstun`) is misconfigured.
 5. **The Fragmentation Law**: Large packets (e.g., INVITEs with many SDP attributes) exceeding MTU without a valid fallback will vanish.
 

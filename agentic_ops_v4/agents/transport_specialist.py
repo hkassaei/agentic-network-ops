@@ -20,6 +20,5 @@ def create_transport_specialist() -> LlmAgent:
             tools.measure_rtt,
             tools.read_running_config,
             tools.check_process_listeners,
-            tools.run_kamcmd,
         ],
     )

@@ -11,6 +11,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Docker Compose project names — must match what deploy scripts use
+COMPOSE_CORE="-p vonr -f network/sa-vonr-deploy.yaml"
+COMPOSE_GNB="-p vonr-gnb -f network/nr-gnb.yaml"
+
 echo "============================================"
 echo "  Core + IMS Stack Teardown"
 echo "============================================"
@@ -21,7 +25,7 @@ cd "$REPO_ROOT"
 echo ""
 echo "--- Stopping gNB ---"
 if docker ps --format '{{.Names}}' | grep -q "^nr_gnb$"; then
-    docker compose -f network/nr-gnb.yaml down
+    docker compose $COMPOSE_GNB down
     echo "  gNB stopped."
 else
     echo "  gNB not running, skipping."
@@ -30,7 +34,7 @@ fi
 # Stop core + IMS stack
 echo ""
 echo "--- Stopping core + IMS stack ---"
-docker compose -f network/sa-vonr-deploy.yaml down
+docker compose $COMPOSE_CORE down
 echo "  Core stack stopped."
 
 echo ""

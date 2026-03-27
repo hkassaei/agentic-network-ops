@@ -96,7 +96,7 @@ log_ok "Subscribers provisioned in Open5GS and PyHSS"
 # =========================================================================
 log_step "Step 4/5: Starting UEs"
 
-docker compose -f e2e-vonr.yaml up -d
+docker compose -f e2e-vonr.yaml up -d  # project name set in e2e-vonr.yaml
 log_ok "UE containers started"
 
 # =========================================================================

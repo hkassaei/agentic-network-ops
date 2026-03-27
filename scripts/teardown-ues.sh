@@ -17,7 +17,7 @@ cd "$REPO_ROOT"
 
 # Stop UE containers
 echo "Stopping test UEs..."
-docker compose -f e2e-vonr.yaml down 2>/dev/null || true
+docker compose -f e2e-vonr.yaml down 2>/dev/null || true  # project name set in e2e-vonr.yaml
 
 # Restore original Kamailio configs
 echo ""

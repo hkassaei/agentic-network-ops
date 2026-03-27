@@ -44,7 +44,7 @@ if [ -n "$MISSING" ]; then
     echo "ERROR: The following required containers are not running:${MISSING}"
     echo ""
     echo "Start the core stack first:"
-    echo "  docker compose -f network/sa-vonr-deploy.yaml up -d"
+    echo "  docker compose -p vonr -f network/sa-vonr-deploy.yaml up -d"
     exit 1
 fi
 echo "  All required containers are running."
@@ -87,7 +87,7 @@ echo "--- Step 4: Verifying gNB ---"
 if ! docker ps --format '{{.Names}}' | grep -q "nr_gnb"; then
     echo "  gNB not running. Starting..."
     cd "$REPO_ROOT"
-    docker compose -f network/nr-gnb.yaml up -d
+    docker compose -p vonr-gnb -f network/nr-gnb.yaml up -d
     echo "  Waiting for gNB to connect to AMF..."
     sleep 10
 fi
@@ -104,7 +104,7 @@ if ! docker image inspect docker_ueransim_pjsua >/dev/null 2>&1; then
 fi
 
 cd "$REPO_ROOT"
-docker compose -f e2e-vonr.yaml up -d
+docker compose -f e2e-vonr.yaml up -d  # project name set in e2e-vonr.yaml
 
 echo ""
 echo "============================================"

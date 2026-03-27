@@ -37,6 +37,11 @@ set +a
 
 [ ${#MNC} == 3 ] && IMS_DOMAIN="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" || IMS_DOMAIN="ims.mnc0${MNC}.mcc${MCC}.3gppnetwork.org"
 
+# Docker Compose project names — explicit to avoid directory-derived naming
+COMPOSE_CORE="-p vonr -f network/sa-vonr-deploy.yaml"
+COMPOSE_GNB="-p vonr-gnb -f network/nr-gnb.yaml"
+COMPOSE_UE="-f e2e-vonr.yaml"  # project name set in e2e-vonr.yaml
+
 CALL_HOLD_SECS=10
 REG_TIMEOUT=180
 CALL_TIMEOUT=30
@@ -95,7 +100,7 @@ build_if_missing "docker_ueransim" "./network/ueransim"
 # =========================================================================
 log_step "Step 2/10: Starting 5G core + IMS stack"
 
-docker compose -f network/sa-vonr-deploy.yaml up -d
+docker compose $COMPOSE_CORE up -d
 
 log_info "Waiting for core services to initialize..."
 sleep 20
@@ -169,7 +174,7 @@ log_step "Step 6/10: Starting UERANSIM gNB"
 if docker ps --format '{{.Names}}' | grep -q "^nr_gnb$"; then
     log_ok "gNB already running"
 else
-    docker compose -f network/nr-gnb.yaml up -d
+    docker compose $COMPOSE_GNB up -d
     log_info "Waiting for gNB to connect to AMF..."
     sleep 10
 fi
@@ -186,7 +191,7 @@ fi
 # =========================================================================
 log_step "Step 7/10: Deploying UERANSIM UEs with pjsua"
 
-docker compose -f e2e-vonr.yaml up -d
+docker compose $COMPOSE_UE up -d
 log_ok "UE containers started"
 
 # =========================================================================

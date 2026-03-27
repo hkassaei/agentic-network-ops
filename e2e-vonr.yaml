@@ -74,4 +74,4 @@ services:
 networks:
   default:
     external: true
-    name: vonr-net
+    name: docker_open5gs_default

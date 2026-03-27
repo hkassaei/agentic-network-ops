@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Docker Compose project names — must match what deploy scripts use
-COMPOSE_CORE="-p vonr -f network/sa-vonr-deploy.yaml"
+COMPOSE_CORE="-p vonr -f network/sa-vonr-deploy.yaml -f docker-compose.grafana.yml"
 COMPOSE_GNB="-p vonr-gnb -f network/nr-gnb.yaml"
 
 echo "============================================"

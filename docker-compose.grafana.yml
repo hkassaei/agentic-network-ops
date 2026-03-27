@@ -1,0 +1,5 @@
+services:
+  grafana:
+    volumes:
+      - ../grafana/custom_dashboards.yml:/etc/grafana/provisioning/dashboards/custom_dashboards.yml:ro
+      - ../grafana/dashboards/:/var/lib/grafana/custom-dashboards/:ro

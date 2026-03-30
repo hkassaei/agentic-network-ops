@@ -218,7 +218,7 @@ async def measure_rtt(container: str, target_ip: str) -> str:
     """Measure round-trip time (RTT) from a container to a target IP.
 
     Normal Docker bridge RTT is <1ms. Elevated RTT (>10ms) indicates
-    injected latency or congestion. Use to confirm tc netem faults.
+    abnormal latency or congestion. Use to confirm tc netem faults.
 
     Args:
         container: Source container name (e.g. 'pcscf', 'icscf').

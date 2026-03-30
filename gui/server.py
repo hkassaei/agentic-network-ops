@@ -513,6 +513,46 @@ def _persist_v1_run(question: str, diag, usage, tool_call_log: list[dict]) -> No
         log.warning("Failed to persist v1.5 trace", exc_info=True)
 
 
+def _persist_multi_agent_run(version: str, question: str, result: dict) -> None:
+    """Save v3/v4 multi-agent investigation result to docs/agent_logs/."""
+    try:
+        import json as _json
+        from datetime import datetime as _dt
+
+        version_dir = f"agentic_ops_{version}"
+        logs_dir = REPO_ROOT / version_dir / "docs" / "agent_logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        diagnosis = result.get("diagnosis")
+        if isinstance(diagnosis, str):
+            diagnosis_record = {
+                "summary": diagnosis[:200] if len(diagnosis) > 200 else diagnosis,
+                "root_cause": diagnosis,
+            }
+        elif isinstance(diagnosis, dict):
+            diagnosis_record = diagnosis
+        else:
+            diagnosis_record = {"raw_findings": str(result.get("findings", {}))}
+
+        record = {
+            "version": version,
+            "question": question,
+            "diagnosis": diagnosis_record,
+            "investigation_trace": result.get("investigation_trace", {}),
+            "token_usage": {
+                "total_tokens": result.get("total_tokens", 0),
+            },
+        }
+
+        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        path = logs_dir / f"run_{ts}.json"
+        with open(path, "w") as f:
+            _json.dump(record, f, indent=2, default=str)
+        log.info("%s trace persisted to %s", version, path)
+    except Exception:
+        log.warning("Failed to persist %s trace", version, exc_info=True)
+
+
 async def handle_investigate_v3(request: web.Request) -> web.WebSocketResponse:
     """WebSocket endpoint for the v3 context-isolated multi-agent system."""
     ws = web.WebSocketResponse()
@@ -584,6 +624,9 @@ async def handle_investigate_v3(request: web.Request) -> web.WebSocketResponse:
             "type": "usage",
             "total_tokens": result.get("total_tokens", 0),
         })
+
+        # Persist agent log
+        _persist_multi_agent_run("v3", question, result)
 
     except Exception as exc:
         log.exception("v3 investigation failed")
@@ -664,6 +707,9 @@ async def handle_investigate_v4(request: web.Request) -> web.WebSocketResponse:
             "type": "usage",
             "total_tokens": result.get("total_tokens", 0),
         })
+
+        # Persist agent log
+        _persist_multi_agent_run("v4", question, result)
 
     except Exception as exc:
         log.exception("v4 investigation failed")

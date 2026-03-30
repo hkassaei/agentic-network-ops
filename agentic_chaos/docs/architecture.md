@@ -1,7 +1,7 @@
 # Agentic Chaos Monkey — Architecture
 
-**Date:** 2026-03-18
-**Version:** 1.0 (Phase 1 complete)
+**Date:** 2026-03-30 (updated)
+**Version:** 1.1
 
 ---
 
@@ -30,7 +30,12 @@ These episodes are the **primary output product** — training data for telecom-
 
 ### Use Case: Evaluate RCA Agents (Challenge Mode)
 
-When Challenge Mode is enabled, the platform breaks the stack, then invokes the existing `agentic_ops` troubleshooting agent (Pydantic AI + Claude) to diagnose the failure. The RCA agent sees the symptoms but does NOT know what fault was injected. Its diagnosis is scored against ground truth across five dimensions: root cause correctness, component overlap, severity assessment, fault-type identification, and confidence calibration.
+When Challenge Mode is enabled, the platform breaks the stack, then invokes one of the RCA troubleshooting agents to diagnose the failure. The RCA agent sees the symptoms but does NOT know what fault was injected. Its diagnosis is scored against ground truth across five dimensions: root cause correctness, component overlap, severity assessment, fault-type identification, and confidence calibration.
+
+Three agent versions are supported:
+- **v1.5** — Single-agent Pydantic AI (defaults to Gemini via Vertex AI; can use Claude via `ANTHROPIC_API_KEY`)
+- **v3** — Context-isolated multi-agent pipeline (Google ADK, Gemini via Vertex AI)
+- **v4** — Topology-aware multi-agent pipeline (Google ADK, Gemini via Vertex AI)
 
 This creates a closed-loop eval framework: inject fault → observe symptoms → challenge agent → score diagnosis → record everything.
 
@@ -46,8 +51,8 @@ The escalation data is especially valuable for training — it captures not just
 # List available scenarios
 python -m agentic_chaos list-scenarios
 
-# Run a scenario
-python -m agentic_chaos run "P-CSCF Latency"
+# Run a scenario (--agent is required: v1.5, v3, or v4)
+python -m agentic_chaos run "P-CSCF Latency" --agent v4
 
 # Emergency: heal all active faults
 python -m agentic_chaos heal-all
@@ -73,12 +78,16 @@ python -m agentic_chaos heal-all
 │   orchestrator.py                                                │
 │   run_scenario(Scenario) → Episode                               │
 │                                                                  │
-│   Creates an ADK SequentialAgent pipeline:                       │
+│   Creates an ADK SequentialAgent pipeline (8 agents):            │
 │                                                                  │
-│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────┐ ┌────┐ ┌────┐   │
-│   │ Baseline │→│  Fault   │→│ Symptom  │→│Chall│→│Heal│→│Rec │   │
-│   │ Collector│ │ Injector │ │ Observer │ │enge │ │  er│ │ord │   │
-│   └──────────┘ └──────────┘ └──────────┘ └─────┘ └────┘ └────┘   │
+│   ┌────────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌─────┐ ┌────┐ ┌──────┐ ┌────┐│
+│   │Baseline│→│ Call │→│Fault │→│Sympt.│→│Chall│→│Heal│→│ Call │→│Rec ││
+│   │Collect.│ │Setup │ │Inject│ │Observ│ │enge │ │  er│ │T.down│ │ord ││
+│   └────────┘ └──────┘ └──────┘ └──────┘ └─────┘ └────┘ └──────┘ └────┘│
+│                                                                  │
+│   CallSetup establishes a VoNR call for data plane scenarios.    │
+│   CallTeardown hangs up after healing. Both are no-ops for       │
+│   scenarios that don't require an active call.                   │
 │                                                                  │
 │   Shared state via ADK session.state:                            │
 │     baseline → faults_injected → observations → resolution       │
@@ -91,6 +100,12 @@ python -m agentic_chaos heal-all
 │   agents/baseline.py          BaseAgent — no LLM                 │
 │     Captures metrics + container status + stack phase            │
 │                                                                  │
+│   agents/call_setup.py        BaseAgent — no LLM                 │
+│     CallSetupAgent: establishes VoNR call between UE1/UE2        │
+│       for scenarios requiring active data plane traffic           │
+│     CallTeardownAgent: hangs up the call after healing           │
+│     Both are no-ops when scenario.requires_active_call=False     │
+│                                                                  │
 │   agents/fault_injector.py    BaseAgent — no LLM                 │
 │     Target → Inject → Verify cycle for each FaultSpec            │
 │     Dispatches to docker_tools or network_tools                  │
@@ -102,15 +117,16 @@ python -m agentic_chaos heal-all
 │     Exits when symptoms detected or max iterations               │
 │                                                                  │
 │   agents/challenger.py        BaseAgent — uses external LLM      │
-│     Invokes agentic_ops RCA agent (Claude) on broken stack       │
-│     Scores diagnosis against ground truth                        │
-│     Skipped gracefully if API key unavailable                    │
+│     Invokes RCA agent (v1.5, v3, or v4) on broken stack         │
+│     Scores diagnosis against ground truth via LLM judge          │
+│     Skipped gracefully if API keys unavailable                   │
 │                                                                  │
 │   agents/healer.py            BaseAgent — no LLM                 │
 │     Calls registry.heal_all(), captures post-heal metrics        │
 │                                                                  │
 │   recorder.py                 BaseAgent — no LLM                 │
-│     Assembles Episode JSON, writes to episodes/ directory        │
+│     Assembles Episode JSON + markdown summary                    │
+│     Writes to agent-version-specific logs directory              │
 └───────────────────────┬──────────────────────────────────────────┘
                         │
                         ▼
@@ -184,15 +200,15 @@ python -m agentic_chaos heal-all
 
 ## Data Flow: A Complete Episode
 
-Here's what happens when you run `python -m agentic_chaos run "DNS Failure"`:
+Here's what happens when you run `python -m agentic_chaos run "Data Plane Degradation" --agent v4`:
 
 ```
 1. INITIALIZE
    ├── Create FaultRegistry (SQLite)
    ├── Start TTL reaper background task
    ├── Create ADK InMemorySessionService
-   ├── Seed session.state with scenario + episode_id
-   └── Create ChaosDirector (SequentialAgent pipeline)
+   ├── Seed session.state with scenario + episode_id + agent_version
+   └── Create ChaosDirector (SequentialAgent pipeline of 8 agents)
 
 2. BASELINE COLLECTION (BaselineCollector)
    ├── snapshot_metrics()
@@ -205,43 +221,58 @@ Here's what happens when you run `python -m agentic_chaos run "DNS Failure"`:
    ├── determine_phase() → "ready"
    └── state["baseline"] = {timestamp, phase, status, metrics}
 
-3. FAULT INJECTION (FaultInjector)
+3. CALL SETUP (CallSetupAgent) — only for scenarios with requires_active_call=True
+   ├── Derive IMS domain from MCC/MNC in env
+   ├── docker exec e2e_ue1 bash -c "echo m >> /tmp/pjsua_cmd"
+   ├── docker exec e2e_ue1 bash -c "echo 'sip:IMSI@domain' >> /tmp/pjsua_cmd"
+   ├── Poll UE1 logs for "CONFIRMED" (call connected)
+   └── state["call_setup"] = "VoNR call established"
+
+4. FAULT INJECTION (FaultInjector)
    ├── For each fault in scenario:
-   │     ├── _dispatch_inject("container_kill", "dns")
-   │     │     └── docker kill dns → success
-   │     ├── Register in SQLite: fault_id, heal_cmd="docker start dns"
-   │     ├── _dispatch_verify("container_kill", "dns")
-   │     │     └── docker inspect dns → "exited" ✓
+   │     ├── _dispatch_inject("network_loss", "upf")
+   │     │     └── nsenter + tc qdisc add dev eth0 root netem loss 30%
+   │     ├── Register in SQLite: fault_id, heal_cmd="nsenter + tc qdisc del ..."
+   │     ├── _dispatch_verify("network_loss", "upf")
+   │     │     └── tc qdisc show → "netem loss 30%" ✓
    │     └── mark_verified()
    └── state["faults_injected"] = [{fault_id, target, verified, ...}]
 
-4. SYMPTOM OBSERVATION (SymptomObserver LoopAgent)
+5. SYMPTOM OBSERVATION (SymptomObserver LoopAgent)
    ├── Iteration 1:
    │     ├── SymptomPoller:
    │     │     ├── snapshot_metrics() → compare to baseline
    │     │     ├── snapshot_logs() → filter for errors/timeouts
    │     │     ├── compute_metrics_delta()
    │     │     ├── _filter_notable_logs()
-   │     │     └── symptoms_detected = True (error logs from pcscf, icscf, ...)
-   │     └── EscalationChecker: symptoms detected → escalate → EXIT LOOP
+   │     │     └── symptoms_detected = True (metric changes, jitter buffer resets)
+   │     └── EscalationChecker: symptoms detected → EXIT LOOP
    └── state["observations"] = [{iteration, delta, logs, symptoms}]
 
-5. CHALLENGE MODE (ChallengeAgent) — skipped if not enabled or no API key
-   ├── _build_question(observations) → "Stack is experiencing DNS failures..."
-   ├── agentic_ops.create_agent().run(question)
-   ├── score_diagnosis(diagnosis, injected_faults)
-   └── state["challenge_result"] = {score, diagnosis, ...}
+6. CHALLENGE MODE (ChallengeAgent) — skipped if not enabled or no API key
+   ├── _build_question() → blind prompt (no hints about observed symptoms)
+   ├── Dispatch to selected agent version:
+   │     v1.5 → agentic_ops.create_agent().run(question)
+   │     v3   → agentic_ops_v3.orchestrator.investigate(question)
+   │     v4   → agentic_ops_v4.orchestrator.investigate(question)
+   ├── score_diagnosis(diagnosis, injected_faults) via LLM judge
+   └── state["challenge_result"] = {score, diagnosis, token_usage, ...}
 
-6. HEALING (Healer)
-   ├── registry.heal_all() → docker start dns
+7. HEALING (Healer)
+   ├── registry.heal_all() → nsenter + tc qdisc del dev eth0 root
    ├── snapshot_metrics() → post-heal state
    ├── recovery_time = now - injection_time
    └── state["resolution"] = {healed_at, method, post_heal_metrics, recovery_time}
 
-7. RECORDING (EpisodeRecorder)
+8. CALL TEARDOWN (CallTeardownAgent) — only if call was set up
+   ├── docker exec e2e_ue1 bash -c "echo h >> /tmp/pjsua_cmd"
+   └── state["call_teardown"] = "hangup sent"
+
+9. RECORDING (EpisodeRecorder)
    ├── Assemble Episode from session.state
    ├── Build RcaLabel: {root_cause, affected_components, severity, failure_domain}
-   └── Write episodes/ep_20260318_202745_dns_failure.json
+   ├── Write JSON: agentic_ops_v4/docs/agent_logs/run_<ts>_<scenario>.json
+   └── Write MD:   agentic_ops_v4/docs/agent_logs/run_<ts>_<scenario>.md
 ```
 
 ---
@@ -401,35 +432,43 @@ This generates high-value training data: not just "this fault causes that sympto
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-Requires `ANTHROPIC_API_KEY` for the Claude-based RCA agent. Skipped gracefully if unavailable.
+Requires API credentials for the selected RCA agent version:
+- **v1.5:** `GOOGLE_CLOUD_PROJECT` + `GOOGLE_GENAI_USE_VERTEXAI=TRUE` (default), or `ANTHROPIC_API_KEY` for Claude
+- **v3/v4:** `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION` + `GOOGLE_GENAI_USE_VERTEXAI=TRUE`
+
+Skipped gracefully if the required credentials are unavailable.
 
 ---
 
 ## Integration Points
 
-The chaos platform doesn't operate in isolation — it reuses and integrates with the existing `operate/` infrastructure:
+The chaos platform doesn't operate in isolation — it reuses and integrates with the existing infrastructure:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                     EXISTING INFRASTRUCTURE                      │
 │                                                                  │
-│  operate/gui/metrics.py                                          │
+│  gui/metrics.py                                                  │
 │    MetricsCollector — Prometheus + kamcmd + PyHSS + MongoDB      │
 │    ← Reused by observation_tools.snapshot_metrics()              │
 │                                                                  │
-│  operate/gui/topology.py                                         │
+│  gui/topology.py                                                 │
 │    NetworkTopology.impact_of() — compute blast radius            │
 │    ← Reused by observation_tools.compute_blast_radius()          │
 │                                                                  │
-│  operate/gui/server.py                                           │
+│  gui/server.py                                                   │
 │    GET /api/chaos/faults — active faults endpoint                │
 │    ← Data-ready for Phase 2 GUI "Break This" button              │
 │                                                                  │
-│  operate/agentic_ops/                                            │
-│    Pydantic AI troubleshooting agent (Claude)                    │
-│    ← Invoked by ChallengeAgent for blind RCA diagnosis           │
+│  agentic_ops/                                                    │
+│    v1.5: Pydantic AI troubleshooting agent (Gemini/Claude)       │
+│  agentic_ops_v3/                                                 │
+│    v3: Context-isolated multi-agent pipeline (Google ADK)        │
+│  agentic_ops_v4/                                                 │
+│    v4: Topology-aware multi-agent pipeline (Google ADK)          │
+│    ← All invoked by ChallengeAgent for blind RCA diagnosis       │
 │                                                                  │
-│  .env + operate/e2e.env                                          │
+│  network/.env + e2e.env                                          │
 │    Container IPs, subscriber credentials, network config         │
 │    ← Loaded by observation_tools._load_env()                     │
 └──────────────────────────────────────────────────────────────────┘
@@ -525,23 +564,24 @@ Episode
 ## File Map
 
 ```
-operate/agentic_chaos/
+agentic_chaos/
 ├── __init__.py              # Package version
 ├── __main__.py              # python -m entry point
 ├── cli.py                   # CLI: run, list-scenarios, list-episodes, show, heal-all
 ├── models.py                # 12 Pydantic models + escalation schedules
 ├── fault_registry.py        # SQLite Triple Lock (registry + TTL reaper + signal handlers)
 ├── orchestrator.py          # ChaosDirector SequentialAgent + run_scenario()
-├── recorder.py              # EpisodeRecorder BaseAgent → writes episode JSON
+├── recorder.py              # EpisodeRecorder BaseAgent → writes episode JSON + markdown
 ├── scorer.py                # Challenge Mode scoring (5 dimensions, weighted)
 ├── requirements.txt         # google-adk, aiosqlite, pydantic
 │
 ├── agents/
 │   ├── baseline.py          # BaselineCollector — metrics + status snapshot
+│   ├── call_setup.py        # CallSetupAgent + CallTeardownAgent — VoNR call lifecycle
 │   ├── fault_injector.py    # FaultInjector — Target → Inject → Verify
 │   ├── symptom_observer.py  # SymptomPoller + LoopAgent factory
 │   ├── escalation.py        # EscalationChecker — Boiling Frog
-│   ├── challenger.py        # ChallengeAgent — invoke RCA agent + score
+│   ├── challenger.py        # ChallengeAgent — invoke RCA agent (v1.5/v3/v4) + score
 │   └── healer.py            # Healer — reverse all faults
 │
 ├── tools/
@@ -555,9 +595,8 @@ operate/agentic_chaos/
 ├── scenarios/
 │   └── library.py           # 10 pre-built scenarios
 │
-├── episodes/                # Output: recorded episode JSON files
-│
-├── tests/                   # 171 tests across 12 test files
+├── tests/                   # 12 test files
+│   ├── conftest.py          # pytest configuration
 │   ├── test_models.py       # Pydantic models, enums, serialization
 │   ├── test_fault_registry.py # SQLite CRUD, TTL, emergency heal
 │   ├── test_functional.py   # Live stack: docker, network, verification, observation
@@ -576,6 +615,11 @@ operate/agentic_chaos/
     ├── plan-final.md        # Implementation plan
     ├── plan-review.md       # Initial plan review
     └── plan-review-feedback.md # Feedback on plan
+
+Episode output is written to agent-version-specific directories:
+  agentic_ops/docs/agent_logs/run_*.{json,md}      (v1.5)
+  agentic_ops_v3/docs/agent_logs/run_*.{json,md}    (v3)
+  agentic_ops_v4/docs/agent_logs/run_*.{json,md}    (v4)
 ```
 
 ---
@@ -585,12 +629,12 @@ operate/agentic_chaos/
 | Decision | Choice | Why |
 |---|---|---|
 | ADK for orchestration | SequentialAgent + LoopAgent | Clean pipeline model, shared state via session, built-in loop/escalate primitives |
-| No LLM in core pipeline | BaseAgent for 5 of 6 agents | Deterministic execution, no API latency, works without Gemini key for most scenarios |
+| No LLM in core pipeline | BaseAgent for 7 of 8 agents | Deterministic execution, no API latency, works without Gemini key for most scenarios |
 | nsenter for network faults | Enter container netns from host | Zero-touch: no compose changes, no NET_ADMIN on containers, surgical |
 | SQLite for fault registry | WAL mode, single-file DB | No external dependencies, survives process restart, concurrent read-safe |
 | Tools are framework-agnostic | Plain async functions, no ADK imports | Reusable from ADK, Pydantic AI, CLI, or scripts |
 | Episode as primary output | JSON per episode, one file | Self-contained training datum, easy to browse/filter/load |
-| Pydantic AI for RCA agent | Separate from ADK chaos agents | Two independent subsystems, different LLM providers, shared tool patterns |
+| Multiple RCA agent versions | v1.5 (Pydantic AI), v3/v4 (ADK) | Challenger can evaluate any version; enables cross-version comparison on same scenario |
 | Shared shell() helper | Single implementation in _common.py | DRY, timeout in one place, validation in one place |
 | Input validation at tool boundary | validate_container(), validate_ip(), param ranges | Defense-in-depth: safe even if called with LLM-generated inputs |
 

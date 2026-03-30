@@ -1,0 +1,105 @@
+{
+  "version": "v1.5",
+  "question": "Why do UEs fail to register?",
+  "diagnosis": {
+    "summary": "UEs fail to register because they are not connected to the 5G core network. The connection between the 5G core (AMF) and the radio network (gNB) has failed.",
+    "timeline": [
+      {
+        "timestamp": "Initial State",
+        "container": "Multiple",
+        "event": "Metrics show no UEs are attached to the 5G network (AMF metric ran_ue = 0) and no SIP registrations are reaching the IMS entry point (P-CSCF metric core:rcv_requests_register = 0)."
+      },
+      {
+        "timestamp": "22:51:44",
+        "container": "amf",
+        "event": "AMF log shows 'gNB-N2[172.22.0.23] connection refused!!!', indicating a failure of the control plane interface to the gNB."
+      },
+      {
+        "timestamp": "22:51:44",
+        "container": "amf",
+        "event": "Following the N2 failure, the AMF logs the removal of the gNB and all associated UEs ('[Removed] Number of gNBs is now 0')."
+      },
+      {
+        "timestamp": "Post-Failure",
+        "container": "amf",
+        "event": "UE timers expire and they are implicitly de-registered from the 5G core, leading to the release of their PDU sessions. This cuts off all connectivity."
+      },
+      {
+        "timestamp": "Present",
+        "container": "P-CSCF / S-CSCF",
+        "event": "With no PDU session, UEs have no IP connectivity to the P-CSCF, hence they cannot send SIP REGISTER requests. This is a symptom of the underlying 5G attachment failure."
+      }
+    ],
+    "root_cause": "The primary root cause is the failure of the N2 control plane interface between the gNB (Radio Access Network) and the AMF (5G Core). The AMF actively refused the connection from the gNB, leading to a complete loss of the radio network from the core's perspective.",
+    "affected_components": [
+      "amf",
+      "nr_gnb",
+      "e2e_ue1",
+      "e2e_ue2"
+    ],
+    "recommendation": "The 'connection refused' error on the N2 interface points to a problem at the AMF. Since the gNB container cannot be accessed for logs, the next step is to investigate the AMF's state. Check the AMF's configuration and logs around the time of the failure for any indication of why it would reject an N2 connection. Restarting the AMF container may restore the connection, but further analysis is needed to find the root cause of the rejection.",
+    "confidence": "High",
+    "explanation": "The investigation started by observing the symptom: UE registration failure. Initial metrics immediately showed that the problem was not in the IMS system, but deeper in the 5G core, as zero UEs were attached. This directed the investigation to the 5G attachment process. The AMF logs provided the 'smoking gun' with the 'gNB-N2 connection refused' error. This single event explains all the other observed symptoms. The UEs cannot register with IMS because they cannot first attach to the 5G network to get an IP address and establish a data path. The problem is not that their SIP registration is failing, but that they are unable to even send the SIP REGISTER message in the first place."
+  },
+  "token_usage": {
+    "total_tokens": 51898,
+    "input_tokens": 48319,
+    "output_tokens": 3579,
+    "requests": 4,
+    "tool_calls_count": 5
+  },
+  "tool_calls": [
+    {
+      "name": "_tool_read_env_config",
+      "args": "{}",
+      "result_size": 1845
+    },
+    {
+      "name": "_tool_get_network_status",
+      "args": "{}",
+      "result_size": 686
+    },
+    {
+      "name": "_tool_get_nf_metrics",
+      "args": "{}",
+      "result_size": 3510
+    },
+    {
+      "name": "_tool_read_container_logs",
+      "args": "{'tail': 100, 'container': 'amf'}",
+      "result_size": 14499
+    },
+    {
+      "name": "_tool_read_container_logs",
+      "args": "{'tail': 100, 'container': 'nr_gnb'}",
+      "result_size": 148
+    },
+    {
+      "name": "final_result",
+      "args": "{'affected_components': ['amf', 'nr_gnb', 'e2e_ue1', 'e2e_ue2'], 'confidence': 'High', 'recommendation': \"The 'connection refused' error on the N2 interface points to a problem at the AMF. Since the g"
+    }
+  ],
+  "post_run_analysis": {
+    "analyst": "manual review against verified ground truth",
+    "date": "2026-03-30",
+    "ground_truth": {
+      "root_cause": "The gNB's SCTP/NGAP connection to the AMF broke on March 29 at 22:51. UERANSIM gNB does not auto-recover lost SCTP associations, so the gNB became a zombie — process alive, radio layer dead, zero log entries on March 30. When new UEs were deployed, they could not find any cells ('PLMN selection failure, no cells in coverage') because the gNB's RLS was inert. Without 5G NR attach, no IMS APN bearer was created, causing the 120s timeout.",
+      "correct_fix": "Restart the gNB container (docker restart nr_gnb), then redeploy UEs.",
+      "faulty_component": "nr_gnb"
+    },
+    "what_agent_got_right": [
+      "Correctly identified the problem was in the 5G core layer, not IMS, using metrics (ran_ue=0, no SIP REGISTERs at P-CSCF).",
+      "Found the pivotal AMF log entry: 'gNB-N2[172.22.0.23] connection refused!!!'.",
+      "Accurately traced the cascading failure chain: N2 break -> no 5G attach -> no PDU session -> no IMS bearer -> no SIP REGISTER.",
+      "Good timeline construction from N2 failure through implicit de-registration to present-state symptoms.",
+      "Efficient tool usage: 5 tool calls in 4 LLM requests (~52k tokens). Reached the right failure area quickly."
+    ],
+    "what_agent_got_wrong": [
+      "Reversed blame attribution: concluded the AMF 'actively refused' the gNB connection and recommended restarting the AMF. In reality, the AMF was the reporter of the failure, not the cause. The AMF logged 'connection refused' because the gNB's SCTP association had broken. The AMF was healthy throughout — it continued processing timers, running implicit de-registration, and logging normally. The gNB was the broken component.",
+      "Wrong recommendation: restarting the AMF would not fix the issue. The gNB needed to be restarted to re-establish the SCTP/NGAP connection."
+    ],
+    "design_constraints_noted": "The agent, by design, does not have access to UE logs (e2e_ue1, e2e_ue2) or gNB logs (nr_gnb) due to NOC responsibility isolation. The gNB log tool call returning 148 bytes reflects this access boundary, not an agent shortcoming. The agent must diagnose RAN-side failures solely from core-side observables (AMF logs, metrics, network status).",
+    "key_lesson": "The blame-attribution error was avoidable even within the agent's access constraints. The AMF logs alone contained sufficient signal: (1) the AMF was healthy — it continued logging, processing timers, and performing implicit de-registration for hours after the event; (2) the 'connection refused' message was logged BY the AMF ABOUT the gNB, meaning the AMF tried to communicate with the gNB and failed. A healthy component reporting that it cannot reach another component points to the other component as the fault. The agent should reason: 'the AMF is the observer, not the culprit' and recommend restarting the gNB, not the AMF.",
+    "suggested_improvement": "When the agent encounters a 'connection refused' or similar connectivity error logged by component A about component B, it should apply a heuristic: if component A is otherwise healthy (still logging, processing requests, running timers), the fault likely lies with component B. This is especially important when component B's logs are inaccessible due to access boundaries — the agent must infer B's state from A's observations about B."
+  }
+}

@@ -1,0 +1,179 @@
+# =============================================================================
+# Network Ontology — Log Pattern Semantics
+# =============================================================================
+# Source: docs/RCAs/*.md, post-run analyses, agentic_ops/prompts/system.md
+#
+# Each pattern annotates a known log message with its actual meaning,
+# common misinterpretation, and the correct diagnostic action.
+# THIS PREVENTS THE #1 AGENT FAILURE MODE: inverted log interpretation.
+
+log_patterns:
+
+  # --- AMF / NGAP ---
+  - id: amf_sctp_refused
+    pattern: "SCTP connection refused"
+    regex: "SCTP.*connection refused|SCTP.*failed"
+    source: [amf]
+    direction: OUTBOUND
+    meaning: "AMF tried to establish an SCTP connection to a remote peer (gNB) and was refused or got no response."
+    is_benign: false
+    does_NOT_mean:
+      - "AMF is down or misconfigured"
+      - "AMF is refusing incoming connections"
+    actual_implication: "The remote SCTP peer (gNB at N2 interface) is unreachable or not running."
+    diagnostic_action:
+      tool: measure_rtt
+      args: {container: "amf", target_ip: "172.22.0.23"}
+      description: "Ping gNB IP from AMF. 100% packet loss confirms gNB is unreachable."
+    related_chain: gnb_down
+
+  - id: amf_ngap_connection_failed
+    pattern: "NGAP: Connection failed"
+    regex: "NGAP.*[Cc]onnection.*failed"
+    source: [amf]
+    direction: OUTBOUND
+    meaning: "AMF's NGAP layer could not establish or lost the N2 connection to the gNB."
+    is_benign: false
+    does_NOT_mean:
+      - "AMF has a configuration error"
+    actual_implication: "gNB is down or network path to gNB is broken."
+    diagnostic_action:
+      tool: get_network_status
+      description: "Check if nr_gnb container is running."
+    related_chain: gnb_down
+
+  # --- Kamailio / Diameter ---
+  - id: diameter_i_open
+    pattern: "I_Open"
+    regex: "I_Open"
+    source: [icscf, scscf, pcscf]
+    direction: null
+    meaning: "Kamailio CDP (C Diameter Peer) state machine display artifact. The Diameter connection is functional despite showing I_Open instead of R_Open."
+    is_benign: true
+    does_NOT_mean:
+      - "Diameter connection is broken or in a bad state"
+      - "HSS is unreachable"
+    actual_implication: "Ignore if Diameter messages are flowing successfully (check cdp:replies_received > 0)."
+    evidence: "If UE registration succeeds and Diameter message counts are incrementing, I_Open is cosmetic."
+    diagnostic_action:
+      tool: run_kamcmd
+      args: {container: "icscf", command: "cdp.list_peers"}
+      description: "Check if Diameter messages are actually flowing despite I_Open display."
+
+  - id: diameter_timeout
+    pattern: "Diameter timeout"
+    regex: "cdp.*timeout|Diameter.*timeout"
+    source: [icscf, scscf]
+    direction: OUTBOUND
+    meaning: "A Diameter Cx request (UAR, LIR, MAR, SAR) to the HSS timed out."
+    is_benign: false
+    does_NOT_mean:
+      - "The I-CSCF or S-CSCF is broken"
+    actual_implication: "The HSS (PyHSS) is unreachable, paused, or overloaded."
+    diagnostic_action:
+      tool: get_network_status
+      description: "Check if pyhss container is running. Note: paused containers still show 'running'."
+    related_chain: hss_unresponsive
+
+  # --- Kamailio / SIP ---
+  - id: icscf_500_lir
+    pattern: "500 Server error on LIR select next S-CSCF"
+    regex: "500.*LIR.*S-CSCF|500.*select.*next"
+    source: [icscf]
+    direction: null
+    meaning: "I-CSCF's Location-Info-Request to HSS returned an S-CSCF address, but the I-CSCF could not reach that S-CSCF."
+    is_benign: false
+    is_root_cause: false
+    does_NOT_mean:
+      - "I-CSCF has a bug or configuration error"
+      - "HSS returned wrong data"
+      - "Diameter Cx interface is broken (it worked — the LIR got a response)"
+    actual_implication: "The S-CSCF is unreachable (down, partitioned, or overloaded). This is a SYMPTOM of a downstream failure."
+    follow_the_chain: "I-CSCF → S-CSCF (check container status, network reachability)"
+    diagnostic_action:
+      tool: measure_rtt
+      args: {container: "icscf", target_ip: "172.22.0.20"}
+      description: "Ping S-CSCF from I-CSCF to check reachability."
+    related_chain: scscf_down
+
+  - id: sip_408_timeout
+    pattern: "408 Request Timeout"
+    regex: "408.*[Tt]imeout|request.*timeout"
+    source: [pcscf, icscf, scscf, e2e_ue1, e2e_ue2]
+    direction: null
+    meaning: "A SIP transaction timed out waiting for a response from the next hop."
+    is_benign: false
+    is_root_cause: false
+    does_NOT_mean:
+      - "The component logging the 408 is broken — it's the component WAITING for a response"
+    actual_implication: "The downstream SIP hop is unreachable, slow, or not processing. Check network connectivity to the next hop first."
+    diagnostic_action:
+      tool: measure_rtt
+      description: "Measure RTT to the next SIP hop that should have responded. Elevated RTT or 100% loss explains the timeout."
+
+  # --- UERANSIM / gNB ---
+  - id: gnb_ngap_unhandled
+    pattern: "Unhandled NGAP initiating-message received (9)"
+    regex: "Unhandled NGAP.*message.*9"
+    source: [nr_gnb]
+    direction: INBOUND
+    meaning: "UERANSIM received an NGAP message type 9 (QoS flow modification) that it doesn't implement."
+    is_benign: true
+    does_NOT_mean:
+      - "gNB has a protocol error"
+      - "N2 interface is broken"
+    actual_implication: "Expected noise during PDU session modification. Ignore completely."
+
+  # --- UE / pjsua ---
+  - id: ue_jitter_buffer_reset
+    pattern: "Resetting jitter buffer in stream playback start"
+    regex: "Resetting jitter buffer"
+    source: [e2e_ue1, e2e_ue2]
+    direction: null
+    meaning: "pjsua's jitter buffer was reset, indicating RTP stream interruption or significant packet loss/delay on the data plane."
+    is_benign: false
+    does_NOT_mean:
+      - "SIP signaling issue"
+      - "IMS registration problem"
+    actual_implication: "Data plane quality issue. Investigate the N3 GTP-U path between gNB and UPF for packet loss, latency, or congestion."
+    diagnostic_action:
+      tool: measure_rtt
+      args: {container: "nr_gnb", target_ip: "172.22.0.8"}
+      description: "Measure RTT and packet loss on N3 path from gNB to UPF."
+    related_chain: n3_data_plane_degradation
+
+  # --- P-CSCF ---
+  - id: pcscf_httpclient_connfail
+    pattern: "httpclient:connfail"
+    regex: "httpclient.*connfail"
+    source: [pcscf]
+    direction: OUTBOUND
+    meaning: "P-CSCF's HTTP client failed to connect to a configured endpoint."
+    is_benign: true  # PRE-EXISTING in this stack
+    baseline_note: "This counter is ~1300-1500 at baseline due to SCP_BIND_IP placeholder in P-CSCF config. Only significant if delta > 100 from baseline."
+    does_NOT_mean:
+      - "P-CSCF is experiencing a new failure"
+      - "A fault was just injected"
+    actual_implication: "Pre-existing configuration artifact. The SCP_BIND_IP placeholder causes connection failures to an unresolvable address."
+
+  - id: pcscf_registration_success
+    pattern: "registration success"
+    regex: "register.*success|registration.*success"
+    source: [e2e_ue1, e2e_ue2]
+    direction: null
+    meaning: "UE successfully registered with IMS via P-CSCF."
+    is_benign: true
+    actual_implication: "IMS registration is working. SIP signaling path (Gm, Mw, Cx) is functional."
+
+  # --- Kamailio general ---
+  - id: kamailio_cxdx_avp_missing
+    pattern: "cxdx_get_experimental_result_code: Failed finding avp"
+    regex: "cxdx_get.*experimental.*Failed"
+    source: [icscf, scscf]
+    direction: INBOUND
+    meaning: "The Diameter response from HSS did not contain an Experimental-Result-Code AVP. The base Result-Code was used instead."
+    is_benign: true
+    does_NOT_mean:
+      - "Diameter response failed"
+      - "HSS returned an error"
+    actual_implication: "Normal behavior — PyHSS uses base Result-Code (2001 DIAMETER_SUCCESS) rather than Experimental-Result-Code."

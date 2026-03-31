@@ -1,0 +1,397 @@
+# =============================================================================
+# Network Ontology — Component Health Checks
+# =============================================================================
+# Defines how to verify if each component is healthy, degraded, or down.
+#
+# A health check is a DOMAIN DIAGNOSTIC, not a simulation artifact.
+# "Is the AMF process running and responsive?" is a valid question in any
+# network, whether simulated or production.
+#
+# Health checks are especially valuable in AMBIGUITY RESOLUTION:
+#   - ran_ue=0 could mean "gNB is down" OR "AMF is unhealthy"
+#   - Health check on AMF resolves: if AMF is healthy, problem is upstream
+#
+# Each check has:
+#   - probes: ordered list of checks from cheapest to most expensive
+#   - healthy_criteria: what "healthy" looks like
+#   - degraded_indicators: signs of partial failure
+#   - down_indicators: signs of complete failure
+#   - disambiguates: what ambiguity this health check resolves
+
+healthchecks:
+
+  # --- 5G Core NFs ---
+  amf:
+    component: amf
+    probes:
+      - name: metrics_endpoint
+        tool: query_prometheus
+        args: {query: "up{job='amf'}"}
+        description: "Check if AMF's Prometheus metrics endpoint is responding"
+        cost: low
+        healthy_if: "value = 1"
+        unhealthy_if: "value = 0 or no response"
+
+      - name: key_metrics_fresh
+        tool: get_nf_metrics
+        description: "Check if AMF metrics are being updated (not stale)"
+        cost: low
+        healthy_if: "amf_session and ran_ue values present and recently updated"
+
+      - name: process_listeners
+        tool: check_process_listeners
+        args: {container: "amf"}
+        description: "Verify AMF is listening on NGAP (SCTP/38412) and SBI ports"
+        cost: medium
+        healthy_if: "SCTP listener on 38412 AND HTTP listener on SBI port"
+
+    healthy_criteria:
+      - "Metrics endpoint responding (up=1)"
+      - "Listening on SCTP/38412 (N2) and SBI HTTP port"
+      - "ran_ue and gnb metrics present"
+
+    degraded_indicators:
+      - "Metrics endpoint responding but ran_ue=0 (could be upstream RAN issue)"
+      - "High amf_authfail rate (authentication backend issues)"
+
+    down_indicators:
+      - "Metrics endpoint not responding"
+      - "Not listening on SCTP/38412"
+      - "Container not running"
+
+    disambiguates:
+      - scenario: "ran_ue = 0"
+        question: "Is the AMF itself healthy, or did it crash/hang?"
+        if_healthy: "AMF is fine — the problem is upstream (gNB unreachable)"
+        if_unhealthy: "AMF failure caused UE deregistration"
+
+  smf:
+    component: smf
+    probes:
+      - name: metrics_endpoint
+        tool: query_prometheus
+        args: {query: "up{job='smf'}"}
+        description: "Check if SMF metrics endpoint is responding"
+        cost: low
+        healthy_if: "value = 1"
+
+      - name: session_state
+        tool: get_nf_metrics
+        description: "Check PDU session counts and PFCP session health"
+        cost: low
+        healthy_if: "sm_sessionnbr and pfcp_sessions_active present and > 0"
+
+    healthy_criteria:
+      - "Metrics endpoint responding"
+      - "PDU sessions active (sm_sessionnbr > 0)"
+      - "PFCP sessions active (pfcp_sessions_active > 0)"
+
+    degraded_indicators:
+      - "sm_sessionnbr > 0 but no new sessions being created"
+      - "pfcp_sessions_active diverging from sm_sessionnbr"
+
+    down_indicators:
+      - "Metrics endpoint not responding"
+      - "All session counters at 0 with UEs attached"
+
+    disambiguates:
+      - scenario: "PDU session creation failing"
+        question: "Is SMF healthy, or is it unable to process new sessions?"
+        if_healthy: "SMF is fine — check UDR/MongoDB backend or PCF policy"
+        if_unhealthy: "SMF failure preventing session establishment"
+
+  upf:
+    component: upf
+    probes:
+      - name: metrics_endpoint
+        tool: query_prometheus
+        args: {query: "up{job='upf'}"}
+        description: "Check if UPF metrics endpoint is responding"
+        cost: low
+        healthy_if: "value = 1"
+
+      - name: data_plane_active
+        tool: get_nf_metrics
+        description: "Check GTP-U packet counters — are they incrementing?"
+        cost: low
+        healthy_if: "gtp_indatapktn3upf and gtp_outdatapktn3upf incrementing"
+
+      - name: n3_reachability
+        tool: measure_rtt
+        args: {container: "nr_gnb", target_ip: "172.22.0.8"}
+        description: "Check N3 path reachability and latency from gNB to UPF"
+        cost: medium
+        healthy_if: "RTT < 5ms, 0% packet loss"
+
+    healthy_criteria:
+      - "Metrics endpoint responding"
+      - "GTP-U counters actively incrementing"
+      - "Reachable from gNB with normal RTT"
+
+    degraded_indicators:
+      - "GTP-U counters incrementing erratically (packet loss on N3)"
+      - "Elevated RTT from gNB (> 10ms in Docker environment)"
+      - "upf_sessionnbr > 0 but GTP counters stalled"
+
+    down_indicators:
+      - "Metrics endpoint not responding"
+      - "GTP counters at 0 with active sessions (zombied tunnels)"
+      - "Unreachable from gNB"
+
+    disambiguates:
+      - scenario: "GTP packets = 0 with sm_sessionnbr > 0"
+        question: "Is UPF healthy but starved of traffic (gNB down), or is UPF itself broken?"
+        if_healthy: "UPF is fine — check if gNB is reachable (N2 connectivity loss)"
+        if_unhealthy: "UPF failure is the root cause of data plane outage"
+      - scenario: "Voice quality degradation (jitter buffer resets)"
+        question: "Is UPF introducing packet loss, or is the N3 transport path degraded?"
+        if_healthy: "UPF forwarding is fine — check N3 transport (congestion, interface errors)"
+        if_unhealthy: "UPF forwarding plane is the source of degradation"
+
+  pcf:
+    component: pcf
+    probes:
+      - name: metrics_endpoint
+        tool: query_prometheus
+        args: {query: "up{job='pcf'}"}
+        description: "Check if PCF metrics endpoint is responding"
+        cost: low
+        healthy_if: "value = 1"
+
+    healthy_criteria:
+      - "Metrics endpoint responding"
+      - "Policy sessions active (pa_sessionnbr > 0)"
+
+    down_indicators:
+      - "Metrics endpoint not responding"
+
+    disambiguates:
+      - scenario: "Dedicated QoS flows not created for voice calls"
+        question: "Is PCF healthy and issuing policy decisions?"
+        if_healthy: "PCF is fine — check Rx interface from P-CSCF to PCF"
+        if_unhealthy: "PCF failure preventing QoS policy decisions"
+
+  # --- Kamailio IMS ---
+  pcscf:
+    component: pcscf
+    probes:
+      - name: process_alive
+        tool: run_kamcmd
+        args: {container: "pcscf", command: "core.uptime"}
+        description: "Check if Kamailio process is alive and responsive"
+        cost: low
+        healthy_if: "Returns uptime value"
+        unhealthy_if: "Command fails or times out"
+
+      - name: sip_listener
+        tool: check_process_listeners
+        args: {container: "pcscf"}
+        description: "Verify P-CSCF is listening on SIP port 5060"
+        cost: medium
+        healthy_if: "UDP and/or TCP listener on port 5060"
+
+      - name: registered_contacts
+        tool: run_kamcmd
+        args: {container: "pcscf", command: "stats.get_statistics ims_usrloc_pcscf:"}
+        description: "Check if UEs are registered at P-CSCF"
+        cost: low
+        healthy_if: "registered_contacts >= expected (2 for 2 UEs)"
+
+    healthy_criteria:
+      - "Kamailio process responsive (core.uptime succeeds)"
+      - "Listening on SIP port 5060"
+      - "UEs registered (registered_contacts > 0)"
+
+    degraded_indicators:
+      - "registered_contacts dropping (UEs failing to re-register)"
+      - "active_transactions accumulating (responses not arriving)"
+      - "High httpclient:connfail delta (NOTE: baseline ~1400 is pre-existing, only delta matters)"
+
+    down_indicators:
+      - "kamcmd fails (process not responding)"
+      - "Not listening on port 5060"
+      - "registered_contacts = 0 with UEs attached to 5G"
+
+    disambiguates:
+      - scenario: "SIP REGISTER 408 timeout"
+        question: "Is P-CSCF itself healthy but experiencing transport latency?"
+        if_healthy: "P-CSCF process is fine — check network latency on Gm/Mw path"
+        if_unhealthy: "P-CSCF process issue (overload, hang) causing timeouts"
+
+  icscf:
+    component: icscf
+    probes:
+      - name: process_alive
+        tool: run_kamcmd
+        args: {container: "icscf", command: "core.uptime"}
+        description: "Check if I-CSCF Kamailio process is alive"
+        cost: low
+
+      - name: diameter_peers
+        tool: run_kamcmd
+        args: {container: "icscf", command: "cdp.list_peers"}
+        description: "Check Diameter Cx peer connections to HSS"
+        cost: low
+        healthy_if: "At least one Diameter peer connected"
+
+    healthy_criteria:
+      - "Kamailio process responsive"
+      - "Diameter Cx peer to HSS connected"
+      - "cdp:timeout = 0"
+
+    degraded_indicators:
+      - "cdp:timeout > 0 (HSS queries timing out)"
+      - "Elevated cdp:average_response_time"
+
+    down_indicators:
+      - "kamcmd fails"
+      - "No Diameter peers connected"
+
+    disambiguates:
+      - scenario: "500 error on LIR select next S-CSCF"
+        question: "Is I-CSCF itself healthy, or is the problem at S-CSCF/HSS?"
+        if_healthy: "I-CSCF is fine — the 500 is a SYMPTOM of S-CSCF or HSS unreachability"
+        if_unhealthy: "I-CSCF process issue causing failures"
+
+  scscf:
+    component: scscf
+    probes:
+      - name: process_alive
+        tool: run_kamcmd
+        args: {container: "scscf", command: "core.uptime"}
+        description: "Check if S-CSCF Kamailio process is alive"
+        cost: low
+
+      - name: diameter_peers
+        tool: run_kamcmd
+        args: {container: "scscf", command: "cdp.list_peers"}
+        description: "Check Diameter Cx peer connections to HSS"
+        cost: low
+
+      - name: active_registrations
+        tool: run_kamcmd
+        args: {container: "scscf", command: "stats.get_statistics ims_usrloc_scscf:"}
+        description: "Check active registrations at S-CSCF"
+        cost: low
+        healthy_if: "active_contacts >= expected"
+
+    healthy_criteria:
+      - "Kamailio process responsive"
+      - "Diameter Cx peer to HSS connected"
+      - "Active contacts registered"
+
+    down_indicators:
+      - "kamcmd fails"
+      - "No Diameter peers connected"
+      - "active_contacts = 0"
+
+    disambiguates:
+      - scenario: "IMS registration failing"
+        question: "Is S-CSCF healthy, or has it lost state/connectivity?"
+        if_healthy: "S-CSCF is fine — check HSS Diameter (Cx) and upstream routing"
+        if_unhealthy: "S-CSCF failure is the root cause"
+
+  # --- Infrastructure ---
+  pyhss:
+    component: pyhss
+    probes:
+      - name: api_responsive
+        tool: query_subscriber
+        args: {imsi: "001011234567895", domain: "ims"}
+        description: "Query a known subscriber via PyHSS REST API"
+        cost: low
+        healthy_if: "Returns subscriber record"
+        unhealthy_if: "Timeout or connection refused"
+
+    healthy_criteria:
+      - "REST API responding to queries"
+      - "Returns valid subscriber data"
+
+    degraded_indicators:
+      - "Slow response times (> 1s)"
+
+    down_indicators:
+      - "REST API not responding (timeout, connection refused)"
+      - "Process paused or hung (still shows 'running' but not responding)"
+
+    disambiguates:
+      - scenario: "Diameter Cx timeouts at I-CSCF/S-CSCF"
+        question: "Is HSS actually down/hung, or is the Diameter transport broken?"
+        if_healthy: "HSS is responsive — check Diameter protocol layer (peer config, TCP connectivity)"
+        if_unhealthy: "HSS is unresponsive — this is the root cause of Diameter timeouts"
+
+  mongo:
+    component: mongo
+    probes:
+      - name: query_responsive
+        tool: query_subscriber
+        args: {imsi: "001011234567895", domain: "core"}
+        description: "Query a known subscriber via MongoDB"
+        cost: low
+        healthy_if: "Returns subscriber record"
+        unhealthy_if: "Timeout or connection error"
+
+    healthy_criteria:
+      - "Accepting queries and returning data"
+
+    down_indicators:
+      - "Connection refused or timeout"
+
+    disambiguates:
+      - scenario: "New PDU session creation failing"
+        question: "Is MongoDB healthy, or has the UDR lost its backend?"
+        if_healthy: "MongoDB is fine — check UDR process or SBI connectivity"
+        if_unhealthy: "MongoDB failure is the root cause"
+
+  dns:
+    component: dns
+    probes:
+      - name: reachable
+        tool: measure_rtt
+        args: {container: "pcscf", target_ip: "172.22.0.15"}
+        description: "Check basic connectivity to DNS server"
+        cost: low
+
+    healthy_criteria:
+      - "Reachable and responding to queries"
+
+    down_indicators:
+      - "Unreachable (100% packet loss)"
+
+    disambiguates:
+      - scenario: "IMS SIP routing failures"
+        question: "Is DNS resolution working, or has the DNS server failed?"
+        if_healthy: "DNS is fine — check SIP routing config"
+        if_unhealthy: "DNS failure prevents IMS domain resolution"
+
+  nr_gnb:
+    component: nr_gnb
+    probes:
+      - name: reachable_from_amf
+        tool: measure_rtt
+        args: {container: "amf", target_ip: "172.22.0.23"}
+        description: "Check N2 path reachability from AMF to gNB"
+        cost: low
+        healthy_if: "RTT < 5ms, 0% packet loss"
+        unhealthy_if: "100% packet loss"
+
+      - name: reachable_from_upf
+        tool: measure_rtt
+        args: {container: "upf", target_ip: "172.22.0.23"}
+        description: "Check N3 path reachability from UPF to gNB"
+        cost: low
+
+    healthy_criteria:
+      - "Reachable from AMF (N2 path)"
+      - "Reachable from UPF (N3 path)"
+      - "NGAP association active with AMF (ran_ue > 0, gnb > 0)"
+
+    down_indicators:
+      - "Unreachable from AMF (100% packet loss)"
+      - "ran_ue = 0 AND gnb = 0 at AMF"
+
+    disambiguates:
+      - scenario: "ran_ue = 0 at AMF"
+        question: "Is gNB unreachable, or did AMF lose track of UEs for another reason?"
+        if_healthy: "gNB is reachable — investigate AMF state or NAS layer"
+        if_unhealthy: "gNB unreachable — this is the root cause of N2 connectivity loss"

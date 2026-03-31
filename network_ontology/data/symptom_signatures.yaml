@@ -1,0 +1,198 @@
+# =============================================================================
+# Network Ontology — Symptom Signatures
+# =============================================================================
+# Pre-computed pattern matching: "this combination of symptoms = that fault."
+# Replaces LLM reasoning about what symptoms mean.
+
+signatures:
+
+  ran_failure:
+    diagnosis: "N2 connectivity loss — RAN/gNB unreachable, radio access lost"
+    failure_domain: ran
+    confidence: very_high
+    match_all:
+      - metric: ran_ue
+        condition: "= 0"
+      - metric: gnb
+        condition: "= 0"
+    match_any:
+      - metric: sm_sessionnbr
+        condition: "> 0"
+        note: "stale sessions from before failure"
+    rule_out:
+      - tool: measure_rtt
+        args: {container: "amf", target_ip: "172.22.0.23"}
+        check: "100% packet loss confirms gNB unreachable"
+      - tool: get_nf_metrics
+        check: "Confirm ran_ue and gnb both at 0"
+    related_chain: n2_connectivity_loss
+
+  data_plane_degradation:
+    diagnosis: "N3 data plane degradation — packet loss or latency on GTP-U path"
+    failure_domain: data_plane
+    confidence: high
+    match_any:
+      - log_pattern: ue_jitter_buffer_reset
+      - metric: gtp_indatapktn3upf
+        condition: "incrementing erratically (delta much smaller than expected)"
+      - metric: gtp_outdatapktn3upf
+        condition: "incrementing erratically"
+    match_all:
+      - metric: upf_sessionnbr
+        condition: "> 0"
+        note: "sessions exist — data plane not completely dead"
+    rule_out:
+      - tool: measure_rtt
+        args: {container: "nr_gnb", target_ip: "172.22.0.8"}
+        check: "Elevated RTT or packet loss confirms transport issue on N3 path"
+      - tool: get_nf_metrics
+        check: "Compare GTP counter rates to baseline"
+    related_chain: n3_data_plane_degradation
+
+  data_plane_dead:
+    diagnosis: "N3 data plane outage — no GTP-U traffic flowing"
+    failure_domain: data_plane
+    confidence: very_high
+    match_all:
+      - metric: gtp_indatapktn3upf
+        condition: "= 0 or stopped incrementing"
+      - metric: gtp_outdatapktn3upf
+        condition: "= 0 or stopped incrementing"
+      - metric: upf_sessionnbr
+        condition: "> 0"
+        note: "sessions exist but no traffic = zombied tunnels"
+    rule_out:
+      - tool: measure_rtt
+        args: {container: "nr_gnb", target_ip: "172.22.0.8"}
+        check: "Check N3 path reachability"
+      - tool: get_nf_metrics
+        check: "If ran_ue is also 0, root cause is N2 loss (RAN failure), not UPF issue"
+    related_chain: n3_data_plane_outage
+
+  ims_hss_failure:
+    diagnosis: "IMS HSS unreachable — Diameter Cx queries failing"
+    failure_domain: ims_signaling
+    confidence: high
+    match_any:
+      - metric: "cdp:timeout"
+        condition: "> 0"
+        at: [icscf, scscf]
+      - metric: "ims_icscf:uar_timeouts"
+        condition: "> 0"
+      - metric: "ims_auth:mar_timeouts"
+        condition: "> 0"
+    match_all:
+      - metric: "ims_usrloc_pcscf:registered_contacts"
+        condition: "dropping or = 0"
+        note: "existing registrations expiring"
+    rule_out:
+      - tool: run_kamcmd
+        args: {container: "icscf", command: "cdp.list_peers"}
+        check: "Diameter peer state — confirms HSS connectivity issue"
+      - tool: measure_rtt
+        args: {container: "icscf", target_ip: "172.22.0.18"}
+        check: "Check basic connectivity to HSS"
+    related_chain: hss_unreachable
+
+  ims_scscf_unreachable:
+    diagnosis: "S-CSCF unreachable — IMS registration and call control stopped"
+    failure_domain: ims_signaling
+    confidence: high
+    match_any:
+      - log_pattern: icscf_500_lir
+    match_all:
+      - metric: "ims_usrloc_scscf:active_contacts"
+        condition: "= 0 or stale"
+    rule_out:
+      - tool: measure_rtt
+        args: {container: "icscf", target_ip: "172.22.0.20"}
+        check: "Check connectivity from I-CSCF to S-CSCF"
+      - tool: get_network_status
+        check: "Check S-CSCF process/container health"
+    related_chain: scscf_unreachable
+
+  ims_signaling_partition:
+    diagnosis: "IMS SIP signaling path severed — network partition between P-CSCF and I/S-CSCF"
+    failure_domain: ims_signaling
+    confidence: high
+    match_all:
+      - metric: "tmx:active_transactions"
+        condition: "> 0"
+        at: pcscf
+        note: "transactions accumulating with no response"
+    match_any:
+      - log_pattern: sip_408_timeout
+        at: pcscf
+    rule_out:
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "172.22.0.19"}
+        check: "100% loss to I-CSCF confirms partition"
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "172.22.0.20"}
+        check: "100% loss to S-CSCF confirms partition"
+    related_chain: ims_partition
+
+  sip_transport_mismatch:
+    diagnosis: "SIP transport protocol mismatch — TCP/UDP incompatibility"
+    failure_domain: ims_signaling
+    confidence: medium
+    match_all:
+      - log_pattern: icscf_500_lir
+        note: "500 error but Diameter is actually working"
+    match_any:
+      - observation: "SIP INVITE sent by one node but never received by next hop"
+      - observation: "Large SIP messages fail, small ones succeed"
+    rule_out:
+      - tool: read_running_config
+        args: {container: "pcscf", grep: "udp_mtu_try_proto"}
+        check: "If set to TCP, large SIP messages switch to TCP"
+      - tool: check_process_listeners
+        args: {container: "e2e_ue2"}
+        check: "If UE only listens on UDP, TCP delivery fails silently"
+    related_chain: tcp_udp_mismatch
+
+  infrastructure_dns_down:
+    diagnosis: "DNS server down — IMS domain resolution broken"
+    failure_domain: infrastructure
+    confidence: very_high
+    match_all:
+      - container_status: {dns: exited}
+    match_any:
+      - log_pattern: "DNS lookup error"
+        at: [pcscf, icscf, scscf]
+    rule_out:
+      - tool: get_network_status
+        check: "dns container status"
+    related_chain: dns_failure
+
+  infrastructure_mongodb_down:
+    diagnosis: "MongoDB down — 5G subscriber data unavailable"
+    failure_domain: infrastructure
+    confidence: very_high
+    match_all:
+      - container_status: {mongo: exited}
+    match_any:
+      - log_pattern: "MongoDB connection error"
+        at: [udr]
+    rule_out:
+      - tool: get_network_status
+        check: "mongo container status"
+    related_chain: mongodb_gone
+
+  sip_edge_latency:
+    diagnosis: "High latency on SIP signaling path at P-CSCF — SIP T1 timer timeouts"
+    failure_domain: ims_signaling
+    confidence: high
+    match_any:
+      - log_pattern: sip_408_timeout
+        at: [pcscf, e2e_ue1, e2e_ue2]
+      - metric: "tmx:active_transactions"
+        condition: "> 0"
+        at: pcscf
+    rule_out:
+      - tool: measure_rtt
+        args: {container: "e2e_ue1", target_ip: "172.22.0.21"}
+        check: "Elevated RTT to P-CSCF confirms transport latency as root cause"
+      - tool: get_nf_metrics
+        check: "Check active_transactions accumulating at P-CSCF"
+    related_chain: sip_edge_latency

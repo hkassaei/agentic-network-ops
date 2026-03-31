@@ -1,0 +1,617 @@
+# =============================================================================
+# Network Ontology — Causal Chains (Failure Modes)
+# =============================================================================
+# Organized around FAILURE MODES (what breaks), not fault injection mechanisms.
+#
+# Each chain describes what happens when a specific connectivity or service
+# failure occurs, regardless of WHY it occurred. The "possible_causes" list
+# enumerates real-world reasons, but the observable symptoms and diagnostic
+# approach are the same for all causes.
+#
+# The chaos platform maps its injections to these failure modes separately.
+
+causal_chains:
+
+  # =========================================================================
+  # RAN / ACCESS NETWORK FAILURE MODES
+  # =========================================================================
+
+  n2_connectivity_loss:
+    description: "Loss of N2 (NGAP/SCTP) connectivity between gNB and AMF. UEs lose 5G radio access."
+    affected_interface: N2
+    affected_protocol: NGAP/SCTP
+    failure_domain: ran
+    severity: down
+
+    possible_causes:
+      - "gNB hardware or software failure"
+      - "Transport network failure between gNB and AMF (fiber cut, switch failure)"
+      - "SCTP association timeout or misconfiguration"
+      - "gNB overload or resource exhaustion"
+      - "Power outage at cell site"
+      - "Network partition isolating the RAN from the core"
+
+    observable_symptoms:
+      immediate:
+        - metric: ran_ue
+          becomes: 0
+          at: amf
+          lag: "<5s"
+          description: "AMF reports zero connected UEs"
+        - metric: gnb
+          becomes: 0
+          at: amf
+          lag: "<5s"
+          description: "AMF reports zero connected gNBs"
+        - log: "SCTP association closed or connection refused"
+          at: amf
+          direction: OUTBOUND
+          description: "AMF's NGAP layer reports loss of SCTP connection to gNB"
+
+      cascading:
+        - condition: "existing PDU sessions"
+          effect: "sm_sessionnbr stays at previous value (stale) but GTP-U traffic stops"
+          lag: "immediate"
+          description: "Control plane state is stale — sessions exist but no data flows"
+        - condition: "GTP-U data plane"
+          effect: "gtp_indatapktn3upf and gtp_outdatapktn3upf stop incrementing"
+          lag: "<5s"
+          description: "No radio link means no user plane traffic"
+        - condition: "active VoNR call"
+          effect: "RTP media stops, jitter buffer resets on UE"
+          lag: "<2s"
+        - condition: "IMS registration timer expires"
+          effect: "P-CSCF registered_contacts drops when re-registration fails (no data plane)"
+          lag: "minutes (depends on re-reg timer)"
+
+    does_NOT_mean:
+      - "AMF is down or misconfigured — AMF is the node REPORTING the loss, not the node that failed"
+      - "UPF has a data plane issue — GTP-U stops because the gNB endpoint is gone, not because the UPF is broken"
+      - "IMS has a signaling problem — all IMS symptoms are SECONDARY to the RAN being unreachable"
+
+    diagnostic_approach:
+      - tool: get_nf_metrics
+        purpose: "Check ran_ue and gnb counters at AMF — both at 0 confirms RAN failure"
+        priority: 1
+      - tool: measure_rtt
+        args: {container: "amf", target_ip: "172.22.0.23"}
+        purpose: "Verify basic IP connectivity from AMF to gNB — 100% loss confirms unreachability"
+        priority: 2
+      - tool: read_container_logs
+        args: {container: "amf", grep: "NGAP"}
+        purpose: "Check NGAP state change logs for details on when and why the association was lost"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "ran_ue = 0 AND gnb = 0 is the DEFINITIVE indicator for N2 connectivity loss"
+      - "sm_sessionnbr > 0 with GTP packets stalled = stale sessions from before the failure"
+
+  # =========================================================================
+  # DATA PLANE FAILURE MODES
+  # =========================================================================
+
+  n3_data_plane_degradation:
+    description: "Packet loss or degradation on the N3 (GTP-U) data plane between gNB and UPF."
+    affected_interface: N3
+    affected_protocol: GTP-U
+    failure_domain: data_plane
+    severity: degraded
+
+    possible_causes:
+      - "Network congestion on the transport segment between gNB and UPF"
+      - "Faulty NIC or driver issue on UPF or gNB"
+      - "MTU mismatch causing GTP-U fragmentation and loss"
+      - "QoS misconfiguration dropping or deprioritizing GTP-U traffic"
+      - "Interface errors (CRC errors, frame errors, link flapping)"
+      - "Overloaded forwarding plane on UPF or intermediate switch"
+      - "Partial transport path failure (one direction worse than the other)"
+
+    observable_symptoms:
+      immediate:
+        - metric: gtp_indatapktn3upf
+          becomes: "still incrementing but erratic or slower than expected"
+          at: upf
+          lag: "<5s"
+          description: "Incoming GTP-U packet rate is irregular"
+        - metric: gtp_outdatapktn3upf
+          becomes: "still incrementing but erratic or slower"
+          at: upf
+          lag: "<5s"
+          description: "Outgoing GTP-U packet rate is irregular"
+
+      cascading:
+        - condition: "active VoNR call"
+          effect: "RTP media degradation, jitter buffer resets on UE, audible quality issues"
+          lag: "<2s"
+          description: "Voice call quality degrades proportionally to packet loss"
+        - condition: "SIP re-INVITE or UPDATE in flight"
+          effect: "May timeout if SIP signaling traverses the degraded data plane"
+          lag: "depends on SIP timer"
+        - condition: "PFCP heartbeat between SMF and UPF"
+          effect: "May fail if loss is severe (>50%), causing session teardown"
+          lag: "10-30s"
+
+    does_NOT_mean:
+      - "IMS signaling issue — jitter buffer resets look like SIP problems but are data plane"
+      - "P-CSCF config issue — cascading metric changes in IMS nodes are SECONDARY effects"
+      - "httpclient:connfail increase — this is pre-existing noise, unrelated to data plane"
+
+    diagnostic_approach:
+      - tool: measure_rtt
+        args: {container: "nr_gnb", target_ip: "172.22.0.8"}
+        purpose: "Measure RTT and packet loss from gNB to UPF — elevated values confirm transport issue"
+        priority: 1
+      - tool: get_nf_metrics
+        purpose: "Check GTP-U counters at UPF — compare rate to baseline"
+        priority: 2
+      - tool: read_container_logs
+        args: {container: "upf", grep: "error"}
+        purpose: "Check for interface errors, PFCP issues, or forwarding plane errors"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "GTP counters still incrementing (not zero) distinguishes degradation from total outage"
+      - "UE jitter buffer resets are a textbook data plane quality symptom"
+      - "Elevated RTT or packet loss between gNB and UPF confirms transport-level issue"
+
+  n3_data_plane_outage:
+    description: "Complete loss of N3 (GTP-U) data plane — no user traffic flowing."
+    affected_interface: N3
+    affected_protocol: GTP-U
+    failure_domain: data_plane
+    severity: down
+
+    possible_causes:
+      - "UPF failure or unreachability"
+      - "Complete transport failure between gNB and UPF"
+      - "GTP-U tunnel state lost (PFCP session de-synchronization)"
+      - "N2 connectivity loss (gNB down — no endpoint to send/receive GTP-U)"
+      - "UPF interface misconfiguration (ogstun interface down)"
+      - "Routing failure preventing GTP-U encapsulated traffic from reaching UPF"
+
+    observable_symptoms:
+      immediate:
+        - metric: gtp_indatapktn3upf
+          becomes: "0 or stopped incrementing"
+          at: upf
+          description: "No incoming GTP-U traffic at all"
+        - metric: gtp_outdatapktn3upf
+          becomes: "0 or stopped incrementing"
+          at: upf
+          description: "No outgoing GTP-U traffic at all"
+
+      cascading:
+        - condition: "PDU sessions exist (sm_sessionnbr > 0)"
+          effect: "Sessions are 'zombied' — control plane says they exist but no data flows"
+          description: "This is the signature of a pure data plane failure with healthy control plane"
+        - condition: "active VoNR call"
+          effect: "Call audio completely stops, eventual timeout"
+        - condition: "IMS re-registration"
+          effect: "May fail if SIP signaling path depends on data plane connectivity"
+
+    does_NOT_mean:
+      - "SMF or AMF is broken — control plane (N4, SBI) may be perfectly healthy"
+      - "SIP timeout is the root cause — it's a CONSEQUENCE of no data plane"
+
+    diagnostic_approach:
+      - tool: get_nf_metrics
+        purpose: "Confirm GTP counters at 0 while session counts > 0 — confirms zombied state"
+        priority: 1
+      - tool: measure_rtt
+        args: {container: "nr_gnb", target_ip: "172.22.0.8"}
+        purpose: "Check basic IP reachability between gNB and UPF"
+        priority: 2
+      - tool: get_network_status
+        purpose: "Check if all containers are running — a down gNB causes the same GTP=0 symptom"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "GTP packets = 0 WITH sm_sessionnbr > 0 = zombied tunnels (data plane dead, control plane alive)"
+      - "If ran_ue is also 0, the root cause is N2 connectivity loss, not a UPF issue"
+
+  # =========================================================================
+  # IMS SIGNALING FAILURE MODES
+  # =========================================================================
+
+  sip_edge_latency:
+    description: "High latency on the SIP signaling path at the P-CSCF edge, causing SIP transaction timeouts."
+    affected_interface: Gm
+    affected_protocol: SIP
+    failure_domain: ims_signaling
+    severity: degraded
+
+    possible_causes:
+      - "Network congestion or latency on the transport segment to/from P-CSCF"
+      - "P-CSCF overload (CPU, memory, or connection exhaustion)"
+      - "DNS resolution delays for SIP routing"
+      - "Intermediate firewall or NAT introducing latency"
+      - "TLS handshake overhead (if SIP over TLS)"
+      - "P-CSCF process issues (garbage collection, thread starvation)"
+
+    observable_symptoms:
+      immediate:
+        - metric: "tmx:active_transactions"
+          becomes: "> 0 and growing"
+          at: pcscf
+          description: "SIP transactions accumulating without responses"
+        - log: "SIP 408 Request Timeout"
+          at: [pcscf, e2e_ue1, e2e_ue2]
+          description: "SIP transactions timing out"
+
+      cascading:
+        - condition: "latency >= 500ms (Kamailio T1 timer)"
+          effect: "SIP transactions start timing out, REGISTER fails"
+          description: "Kamailio's T1 timer defaults to 500ms — latency above this breaks SIP"
+        - condition: "UE SIP re-registration timer"
+          effect: "UE appears unregistered after re-registration fails"
+
+    does_NOT_mean:
+      - "HSS subscriber profiles are incomplete — this is a TRANSPORT issue, not a data issue"
+      - "Diameter Cx failures — the Diameter path is separate from the Gm SIP path"
+
+    diagnostic_approach:
+      - tool: measure_rtt
+        args: {container: "e2e_ue1", target_ip: "172.22.0.21"}
+        purpose: "Measure actual RTT to P-CSCF — elevated RTT confirms transport latency"
+        priority: 1
+      - tool: get_nf_metrics
+        purpose: "Check tmx:active_transactions at P-CSCF"
+        priority: 2
+      - tool: read_container_logs
+        args: {container: "pcscf", grep: "timeout"}
+        purpose: "Confirm SIP transaction timeouts"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "Kamailio T1 timer is 500ms — latency at or above this threshold causes SIP timeouts"
+      - "Accumulated active_transactions with timeout errors = classic latency symptom"
+
+  scscf_unreachable:
+    description: "S-CSCF unreachable — IMS registration and call control stops."
+    affected_interface: Mw
+    affected_protocol: SIP
+    failure_domain: ims_signaling
+    severity: down
+
+    possible_causes:
+      - "S-CSCF process crash or unresponsive"
+      - "Transport failure between I-CSCF/P-CSCF and S-CSCF"
+      - "S-CSCF overload (connection limit, memory exhaustion)"
+      - "Network partition isolating S-CSCF"
+      - "S-CSCF misconfiguration (wrong listen address, port conflict)"
+
+    observable_symptoms:
+      immediate:
+        - log: "500 Server error on LIR select next S-CSCF"
+          at: icscf
+          description: "I-CSCF can route to S-CSCF but S-CSCF is unreachable"
+        - metric: "ims_usrloc_scscf:active_contacts"
+          becomes: "0 or stale"
+          at: scscf
+          description: "No active registered contacts at S-CSCF"
+
+      cascading:
+        - condition: "new SIP REGISTER"
+          effect: "I-CSCF finds S-CSCF address via LIR but cannot reach it → 500/408"
+        - condition: "new SIP INVITE"
+          effect: "Call setup fails — S-CSCF is the call controller"
+        - condition: "active SIP dialogs"
+          effect: "Dialogs expire (dialog timer), established calls may persist briefly"
+
+    does_NOT_mean:
+      - "I-CSCF has an error — the 500 at I-CSCF is a SYMPTOM of S-CSCF unreachability"
+      - "HSS is broken — Diameter from I-CSCF to HSS (UAR/LIR) may still work fine"
+
+    diagnostic_approach:
+      - tool: measure_rtt
+        args: {container: "icscf", target_ip: "172.22.0.20"}
+        purpose: "Check basic connectivity from I-CSCF to S-CSCF"
+        priority: 1
+      - tool: get_network_status
+        purpose: "Check S-CSCF container/process status"
+        priority: 2
+      - tool: run_kamcmd
+        args: {container: "icscf", command: "cdp.list_peers"}
+        purpose: "Check if Diameter is still functioning (separate from SIP path)"
+        priority: 3
+
+  hss_unreachable:
+    description: "IMS HSS unreachable — Diameter Cx queries failing, subscriber resolution broken."
+    affected_interface: Cx
+    affected_protocol: Diameter
+    failure_domain: ims_signaling
+    severity: down
+
+    possible_causes:
+      - "HSS process crash or hang"
+      - "HSS database backend (MySQL) failure"
+      - "Transport failure between I-CSCF/S-CSCF and HSS"
+      - "HSS overload (query backlog, connection limit)"
+      - "Diameter peer misconfiguration or certificate expiry"
+      - "Network partition isolating HSS"
+
+    observable_symptoms:
+      immediate:
+        - metric: "cdp:timeout"
+          becomes: "> 0"
+          at: [icscf, scscf]
+          lag: "5-30s (Diameter Tw timer)"
+          description: "Diameter Cx requests timing out"
+        - metric: "ims_icscf:uar_timeouts"
+          becomes: "> 0"
+          at: icscf
+        - metric: "ims_auth:mar_timeouts"
+          becomes: "> 0"
+          at: scscf
+
+      cascading:
+        - condition: "new SIP REGISTER"
+          effect: "Stalls waiting for Diameter response, eventually times out"
+        - condition: "all IMS authentication"
+          effect: "Cannot complete — S-CSCF needs MAR/MAA from HSS"
+        - condition: "existing registrations"
+          effect: "Expire when re-registration timer fires and re-auth fails"
+
+    does_NOT_mean:
+      - "I-CSCF or S-CSCF has a bug — they are waiting for a response that never comes"
+      - "SIP signaling is broken — SIP transport may be fine, it's the backend query that fails"
+
+    diagnostic_approach:
+      - tool: run_kamcmd
+        args: {container: "icscf", command: "cdp.list_peers"}
+        purpose: "Check Diameter peer state and connection health"
+        priority: 1
+      - tool: measure_rtt
+        args: {container: "icscf", target_ip: "172.22.0.18"}
+        purpose: "Check basic connectivity to HSS"
+        priority: 2
+      - tool: get_nf_metrics
+        purpose: "Check cdp:timeout counters at I-CSCF and S-CSCF"
+        priority: 3
+
+  ims_signaling_partition:
+    description: "P-CSCF isolated from I-CSCF and S-CSCF — IMS SIP signaling path severed."
+    affected_interface: Mw
+    affected_protocol: SIP
+    failure_domain: ims_signaling
+    severity: down
+
+    possible_causes:
+      - "Network partition between P-CSCF and IMS core"
+      - "Firewall rule blocking SIP traffic between P-CSCF and CSCFs"
+      - "Routing failure in the transport network"
+      - "P-CSCF interface failure (link down on CSCF-facing interface)"
+      - "Switch or router failure on the IMS internal network segment"
+
+    observable_symptoms:
+      immediate:
+        - metric: "tmx:active_transactions"
+          becomes: "> 0 and growing"
+          at: pcscf
+          description: "SIP transactions accumulating at P-CSCF with no responses"
+        - log: "SIP transaction timeout"
+          at: pcscf
+
+      cascading:
+        - condition: "new SIP REGISTER"
+          effect: "P-CSCF cannot reach I-CSCF, registration times out"
+        - condition: "new SIP INVITE"
+          effect: "Call setup fails, P-CSCF cannot route to I/S-CSCF"
+        - condition: "active calls"
+          effect: "RTP media may continue (via UPF, not through CSCFs) but re-INVITE fails"
+
+    diagnostic_approach:
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "172.22.0.19"}
+        purpose: "Check connectivity from P-CSCF to I-CSCF — 100% loss confirms partition"
+        priority: 1
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "172.22.0.20"}
+        purpose: "Check connectivity from P-CSCF to S-CSCF"
+        priority: 2
+
+  sip_transport_mismatch:
+    description: "SIP message delivery failure due to TCP/UDP protocol mismatch at the receiving endpoint."
+    affected_interface: Gm
+    affected_protocol: SIP
+    failure_domain: ims_signaling
+    severity: down
+
+    possible_causes:
+      - "SIP proxy configured to switch to TCP for large messages (udp_mtu_try_proto=TCP) but UE only supports UDP"
+      - "MTU-based fallback to TCP when receiver has no TCP listener"
+      - "Misconfigured transport preferences between SIP entities"
+      - "NAT or firewall allowing UDP but blocking TCP on SIP port"
+
+    observable_symptoms:
+      immediate:
+        - log: "SIP INVITE sent but no response received"
+          at: pcscf
+          description: "P-CSCF sent a large SIP message but never got a response"
+        - log: "500 Server error on LIR select next S-CSCF"
+          at: icscf
+          description: "Timeout propagates back through I-CSCF as 500"
+
+      cascading:
+        - condition: "SIP INVITE with SDP (>1300 bytes)"
+          effect: "Large messages fail, small messages (OPTIONS, etc.) may succeed"
+          description: "This is the signature — message-size-dependent failures"
+        - condition: "timeout propagation"
+          effect: "500 error cascades back through the SIP signaling chain"
+
+    does_NOT_mean:
+      - "I-CSCF has a Diameter or routing error — the 500 is a propagated timeout"
+      - "S-CSCF authentication failed — auth succeeded, INVITE delivery failed"
+      - "HSS returned wrong data — Cx interface is working correctly"
+
+    diagnostic_approach:
+      - tool: read_running_config
+        args: {container: "pcscf", grep: "udp_mtu"}
+        purpose: "Check if P-CSCF switches to TCP for large SIP messages"
+        priority: 1
+      - tool: check_process_listeners
+        args: {container: "e2e_ue2"}
+        purpose: "Verify what transport protocols the UE is listening on"
+        priority: 2
+      - tool: read_container_logs
+        args: {container: "e2e_ue2", grep: "INVITE"}
+        purpose: "Check if the INVITE ever reached UE2 (absence = delivery failure)"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "INVITE sent by one node but NEVER received by the next hop = delivery failure"
+      - "Large SIP messages fail while small ones succeed = MTU/transport issue"
+      - "Absence of the SIP message at the destination is the critical evidence"
+
+  # =========================================================================
+  # INFRASTRUCTURE FAILURE MODES
+  # =========================================================================
+
+  subscriber_data_store_unavailable:
+    description: "5G subscriber data store (MongoDB) unavailable. New session creation fails."
+    affected_interface: "UDR → MongoDB"
+    affected_protocol: MongoDB
+    failure_domain: infrastructure
+    severity: degraded
+
+    possible_causes:
+      - "Database process crash or hang"
+      - "Disk full or I/O failure on database volume"
+      - "Network connectivity loss between UDR and MongoDB"
+      - "Database corruption or lock contention"
+      - "Resource exhaustion (connections, memory)"
+
+    observable_symptoms:
+      immediate:
+        - log: "MongoDB connection error"
+          at: udr
+      cascading:
+        - condition: "new PDU session creation"
+          effect: "UDR cannot query subscriber data, SMF session creation fails"
+        - condition: "existing sessions"
+          effect: "May survive briefly (cached state) but new operations fail"
+
+    diagnostic_approach:
+      - tool: get_network_status
+        purpose: "Check database container/process status"
+        priority: 1
+      - tool: measure_rtt
+        args: {container: "udr", target_ip: "172.22.0.2"}
+        purpose: "Check connectivity to database"
+        priority: 2
+
+  dns_resolution_failure:
+    description: "IMS DNS resolution broken. Domain-based SIP routing fails."
+    affected_interface: DNS
+    affected_protocol: DNS
+    failure_domain: infrastructure
+    severity: down
+
+    possible_causes:
+      - "DNS server process crash or unreachable"
+      - "DNS zone file misconfiguration (missing NAPTR/SRV records)"
+      - "Network connectivity loss to DNS server"
+      - "DNS cache poisoning or stale records"
+      - "DNS server overload or rate limiting"
+
+    observable_symptoms:
+      immediate:
+        - log: "DNS lookup error"
+          at: [pcscf, icscf, scscf]
+      cascading:
+        - condition: "SIP routing requiring DNS"
+          effect: "NAPTR/SRV lookups fail, SIP routing breaks"
+        - condition: "existing registrations"
+          effect: "May survive until re-registration (cached routes)"
+
+    diagnostic_approach:
+      - tool: get_network_status
+        purpose: "Check DNS server status"
+        priority: 1
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "172.22.0.15"}
+        purpose: "Check connectivity to DNS server"
+        priority: 2
+
+  amf_service_disruption:
+    description: "AMF temporarily unavailable — UEs deregistered, must re-attach."
+    affected_interface: N2
+    affected_protocol: NGAP/SBI
+    failure_domain: core_control_plane
+    severity: degraded
+
+    possible_causes:
+      - "AMF process restart (upgrade, crash recovery)"
+      - "AMF overload causing temporary unresponsiveness"
+      - "SBI communication failure with NRF (AMF deregistered from service mesh)"
+      - "SCTP association reset"
+
+    observable_symptoms:
+      immediate:
+        - metric: ran_ue
+          becomes: 0
+          at: amf
+          lag: "<5s"
+          description: "UEs deregistered during AMF disruption"
+        - log: "NGAP association dropped"
+          at: nr_gnb
+
+      cascading:
+        - condition: "UEs attached"
+          effect: "NAS connection lost, UEs must re-attach after AMF recovers"
+        - condition: "active PDU sessions"
+          effect: "Temporary disruption until AMF recovers and UEs re-register"
+
+    diagnostic_approach:
+      - tool: get_network_status
+        purpose: "Check AMF status — may show recently restarted"
+        priority: 1
+      - tool: query_prometheus
+        args: {query: "ran_ue"}
+        purpose: "Check if UEs re-attached after disruption"
+        priority: 2
+
+    key_diagnostic_signal:
+      - "ran_ue drops to 0 then recovers = transient AMF disruption"
+      - "ran_ue stays at 0 = sustained failure (may be N2 connectivity loss instead)"
+
+  cascading_ims_outage:
+    description: "Multiple IMS component failures — total IMS service outage."
+    affected_interface: [Cx, Mw]
+    affected_protocol: [Diameter, SIP]
+    failure_domain: ims_signaling
+    severity: down
+
+    possible_causes:
+      - "HSS failure combined with S-CSCF overload (cascading failure pattern)"
+      - "Database failure affecting both HSS and S-CSCF state"
+      - "Network event causing multiple IMS nodes to lose connectivity simultaneously"
+      - "Coordinated maintenance window gone wrong"
+
+    observable_symptoms:
+      immediate:
+        - metric: "cdp:timeout"
+          becomes: "> 0"
+          at: [icscf, scscf]
+          description: "Diameter completely broken"
+        - metric: "ims_usrloc_pcscf:registered_contacts"
+          becomes: 0
+          at: pcscf
+          description: "All UEs lose IMS registration"
+
+      cascading:
+        - condition: "any IMS operation"
+          effect: "Total IMS failure — no auth, no registration, no calls"
+
+    diagnostic_approach:
+      - tool: get_nf_metrics
+        purpose: "Full metrics snapshot to identify which IMS components are affected"
+        priority: 1
+      - tool: run_kamcmd
+        args: {container: "icscf", command: "cdp.list_peers"}
+        purpose: "Check Diameter peer health"
+        priority: 2
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "172.22.0.20"}
+        purpose: "Check connectivity between IMS nodes"
+        priority: 3

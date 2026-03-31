@@ -1,0 +1,558 @@
+"""
+Network Ontology Query API — Python interface for agent tools.
+
+Provides high-level functions that translate agent observations into
+ontology queries and return structured, actionable results.
+
+Usage:
+    from network_ontology.query import OntologyClient
+
+    client = OntologyClient()
+    result = client.match_symptoms({"ran_ue": 0, "gnb": 0})
+    chain = client.get_causal_chain("gnb_down")
+    meaning = client.interpret_log("SCTP connection refused", source="amf")
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any
+
+log = logging.getLogger("ontology.query")
+
+
+class OntologyClient:
+    """Query interface to the network ontology graph database."""
+
+    def __init__(
+        self,
+        uri: str | None = None,
+        auth: tuple[str, str] | None = None,
+    ):
+        from neo4j import GraphDatabase
+
+        self._uri = uri or os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+        self._auth = auth or (
+            os.environ.get("NEO4J_USER", "neo4j"),
+            os.environ.get("NEO4J_PASSWORD", "ontology"),
+        )
+        self._driver = GraphDatabase.driver(self._uri, auth=self._auth)
+
+    def close(self):
+        self._driver.close()
+
+    # -----------------------------------------------------------------
+    # Causal Chain Queries
+    # -----------------------------------------------------------------
+
+    def get_causal_chain(self, chain_id: str) -> dict[str, Any] | None:
+        """Get a complete causal chain by ID.
+
+        Returns the chain with its immediate effects, cascading effects,
+        symptoms at each node, does_NOT_mean warnings, and diagnostic actions.
+        """
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (cc:CausalChain {id: $id})
+                OPTIONAL MATCH (cc)-[cs:CAUSES_SYMPTOM]->(s:Symptom)
+                RETURN cc, collect({symptom: s, order: cs.order, type: cs.type}) AS symptoms
+            """, id=chain_id)
+
+            record = result.single()
+            if not record:
+                return None
+
+            cc = dict(record["cc"])
+            symptoms = [
+                {**dict(s["symptom"]), "order": s["order"], "type": s["type"]}
+                for s in record["symptoms"]
+                if s["symptom"] is not None
+            ]
+            symptoms.sort(key=lambda x: x.get("order", 999))
+
+            return {
+                **cc,
+                "symptoms": symptoms,
+            }
+
+    def get_causal_chain_for_component(self, component: str) -> list[dict]:
+        """Get all causal chains triggered by a specific component failure."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (cc:CausalChain)-[:TRIGGERS]->(c:Component {name: $name})
+                OPTIONAL MATCH (cc)-[cs:CAUSES_SYMPTOM]->(s:Symptom)
+                RETURN cc, collect({symptom: s, order: cs.order}) AS symptoms
+                ORDER BY cc.severity DESC
+            """, name=component)
+
+            chains = []
+            for record in result:
+                cc = dict(record["cc"])
+                symptoms = [
+                    {**dict(s["symptom"]), "order": s["order"]}
+                    for s in record["symptoms"]
+                    if s["symptom"] is not None
+                ]
+                symptoms.sort(key=lambda x: x.get("order", 999))
+                chains.append({**cc, "symptoms": symptoms})
+
+            return chains
+
+    # -----------------------------------------------------------------
+    # Symptom Matching
+    # -----------------------------------------------------------------
+
+    def match_symptoms(self, observations: dict[str, Any]) -> list[dict]:
+        """Match observed metrics/symptoms against known signatures.
+
+        Args:
+            observations: Dict of metric_name → value, plus optional keys:
+                - container_status: {name: "exited"|"running"}
+                - log_patterns_seen: [pattern_id, ...]
+
+        Returns:
+            Ranked list of matching signatures with diagnosis, confidence,
+            and recommended diagnostic actions.
+        """
+        with self._driver.session() as session:
+            # Get all signatures
+            result = session.run("""
+                MATCH (sig:Signature)
+                OPTIONAL MATCH (sig)-[:IDENTIFIES]->(cc:CausalChain)
+                RETURN sig, cc
+            """)
+
+            signatures = []
+            for record in result:
+                sig = dict(record["sig"])
+                chain = dict(record["cc"]) if record["cc"] else None
+                sig["causal_chain"] = chain
+                signatures.append(sig)
+
+        # Score each signature against observations
+        scored = []
+        for sig in signatures:
+            score = self._score_signature(sig, observations)
+            if score > 0:
+                scored.append({
+                    "signature_id": sig["id"],
+                    "diagnosis": sig["diagnosis"],
+                    "failure_domain": sig["failure_domain"],
+                    "confidence": sig["confidence"],
+                    "match_score": score,
+                    "rule_out": sig.get("rule_out", []),
+                    "causal_chain": sig.get("causal_chain"),
+                })
+
+        scored.sort(key=lambda x: (-x["match_score"], x["confidence"]))
+        return scored
+
+    def _score_signature(self, sig: dict, observations: dict) -> float:
+        """Score how well observations match a signature. Returns 0.0-1.0."""
+        score = 0.0
+        total_criteria = 0
+
+        # Check match_all criteria (stored as string representations)
+        match_all = sig.get("match_all", [])
+        if match_all:
+            for criterion_str in match_all:
+                total_criteria += 1
+                if self._check_criterion(criterion_str, observations):
+                    score += 1.0
+
+            # All match_all criteria must pass
+            if total_criteria > 0 and score < total_criteria:
+                return 0.0
+
+        # Check match_any criteria (bonus points)
+        match_any = sig.get("match_any", [])
+        any_matched = False
+        for criterion_str in match_any:
+            if self._check_criterion(criterion_str, observations):
+                any_matched = True
+                score += 0.5
+
+        # If we had match_all criteria that all passed, return normalized score
+        if total_criteria > 0:
+            return min(score / max(total_criteria, 1), 1.0)
+
+        # If only match_any, need at least one match
+        if any_matched:
+            return 0.5
+
+        return 0.0
+
+    def _check_criterion(self, criterion_str: str, observations: dict) -> bool:
+        """Check a single criterion against observations.
+
+        Criterion is stored as a string repr of a dict, e.g.:
+        "{'metric': 'ran_ue', 'condition': '= 0'}"
+        """
+        try:
+            import ast
+            criterion = ast.literal_eval(criterion_str)
+        except (ValueError, SyntaxError):
+            return False
+
+        if not isinstance(criterion, dict):
+            return False
+
+        # Metric-based check
+        metric = criterion.get("metric")
+        if metric and metric in observations:
+            condition = criterion.get("condition", "")
+            value = observations[metric]
+            try:
+                if condition.startswith("= "):
+                    return float(value) == float(condition[2:])
+                elif condition.startswith("> "):
+                    return float(value) > float(condition[2:])
+                elif condition.startswith("< "):
+                    return float(value) < float(condition[2:])
+                elif condition == "> 0":
+                    return float(value) > 0
+                elif condition == "= 0":
+                    return float(value) == 0
+            except (ValueError, TypeError):
+                pass
+
+        # Container status check
+        container_status = criterion.get("container_status")
+        if container_status and "container_status" in observations:
+            obs_status = observations["container_status"]
+            for name, expected in container_status.items():
+                if obs_status.get(name) == expected:
+                    return True
+
+        # Log pattern check
+        log_pattern = criterion.get("log_pattern")
+        if log_pattern and "log_patterns_seen" in observations:
+            return log_pattern in observations["log_patterns_seen"]
+
+        return False
+
+    # -----------------------------------------------------------------
+    # Log Interpretation
+    # -----------------------------------------------------------------
+
+    def interpret_log(self, message: str, source: str | None = None) -> list[dict]:
+        """Look up the semantic meaning of a log message.
+
+        Returns matching log patterns with meaning, common misinterpretations,
+        and diagnostic actions.
+        """
+        with self._driver.session() as session:
+            if source:
+                result = session.run("""
+                    MATCH (lp:LogPattern)
+                    WHERE lp.source CONTAINS $source
+                    RETURN lp
+                """, source=source)
+            else:
+                result = session.run("MATCH (lp:LogPattern) RETURN lp")
+
+            patterns = [dict(record["lp"]) for record in result]
+
+        # Filter by regex match
+        import re
+        matches = []
+        for pat in patterns:
+            regex = pat.get("regex", "")
+            if regex:
+                try:
+                    if re.search(regex, message, re.IGNORECASE):
+                        matches.append(pat)
+                except re.error:
+                    pass
+            elif pat.get("pattern", "") in message:
+                matches.append(pat)
+
+        return matches
+
+    # -----------------------------------------------------------------
+    # Stack Rules
+    # -----------------------------------------------------------------
+
+    def get_stack_rules(self) -> list[dict]:
+        """Get all stack rules ordered by priority."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (sr:StackRule)
+                RETURN sr
+                ORDER BY sr.priority ASC
+            """)
+            return [dict(record["sr"]) for record in result]
+
+    def check_stack_rules(self, observations: dict) -> list[dict]:
+        """Check which stack rules are triggered by current observations.
+
+        Returns triggered rules in priority order. A triggered rule means
+        the agent should stop certain investigation paths.
+        """
+        rules = self.get_stack_rules()
+        triggered = []
+
+        for rule in rules:
+            rule_id = rule.get("id", "")
+
+            # Check specific conditions
+            if rule_id == "network_fault_is_root_cause":
+                if observations.get("network_fault_confirmed"):
+                    triggered.append(rule)
+
+            elif rule_id == "unreachable_component_is_root_cause":
+                unreachable = observations.get("unreachable_components", [])
+                if unreachable:
+                    triggered.append({**rule, "affected_components": unreachable})
+
+            elif rule_id == "ran_down_invalidates_ims":
+                if (observations.get("ran_ue") == 0
+                        and observations.get("gnb") == 0):
+                    triggered.append(rule)
+
+            elif rule_id == "data_plane_dead_invalidates_sip":
+                gtp_in = observations.get("fivegs_ep_n3_gtp_indatapktn3upf")
+                gtp_out = observations.get("fivegs_ep_n3_gtp_outdatapktn3upf")
+                sessions = observations.get("fivegs_upffunction_upf_sessionnbr", 0)
+                if gtp_in == 0 and gtp_out == 0 and sessions > 0:
+                    triggered.append(rule)
+
+            elif rule_id == "baseline_delta_rule":
+                # This rule is advisory — always include it as context
+                triggered.append(rule)
+
+        return triggered
+
+    # -----------------------------------------------------------------
+    # Baseline Queries
+    # -----------------------------------------------------------------
+
+    def get_baseline(self, component: str) -> dict[str, dict]:
+        """Get expected baseline metrics for a component."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (c:Component {name: $name})-[:EXPOSES]->(m:Metric)
+                RETURN m
+            """, name=component)
+            return {
+                record["m"]["name"]: dict(record["m"])
+                for record in result
+            }
+
+    def compare_to_baseline(
+        self, component: str, current_metrics: dict[str, float]
+    ) -> list[dict]:
+        """Compare current metrics to baseline. Returns only anomalies."""
+        baseline = self.get_baseline(component)
+        anomalies = []
+
+        for metric_name, current_value in current_metrics.items():
+            if metric_name not in baseline:
+                continue
+
+            bl = baseline[metric_name]
+
+            # Skip pre-existing known issues
+            if bl.get("is_pre_existing"):
+                range_low = bl.get("typical_range_low")
+                range_high = bl.get("typical_range_high")
+                if range_low is not None and range_high is not None:
+                    if range_low <= current_value <= range_high:
+                        continue  # Within known noisy range
+
+            # Check against expected value
+            expected = bl.get("expected")
+            if expected and expected.isdigit():
+                expected_val = float(expected)
+                if current_value != expected_val:
+                    anomalies.append({
+                        "metric": metric_name,
+                        "expected": expected_val,
+                        "actual": current_value,
+                        "alarm_if": bl.get("alarm_if", ""),
+                        "note": bl.get("note", ""),
+                    })
+
+        return anomalies
+
+    # -----------------------------------------------------------------
+    # Health Checks
+    # -----------------------------------------------------------------
+
+    def get_healthcheck(self, component: str) -> dict | None:
+        """Get the health check definition for a component.
+
+        Returns probes (ordered cheapest-first), healthy/degraded/down
+        criteria, and disambiguation scenarios.
+        """
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (c:Component {name: $name})-[:HAS_HEALTHCHECK]->(hc:HealthCheck)
+                RETURN hc
+            """, name=component)
+            record = result.single()
+            if not record:
+                return None
+            return dict(record["hc"])
+
+    def get_disambiguation(self, component: str, scenario: str) -> dict | None:
+        """Look up what a health check result means for a specific ambiguous scenario.
+
+        Args:
+            component: The component to health-check
+            scenario: Description of the ambiguous situation (e.g., "ran_ue = 0")
+
+        Returns:
+            Dict with if_healthy and if_unhealthy interpretations, or None.
+        """
+        import ast
+        hc = self.get_healthcheck(component)
+        if not hc:
+            return None
+
+        disambiguates = hc.get("disambiguates", [])
+        for d_str in disambiguates:
+            try:
+                d = ast.literal_eval(d_str)
+                if isinstance(d, dict) and scenario.lower() in d.get("scenario", "").lower():
+                    return d
+            except (ValueError, SyntaxError):
+                continue
+        return None
+
+    # -----------------------------------------------------------------
+    # Component Topology
+    # -----------------------------------------------------------------
+
+    def get_component(self, name: str) -> dict | None:
+        """Get a component with its interfaces and connected peers."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (c:Component {name: $name})
+                OPTIONAL MATCH (c)-[:CONNECTS_VIA]->(i:Interface)-[:PEERS_WITH]->(peer:Component)
+                RETURN c, collect({interface: i, peer: peer}) AS connections
+            """, name=name)
+
+            record = result.single()
+            if not record:
+                return None
+
+            comp = dict(record["c"])
+            connections = [
+                {
+                    "interface": dict(conn["interface"]),
+                    "peer": dict(conn["peer"]),
+                }
+                for conn in record["connections"]
+                if conn["interface"] is not None
+            ]
+            comp["connections"] = connections
+            return comp
+
+    def get_downstream_impact(self, component: str) -> dict:
+        """Get all components affected if this component goes down."""
+        with self._driver.session() as session:
+            # Direct connections
+            result = session.run("""
+                MATCH (c:Component {name: $name})
+                MATCH (c)-[:CONNECTS_VIA]->(i:Interface)-[:PEERS_WITH]->(peer:Component)
+                RETURN i, peer
+            """, name=component)
+
+            affected = []
+            for record in result:
+                affected.append({
+                    "component": dict(record["peer"])["name"],
+                    "interface": dict(record["i"])["name"],
+                    "protocol": dict(record["i"])["protocol"],
+                })
+
+            # Also check interfaces where this component is the target
+            result2 = session.run("""
+                MATCH (peer:Component)-[:CONNECTS_VIA]->(i:Interface)-[:PEERS_WITH]->(c:Component {name: $name})
+                RETURN i, peer
+            """, name=component)
+
+            for record in result2:
+                affected.append({
+                    "component": dict(record["peer"])["name"],
+                    "interface": dict(record["i"])["name"],
+                    "protocol": dict(record["i"])["protocol"],
+                })
+
+            return {
+                "component": component,
+                "affected": affected,
+            }
+
+    # -----------------------------------------------------------------
+    # Full Diagnostic Query (main agent entry point)
+    # -----------------------------------------------------------------
+
+    def diagnose(self, observations: dict[str, Any]) -> dict[str, Any]:
+        """Main entry point for agent diagnosis.
+
+        Takes a full observation dict (metrics, container status, log patterns)
+        and returns:
+        - Matched symptom signatures (ranked)
+        - Triggered stack rules
+        - Baseline anomalies
+        - Recommended diagnostic actions
+
+        This is what the query_ontology agent tool calls.
+        """
+        # 1. Match symptoms to known signatures
+        matches = self.match_symptoms(observations)
+
+        # 2. Check stack rules
+        triggered_rules = self.check_stack_rules(observations)
+
+        # 3. Compare metrics to baselines for flagged components
+        anomalies = {}
+        container_status = observations.get("container_status", {})
+        for comp_name in container_status:
+            comp_metrics = {
+                k: v for k, v in observations.items()
+                if isinstance(v, (int, float))
+            }
+            comp_anomalies = self.compare_to_baseline(comp_name, comp_metrics)
+            if comp_anomalies:
+                anomalies[comp_name] = comp_anomalies
+
+        # 4. Suggest health checks for ambiguity resolution
+        health_check_suggestions = []
+        if matches:
+            top_match = matches[0]
+            chain = top_match.get("causal_chain")
+            if chain:
+                trigger_target = chain.get("trigger_target", "")
+                targets = trigger_target.split(",") if trigger_target else []
+                for target in targets:
+                    target = target.strip()
+                    hc = self.get_healthcheck(target)
+                    if hc:
+                        health_check_suggestions.append({
+                            "component": target,
+                            "probes": hc.get("probes", []),
+                            "purpose": f"Disambiguate: is {target} healthy or is it the root cause?",
+                        })
+
+        # 5. Collect diagnostic actions from top matches
+        diagnostic_actions = []
+        for match in matches[:3]:  # Top 3
+            chain = match.get("causal_chain")
+            if chain:
+                actions = chain.get("diagnostic_actions", [])
+                if isinstance(actions, list):
+                    diagnostic_actions.extend(actions)
+
+        return {
+            "matched_signatures": matches,
+            "triggered_rules": triggered_rules,
+            "baseline_anomalies": anomalies,
+            "health_check_suggestions": health_check_suggestions,
+            "diagnostic_actions": diagnostic_actions,
+            "top_diagnosis": matches[0]["diagnosis"] if matches else "No matching signature found",
+            "confidence": matches[0]["confidence"] if matches else "low",
+        }

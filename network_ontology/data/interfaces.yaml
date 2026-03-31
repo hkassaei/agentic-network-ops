@@ -1,0 +1,387 @@
+# =============================================================================
+# Network Ontology — Interface Definitions
+# =============================================================================
+# Source: gui/topology.py (_STATIC_EDGES), 3GPP TS 23.501/23.228
+#
+# Each interface is a 3GPP reference point or protocol link between components.
+
+interfaces:
+  # --- RAN / Air Interface ---
+  - id: uu_ue1_gnb
+    name: Uu
+    source: e2e_ue1
+    target: nr_gnb
+    protocol: NR-Uu
+    transport: radio
+    plane: data
+    label: "Air Interface"
+    description: "5G NR radio interface between UE1 and gNB"
+
+  - id: uu_ue2_gnb
+    name: Uu
+    source: e2e_ue2
+    target: nr_gnb
+    protocol: NR-Uu
+    transport: radio
+    plane: data
+    label: "Air Interface"
+    description: "5G NR radio interface between UE2 and gNB"
+
+  # --- N1 NAS (logical) ---
+  - id: n1_ue1_amf
+    name: N1
+    source: e2e_ue1
+    target: amf
+    protocol: NAS
+    transport: null
+    plane: control
+    label: "N1 (NAS)"
+    logical: true
+    description: "NAS signaling between UE1 and AMF (carried over N2)"
+
+  - id: n1_ue2_amf
+    name: N1
+    source: e2e_ue2
+    target: amf
+    protocol: NAS
+    transport: null
+    plane: control
+    label: "N1 (NAS)"
+    logical: true
+    description: "NAS signaling between UE2 and AMF (carried over N2)"
+
+  # --- 3GPP Reference Points ---
+  - id: n2_gnb_amf
+    name: N2
+    source: nr_gnb
+    target: amf
+    protocol: NGAP
+    transport: SCTP/38412
+    plane: control
+    label: "N2 (NGAP)"
+    description: "NG Application Protocol. Control plane between gNB and AMF."
+
+  - id: n3_gnb_upf
+    name: N3
+    source: nr_gnb
+    target: upf
+    protocol: GTP-U
+    transport: UDP/2152
+    plane: data
+    label: "N3 (GTP-U)"
+    description: "User plane tunnel between gNB and UPF. Carries all user data."
+
+  - id: n4_smf_upf
+    name: N4
+    source: smf
+    target: upf
+    protocol: PFCP
+    transport: UDP/8805
+    plane: control
+    label: "N4 (PFCP)"
+    description: "Packet Forwarding Control Protocol. SMF controls UPF forwarding rules."
+
+  # --- 5G Core SBI ---
+  - id: sbi_amf_nrf
+    name: Nnrf
+    source: amf
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_amf_scp
+    name: SBI
+    source: amf
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  - id: sbi_smf_nrf
+    name: Nnrf
+    source: smf
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_smf_scp
+    name: SBI
+    source: smf
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  - id: sbi_ausf_nrf
+    name: Nnrf
+    source: ausf
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_ausf_scp
+    name: SBI
+    source: ausf
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  - id: sbi_udm_nrf
+    name: Nnrf
+    source: udm
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_udm_scp
+    name: SBI
+    source: udm
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  - id: sbi_udr_nrf
+    name: Nnrf
+    source: udr
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_udr_scp
+    name: SBI
+    source: udr
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  - id: sbi_pcf_nrf
+    name: Nnrf
+    source: pcf
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_pcf_scp
+    name: SBI
+    source: pcf
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  # --- IMS SIP Signaling ---
+  - id: gm_ue1_pcscf
+    name: Gm
+    source: e2e_ue1
+    target: pcscf
+    protocol: SIP
+    transport: UDP/5060
+    plane: signaling
+    label: "Gm (SIP)"
+    description: "SIP signaling between UE1 and P-CSCF"
+
+  - id: gm_ue2_pcscf
+    name: Gm
+    source: e2e_ue2
+    target: pcscf
+    protocol: SIP
+    transport: UDP/5060
+    plane: signaling
+    label: "Gm (SIP)"
+    description: "SIP signaling between UE2 and P-CSCF"
+
+  - id: mw_pcscf_icscf
+    name: Mw
+    source: pcscf
+    target: icscf
+    protocol: SIP
+    transport: UDP/5060
+    plane: signaling
+    label: "Mw (SIP)"
+    description: "SIP signaling between P-CSCF and I-CSCF"
+
+  - id: mw_pcscf_scscf
+    name: Mw
+    source: pcscf
+    target: scscf
+    protocol: SIP
+    transport: UDP/5060
+    plane: signaling
+    label: "Mw (SIP)"
+    description: "SIP signaling between P-CSCF and S-CSCF"
+
+  - id: mw_icscf_scscf
+    name: Mw
+    source: icscf
+    target: scscf
+    protocol: SIP
+    transport: UDP/5060
+    plane: signaling
+    label: "Mw (SIP)"
+    description: "SIP signaling between I-CSCF and S-CSCF"
+
+  # --- Diameter ---
+  - id: cx_icscf_pyhss
+    name: Cx
+    source: icscf
+    target: pyhss
+    protocol: Diameter
+    transport: TCP/3869
+    plane: signaling
+    label: "Cx (Diameter)"
+    description: "Diameter Cx interface. I-CSCF queries HSS for user location (UAR/LIR)."
+
+  - id: cx_scscf_pyhss
+    name: Cx
+    source: scscf
+    target: pyhss
+    protocol: Diameter
+    transport: TCP/3870
+    plane: signaling
+    label: "Cx (Diameter)"
+    description: "Diameter Cx interface. S-CSCF queries HSS for authentication (MAR) and registration (SAR)."
+
+  # --- Policy / QoS ---
+  - id: rx_pcscf_pcf
+    name: Rx
+    source: pcscf
+    target: pcf
+    protocol: Diameter
+    transport: TCP/3871
+    plane: control
+    label: "Rx (Diameter)"
+    description: "Diameter Rx interface. P-CSCF requests QoS/dedicated bearers from PCF for voice calls."
+
+  # --- Media ---
+  - id: rtp_upf_rtpengine
+    name: RTP
+    source: upf
+    target: rtpengine
+    protocol: RTP
+    transport: UDP
+    plane: data
+    label: "RTP Media"
+    description: "RTP voice media path through UPF to RTPEngine"
+
+  - id: ng_pcscf_rtpengine
+    name: ng
+    source: pcscf
+    target: rtpengine
+    protocol: ng
+    transport: UDP
+    plane: control
+    label: "RTPEngine Control"
+    description: "P-CSCF controls RTPEngine media relay via ng protocol"
+
+  # --- Data Stores ---
+  - id: db_udr_mongo
+    name: MongoDB
+    source: udr
+    target: mongo
+    protocol: MongoDB
+    transport: TCP/27017
+    plane: management
+    label: "MongoDB"
+
+  - id: db_pcf_mongo
+    name: MongoDB
+    source: pcf
+    target: mongo
+    protocol: MongoDB
+    transport: TCP/27017
+    plane: management
+    label: "MongoDB"
+
+  - id: db_pyhss_mysql
+    name: SQL
+    source: pyhss
+    target: mysql
+    protocol: SQL
+    transport: TCP/3306
+    plane: management
+    label: "MySQL"
+
+  - id: db_icscf_mysql
+    name: SQL
+    source: icscf
+    target: mysql
+    protocol: SQL
+    transport: TCP/3306
+    plane: management
+    label: "MySQL"
+
+  - id: db_scscf_mysql
+    name: SQL
+    source: scscf
+    target: mysql
+    protocol: SQL
+    transport: TCP/3306
+    plane: management
+    label: "MySQL"
+
+  - id: db_pcscf_mysql
+    name: SQL
+    source: pcscf
+    target: mysql
+    protocol: SQL
+    transport: TCP/3306
+    plane: management
+    label: "MySQL"
+
+  # --- DNS ---
+  - id: dns_pyhss
+    name: DNS
+    source: pyhss
+    target: dns
+    protocol: DNS
+    transport: UDP/53
+    plane: management
+    label: "DNS"
+
+  - id: dns_icscf
+    name: DNS
+    source: icscf
+    target: dns
+    protocol: DNS
+    transport: UDP/53
+    plane: management
+    label: "DNS"
+
+  - id: dns_scscf
+    name: DNS
+    source: scscf
+    target: dns
+    protocol: DNS
+    transport: UDP/53
+    plane: management
+    label: "DNS"
+
+  - id: dns_pcscf
+    name: DNS
+    source: pcscf
+    target: dns
+    protocol: DNS
+    transport: UDP/53
+    plane: management
+    label: "DNS"

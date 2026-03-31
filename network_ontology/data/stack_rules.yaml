@@ -1,0 +1,87 @@
+# =============================================================================
+# Network Ontology — Protocol Stack Rules
+# =============================================================================
+# Hard invariants that the agent CANNOT override.
+# These encode the protocol layering logic that LLMs consistently get wrong.
+#
+# Priority 1 = highest. A higher-priority rule overrides lower-priority analysis.
+
+stack_rules:
+
+  - id: network_fault_is_root_cause
+    rule: "If a network-level fault is confirmed (packet loss, latency, unreachability), it is the root cause for all application-layer symptoms downstream."
+    condition: "measure_rtt shows elevated RTT or packet loss, or interface error counters are non-zero"
+    implication: "Stop investigating application-layer issues. The network fault explains all downstream symptoms."
+    priority: 1
+    invalidates: ["ims_signaling", "sip_analysis", "diameter_analysis", "config_analysis"]
+
+  - id: unreachable_component_is_root_cause
+    rule: "If a component is unreachable (100% packet loss, process not running, no SCTP/TCP/UDP listener), it is the root cause for all symptoms on interfaces connected to it."
+    condition: "measure_rtt shows 100% loss, or component health check fails"
+    implication: "All errors at peer nodes referencing this component are SYMPTOMS, not causes. Investigate why the component is unreachable."
+    priority: 1
+    invalidates: ["analysis of peer nodes that log errors about the unreachable component"]
+
+  - id: ran_down_invalidates_ims
+    rule: "If gNB is down (ran_ue=0, gnb=0), ALL IMS symptoms are secondary effects."
+    condition: "ran_ue = 0 AND gnb = 0"
+    implication: "Do not investigate IMS, SIP, Diameter, or Kamailio. The root cause is RAN failure."
+    priority: 2
+    invalidates: ["ims_signaling", "sip_analysis", "diameter_analysis"]
+
+  - id: data_plane_dead_invalidates_sip
+    rule: "If data plane is dead (GTP packets = 0 with sessions > 0), SIP timeouts are a CONSEQUENCE not a CAUSE."
+    condition: "gtp_indatapktn3upf = 0 AND gtp_outdatapktn3upf = 0 AND upf_sessionnbr > 0"
+    implication: "Do not investigate SIP timeout mechanics. The data plane fault is upstream."
+    priority: 2
+    invalidates: ["sip_timeout_analysis", "kamailio_transaction_analysis"]
+
+  - id: log_direction_rule
+    rule: "A container logging 'connection refused to X' means X is down, not that the logging container is broken."
+    condition: "Log message contains 'connection refused' or 'connection failed'"
+    implication: "Investigate the REMOTE endpoint (X), not the container that logged the error."
+    priority: 3
+    invalidates: ["investigation of the component that produced the error log"]
+
+  - id: baseline_delta_rule
+    rule: "If a metric existed at the same value in the baseline, it is NOT a symptom of the current fault."
+    condition: "metric_current == metric_baseline (or within typical_range)"
+    implication: "Only metric DELTAS from baseline are symptoms. Pre-existing conditions are noise."
+    priority: 3
+    invalidates: ["treating pre-existing metrics as fault symptoms"]
+    examples:
+      - "httpclient:connfail at ~1400 is pre-existing SCP_BIND_IP noise"
+      - "Diameter I_Open is a pre-existing display artifact"
+
+  - id: transport_over_application
+    rule: "If transport proves a packet couldn't physically reach a node, ignore all application-layer theories about what happened on that node."
+    condition: "measure_rtt shows 100% loss OR check_process_listeners shows no listener"
+    implication: "Transport-layer evidence takes priority over application-layer theories."
+    priority: 2
+    invalidates: ["application-layer analysis of the unreachable node"]
+
+  - id: core_over_ims
+    rule: "If 5G core data plane is dead, this is the root cause of resulting SIP timeouts."
+    condition: "GTP packets = 0 or UPF has tc netem rule"
+    implication: "IMS symptoms are secondary. Fix the data plane first."
+    priority: 2
+    invalidates: ["ims_signaling analysis when data plane is broken"]
+
+  - id: evidence_over_theory
+    rule: "A finding backed by tool output (config lines, ss tables, DB records, tc rules) always outweighs a finding based on absence of logs or theoretical reasoning."
+    condition: "conflicting findings from different sources"
+    implication: "When specialist findings conflict, prefer the one with raw evidence in tool output."
+    priority: 3
+
+  - id: 500_is_symptom_not_cause
+    rule: "A 500 error at an intermediate SIP node (I-CSCF, S-CSCF) is almost always a SYMPTOM of a downstream failure, not the root cause."
+    condition: "500 error observed at I-CSCF or S-CSCF"
+    implication: "Trace the request path downstream to find where it actually failed."
+    priority: 3
+    invalidates: ["treating the 500-producing node as the root cause"]
+
+  - id: check_both_ends
+    rule: "Always trace a transaction to BOTH endpoints. Absence of a message at the destination is evidence of a delivery failure."
+    condition: "investigating a SIP/Diameter transaction failure"
+    implication: "If a message was sent but never received, the problem is BETWEEN the sender and receiver (transport layer)."
+    priority: 3

@@ -1,0 +1,178 @@
+# =============================================================================
+# Network Ontology — Healthy Baseline Values
+# =============================================================================
+# Source: Episode JSON baselines from chaos runs, network/.env
+#
+# These are the expected metric values when the stack is healthy with
+# 2 UEs registered and 0-1 active VoNR calls.
+#
+# Used to distinguish pre-existing conditions from injected faults.
+
+baselines:
+
+  # --- 5G Core (Prometheus) ---
+  amf:
+    metrics:
+      ran_ue:
+        expected: 2
+        condition: "2 UEs attached"
+        alarm_if: "= 0 (RAN failure) or < expected (partial failure)"
+      gnb:
+        expected: 1
+        condition: "1 gNB connected"
+        alarm_if: "= 0 (gNB down)"
+      amf_session:
+        expected: 4
+        note: "2 UEs x 2 sessions (internet + IMS APN)"
+      fivegs_amffunction_rm_reginitreq:
+        type: counter
+        note: "Monotonically increasing. Delta matters, not absolute value."
+      fivegs_amffunction_rm_reginitsucc:
+        type: counter
+        note: "Should track reginitreq closely. Gap = failed registrations."
+      fivegs_amffunction_amf_authreq:
+        type: counter
+      fivegs_amffunction_amf_authfail:
+        type: counter
+        alarm_if: "delta > 0 (auth failures occurring)"
+      fivegs_amffunction_amf_authreject:
+        type: counter
+        alarm_if: "delta > 0"
+
+  smf:
+    metrics:
+      fivegs_smffunction_sm_sessionnbr:
+        expected: 4
+        condition: "2 UEs x 2 PDU sessions each"
+      ues_active:
+        expected: 2
+      bearers_active:
+        expected: 4
+        note: "Rises to 6 during active VoNR call (2 dedicated QoS flows for voice)"
+        during_call: 6
+      pfcp_sessions_active:
+        expected: 4
+      fivegs_smffunction_sm_pdusessioncreationreq:
+        type: counter
+      fivegs_smffunction_sm_pdusessioncreationsucc:
+        type: counter
+
+  upf:
+    metrics:
+      fivegs_upffunction_upf_sessionnbr:
+        expected: 4
+      fivegs_ep_n3_gtp_indatapktn3upf:
+        type: counter
+        note: "Must be > 0 and incrementing for healthy data plane. Zero = data plane dead."
+        alarm_if: "= 0 or stopped incrementing"
+      fivegs_ep_n3_gtp_outdatapktn3upf:
+        type: counter
+        note: "Must be > 0 and incrementing. Zero = data plane dead."
+        alarm_if: "= 0 or stopped incrementing"
+
+  pcf:
+    metrics:
+      fivegs_pcffunction_pa_sessionnbr:
+        expected: 4
+      fivegs_pcffunction_pa_policyamassoreq:
+        type: counter
+      fivegs_pcffunction_pa_policyamassosucc:
+        type: counter
+      fivegs_pcffunction_pa_policysmassoreq:
+        type: counter
+      fivegs_pcffunction_pa_policysmassosucc:
+        type: counter
+
+  # --- IMS (Kamailio kamcmd) ---
+  pcscf:
+    metrics:
+      "ims_usrloc_pcscf:registered_contacts":
+        expected: 2
+        condition: "2 UEs registered"
+        alarm_if: "< 2 (UE deregistered) or = 0 (all UEs lost)"
+      "dialog_ng:active":
+        expected: 0
+        during_call: 2
+        note: "2 dialogs during active call (one per direction)"
+      "core:rcv_requests_register":
+        type: counter
+      "core:rcv_requests_invite":
+        type: counter
+      "httpclient:connfail":
+        typical_range: [1300, 1500]
+        is_pre_existing: true
+        note: "PRE-EXISTING: SCP_BIND_IP placeholder in P-CSCF config causes persistent connection failures. Ignore unless delta > 100."
+      "httpclient:connok":
+        type: counter
+      "tmx:active_transactions":
+        expected: 0
+        alarm_if: "> 0 and growing (transactions accumulating without responses)"
+      "sl:1xx_replies":
+        type: counter
+      "sl:200_replies":
+        type: counter
+      "sl:4xx_replies":
+        type: counter
+        alarm_if: "delta > 0"
+      "sl:5xx_replies":
+        type: counter
+        alarm_if: "delta > 0"
+
+  icscf:
+    metrics:
+      "core:rcv_requests_register":
+        type: counter
+      "core:rcv_requests_invite":
+        type: counter
+      "cdp:timeout":
+        expected: 0
+        alarm_if: "> 0 (Diameter queries timing out — HSS issue)"
+      "cdp:replies_received":
+        type: counter
+      "cdp:average_response_time":
+        typical_range: [50, 150]
+        unit: ms
+        alarm_if: "> 500 (HSS overloaded or network latency)"
+      "ims_icscf:uar_timeouts":
+        expected: 0
+        alarm_if: "> 0"
+      "ims_icscf:lir_timeouts":
+        expected: 0
+        alarm_if: "> 0"
+      "tmx:active_transactions":
+        expected: 0
+
+  scscf:
+    metrics:
+      "ims_usrloc_scscf:active_contacts":
+        expected: 2
+        condition: "2 UEs registered"
+      "ims_registrar_scscf:accepted_regs":
+        type: counter
+      "ims_registrar_scscf:rejected_regs":
+        type: counter
+        alarm_if: "delta > 0"
+      "dialog_ng:active":
+        expected: 0
+        during_call: 2
+      "cdp:timeout":
+        expected: 0
+        alarm_if: "> 0 (HSS Diameter timeout)"
+      "ims_auth:mar_timeouts":
+        expected: 0
+        alarm_if: "> 0"
+      "tmx:active_transactions":
+        expected: 0
+
+  # --- Other ---
+  pyhss:
+    metrics:
+      ims_subscribers:
+        expected: 2
+        source: api
+
+  mongo:
+    metrics:
+      subscribers:
+        expected: 2
+        source: mongosh

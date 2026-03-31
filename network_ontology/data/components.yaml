@@ -1,0 +1,195 @@
+# =============================================================================
+# Network Ontology — Component Model
+# =============================================================================
+# Source: gui/topology.py (_KNOWN_NF_TYPES), network/.env
+#
+# Each component is a network function or infrastructure element in the
+# 5G SA + IMS Docker stack.
+
+components:
+  # --- Data Stores ---
+  mongo:
+    label: MongoDB
+    layer: data
+    role: document-store
+    ip_env_key: MONGO_IP
+    ip: "172.22.0.2"
+    protocols: [MongoDB]
+    description: "5G subscriber data store (UDR backend). Stores subscriber profiles, session state."
+
+  mysql:
+    label: MySQL
+    layer: data
+    role: relational-store
+    ip_env_key: MYSQL_IP
+    ip: "172.22.0.17"
+    protocols: [SQL]
+    description: "IMS subscriber data store (PyHSS and Kamailio backend)."
+
+  dns:
+    label: DNS
+    layer: data
+    role: name-resolution
+    ip_env_key: DNS_IP
+    ip: "172.22.0.15"
+    protocols: [DNS]
+    description: "IMS DNS server. Provides NAPTR/SRV records for SIP routing within the IMS domain."
+
+  # --- 5G Core Control Plane ---
+  nrf:
+    label: NRF
+    layer: core
+    role: nf-discovery
+    ip_env_key: NRF_IP
+    ip: "172.22.0.12"
+    protocols: [SBI]
+    description: "NF Repository Function. Service registry for 5G core NFs."
+
+  scp:
+    label: SCP
+    layer: core
+    role: service-proxy
+    ip_env_key: SCP_IP
+    ip: "172.22.0.35"
+    protocols: [SBI]
+    description: "Service Communication Proxy. Routes SBI messages between NFs."
+
+  ausf:
+    label: AUSF
+    layer: core
+    role: authentication
+    ip_env_key: AUSF_IP
+    ip: "172.22.0.11"
+    protocols: [SBI]
+    description: "Authentication Server Function. Handles 5G-AKA authentication."
+
+  udm:
+    label: UDM
+    layer: core
+    role: data-management
+    ip_env_key: UDM_IP
+    ip: "172.22.0.13"
+    protocols: [SBI]
+    description: "Unified Data Management. Manages subscriber data and authentication credentials."
+
+  udr:
+    label: UDR
+    layer: core
+    role: data-repository
+    ip_env_key: UDR_IP
+    ip: "172.22.0.14"
+    protocols: [SBI]
+    description: "Unified Data Repository. Backend data access to MongoDB."
+
+  amf:
+    label: AMF
+    layer: core
+    role: access-mobility
+    ip_env_key: AMF_IP
+    ip: "172.22.0.10"
+    protocols: [SBI, NGAP]
+    metrics_port: 9091
+    description: "Access and Mobility Management Function. Handles UE registration, mobility, and NAS signaling."
+
+  smf:
+    label: SMF
+    layer: core
+    role: session-management
+    ip_env_key: SMF_IP
+    ip: "172.22.0.7"
+    protocols: [SBI, PFCP]
+    metrics_port: 9091
+    description: "Session Management Function. Manages PDU sessions and controls the UPF via PFCP."
+
+  upf:
+    label: UPF
+    layer: core
+    role: user-plane-anchor
+    ip_env_key: UPF_IP
+    ip: "172.22.0.8"
+    protocols: [PFCP, GTP-U]
+    metrics_port: 9091
+    description: "User Plane Function. Forwards user data packets between gNB and external networks. The data plane anchor."
+
+  pcf:
+    label: PCF
+    layer: core
+    role: policy-control
+    ip_env_key: PCF_IP
+    ip: "172.22.0.27"
+    protocols: [SBI, Diameter]
+    metrics_port: 9091
+    description: "Policy Control Function. Provides policy rules for QoS, charging. Connected to P-CSCF via Rx."
+
+  # --- IMS ---
+  pcscf:
+    label: P-CSCF
+    layer: ims
+    role: sip-edge-proxy
+    ip_env_key: PCSCF_IP
+    ip: "172.22.0.21"
+    protocols: [SIP, Diameter]
+    description: "Proxy-CSCF. SIP edge proxy — first contact point for UE SIP signaling. Controls RTPEngine for media."
+
+  rtpengine:
+    label: RTPEngine
+    layer: ims
+    role: media-relay
+    ip_env_key: RTPENGINE_IP
+    ip: "172.22.0.16"
+    protocols: [RTP, ng]
+    description: "RTP media relay/proxy. Handles RTP stream relay for VoNR voice calls."
+
+  icscf:
+    label: I-CSCF
+    layer: ims
+    role: sip-interrogating
+    ip_env_key: ICSCF_IP
+    ip: "172.22.0.19"
+    protocols: [SIP, Diameter]
+    description: "Interrogating-CSCF. Entry point to the IMS core. Queries HSS to find the assigned S-CSCF."
+
+  scscf:
+    label: S-CSCF
+    layer: ims
+    role: sip-serving
+    ip_env_key: SCSCF_IP
+    ip: "172.22.0.20"
+    protocols: [SIP, Diameter]
+    description: "Serving-CSCF. Core SIP registrar and call controller. Authenticates users via HSS."
+
+  pyhss:
+    label: HSS
+    layer: ims
+    role: subscriber-db
+    ip_env_key: PYHSS_IP
+    ip: "172.22.0.18"
+    protocols: [Diameter]
+    description: "Home Subscriber Server (PyHSS). IMS subscriber database. Handles Cx Diameter queries from I/S-CSCF."
+
+  # --- RAN ---
+  nr_gnb:
+    label: gNB
+    layer: ran
+    role: radio-access
+    ip_env_key: NR_GNB_IP
+    ip: "172.22.0.23"
+    protocols: [NGAP, GTP-U]
+    description: "5G NR gNodeB (UERANSIM). Radio access node connecting UEs to the 5G core."
+
+  # --- UEs ---
+  e2e_ue1:
+    label: UE1
+    layer: ue
+    role: subscriber
+    ip: "172.22.0.50"
+    protocols: [NAS, SIP]
+    description: "User Equipment 1 (UERANSIM + pjsua). Test subscriber — caller."
+
+  e2e_ue2:
+    label: UE2
+    layer: ue
+    role: subscriber
+    ip: "172.22.0.51"
+    protocols: [NAS, SIP]
+    description: "User Equipment 2 (UERANSIM + pjsua). Test subscriber — callee."

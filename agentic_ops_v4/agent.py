@@ -6,7 +6,7 @@ history accumulation). For context-isolated execution, use investigate()
 from orchestrator.py instead.
 
     cd operate
-    .venv/bin/adk web agentic_ops_v3 --port 8076
+    .venv/bin/adk web agentic_ops_v4 --port 8076
 """
 
 from google.adk.agents import SequentialAgent, ParallelAgent

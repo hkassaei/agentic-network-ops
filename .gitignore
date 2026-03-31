@@ -24,3 +24,6 @@ Thumbs.db
 
 # ADK
 .adk/
+
+# Ops layer secrets (contains API keys and credentials)
+ops.env

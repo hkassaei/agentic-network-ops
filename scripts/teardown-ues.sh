@@ -37,10 +37,10 @@ if docker ps --format '{{.Names}}' | grep -q "^scscf$"; then
     docker restart scscf
 fi
 
-# Cleanup subscribers
+# Cleanup subscribers (best-effort — PyHSS may not be running if stack is down)
 echo ""
 echo "Cleaning up test subscribers..."
-bash "$SCRIPT_DIR/provision.sh" --cleanup
+bash "$SCRIPT_DIR/provision.sh" --cleanup || echo "  Skipped: stack not running (subscribers will be re-provisioned on next deploy)"
 
 echo ""
 echo "Teardown complete. Original Kamailio configs restored."

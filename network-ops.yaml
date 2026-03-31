@@ -1,0 +1,120 @@
+# =============================================================================
+# Network Operations Layer
+# =============================================================================
+#
+# Self-contained compose file for the operations layer:
+#   - GUI (topology viewer, agent runner, stack controls)
+#   - Ontology (Neo4j graph database for domain knowledge)
+#   - Ontology Loader (one-shot init: seeds Neo4j from YAML)
+#
+# This file is independent of the network stack. Start it before or after
+# the network — the GUI can deploy the network from the browser.
+#
+# Usage:
+#   # Start the ops layer (GUI, ontology):
+#   ./scripts/start-ops.sh
+#
+#   # Or manually:
+#   docker compose -f network-ops.yaml up -d
+#
+#   # Then deploy the network from the GUI at http://localhost:8073,
+#   # or from the CLI:
+#   docker compose -p vonr -f network/sa-vonr-deploy.yaml \
+#     -f grafana-dashboards.yaml up -d
+#
+# Requires:
+#   - ops.env (copy from ops.env.example and fill in values)
+#
+# Note: The chaos CLI (agentic_chaos) runs on the host, not in Docker,
+# because it needs nsenter and direct Docker socket access for fault
+# injection. It connects to the GUI and ontology via their exposed ports.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # GUI — Browser-based control surface
+  # ---------------------------------------------------------------------------
+  gui:
+    build:
+      context: .
+      dockerfile: gui/Dockerfile
+    container_name: ops_gui
+    env_file:
+      - network/.env
+      - e2e.env
+      - ops.env
+    environment:
+      - PYHSS_API=http://172.22.0.18:8080
+    # Mount the repo at the SAME HOST PATH inside the container.
+    # This is required because docker compose (via the socket) tells the
+    # Docker daemon to resolve paths on the HOST filesystem. If the compose
+    # file lives at /home/user/repo/network/sa-vonr-deploy.yaml on the host,
+    # the daemon must find it at that same path — not at /app/network/...
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${HOST_REPO_PATH:-.}:${HOST_REPO_PATH:-.}:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    working_dir: ${HOST_REPO_PATH:-.}
+    ports:
+      - "8073:8073"
+    depends_on:
+      ontology:
+        condition: service_started
+    networks:
+      default:
+        ipv4_address: 172.22.0.56
+
+  # ---------------------------------------------------------------------------
+  # Ontology — Neo4j graph database for network domain knowledge
+  # ---------------------------------------------------------------------------
+  ontology:
+    image: neo4j:5-community
+    container_name: ontology
+    environment:
+      - NEO4J_AUTH=neo4j/ontology
+      - NEO4J_PLUGINS=["apoc"]
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      default:
+        ipv4_address: 172.22.0.55
+
+  # ---------------------------------------------------------------------------
+  # Ontology Loader — One-shot: seeds Neo4j from YAML on startup
+  # ---------------------------------------------------------------------------
+  ontology-loader:
+    build:
+      context: .
+      dockerfile: network_ontology/Dockerfile
+    container_name: ontology_loader
+    depends_on:
+      ontology:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      default:
+        ipv4_address: 172.22.0.57
+
+networks:
+  default:
+    name: docker_open5gs_default
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+
+volumes:
+  neo4j_data:
+    name: neo4j_ontology_data

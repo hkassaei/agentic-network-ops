@@ -38,7 +38,7 @@ set +a
 [ ${#MNC} == 3 ] && IMS_DOMAIN="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" || IMS_DOMAIN="ims.mnc0${MNC}.mcc${MCC}.3gppnetwork.org"
 
 # Docker Compose project names — explicit to avoid directory-derived naming
-COMPOSE_CORE="-p vonr -f network/sa-vonr-deploy.yaml -f docker-compose.grafana.yml"
+COMPOSE_CORE="-p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml"
 COMPOSE_GNB="-p vonr-gnb -f network/nr-gnb.yaml"
 COMPOSE_UE="-f e2e-vonr.yaml"  # project name set in e2e-vonr.yaml
 

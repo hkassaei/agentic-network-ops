@@ -44,7 +44,7 @@ if [ -n "$MISSING" ]; then
     echo "ERROR: The following required containers are not running:${MISSING}"
     echo ""
     echo "Start the core stack first:"
-    echo "  docker compose -p vonr -f network/sa-vonr-deploy.yaml -f docker-compose.grafana.yml up -d"
+    echo "  docker compose -p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml up -d"
     exit 1
 fi
 echo "  All required containers are running."

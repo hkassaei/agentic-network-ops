@@ -13,25 +13,55 @@ AI-powered troubleshooting platform for a 5G SA + IMS (VoNR) network stack. Incl
   export GOOGLE_GENAI_USE_VERTEXAI=TRUE
   ```
 
-## GUI
+## Getting Started
 
-The GUI is the main control surface. It deploys/tears down the stack, controls UEs, streams logs, shows live topology, and runs AI investigations — all from the browser.
-
-### Setup
+### 1. Configure environment variables
 
 ```bash
-cd $HOME/agentic-network-ops
-
-# Create venv and install deps
-python3 -m venv gui/.venv
-source gui/.venv/bin/activate
-pip install -r gui/requirements.txt
-
-# Start the server
-python3 gui/server.py
+cp ops.env.example ops.env
 ```
 
-Then open **http://localhost:8073** in your browser.
+Edit `ops.env` with your values:
+
+| Variable | Required for | Example |
+|---|---|---|
+| `GOOGLE_CLOUD_PROJECT` | RCA agents v3/v4 | `my-gcp-project` |
+| `GOOGLE_CLOUD_LOCATION` | RCA agents v3/v4 | `northamerica-northeast1` |
+| `GOOGLE_GENAI_USE_VERTEXAI` | RCA agents v3/v4 | `TRUE` |
+| `ANTHROPIC_API_KEY` | RCA agent v1.5 (optional, for Claude) | `sk-ant-...` |
+
+`ops.env` is listed in `.gitignore` and is never committed.
+
+### 2. Start the operations layer
+
+```bash
+./scripts/start-ops.sh
+```
+
+This brings up the GUI, Neo4j ontology database, and ontology loader — without starting the network stack. You can then deploy the network and UEs from the GUI.
+
+| Service | URL | Credentials |
+|---|---|---|
+| GUI | http://localhost:8073 | — |
+| Neo4j Browser | http://localhost:7474 | `neo4j` / `ontology` |
+| Grafana | http://localhost:3000 | `open5gs` / `open5gs` (available after network starts) |
+
+### 3. Deploy the network from the GUI
+
+Open http://localhost:8073 and use the **Deploy Full Stack** button in the Stack Controls tab. This builds Docker images, starts the 5G core + IMS stack, provisions subscribers, and deploys UEs — all streamed in real-time.
+
+Or start the network manually (with custom Grafana dashboards):
+
+```bash
+docker compose -p vonr \
+  -f network/sa-vonr-deploy.yaml \
+  -f grafana-dashboards.yaml \
+  up -d
+```
+
+## GUI
+
+The GUI is the main control surface. It deploys/tears down the stack, controls UEs, streams logs, shows live topology, and runs AI investigations — all from the browser at **http://localhost:8073**.
 
 ### Tabs
 
@@ -69,8 +99,12 @@ docker build -t docker_open5gs ./network/base
 docker build -t docker_kamailio ./network/ims_base
 docker build -t docker_ueransim ./network/ueransim
 
-# 1. Start the 5G core + IMS stack
-docker compose -f network/sa-vonr-deploy.yaml up -d
+# 1. Start the ops layer, then deploy the network from the GUI
+cp ops.env.example ops.env  # Edit with your GCP project + API keys
+./scripts/start-ops.sh
+# Open http://localhost:8073 → Deploy Full Stack
+# Or start the network manually:
+docker compose -p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml up -d
 
 # 2. Build the pjsua-enabled UERANSIM image
 ./scripts/build.sh
@@ -210,45 +244,46 @@ python -m agentic_chaos -v run "P-CSCF Latency" --agent v1.5
 | AMF Restart | core | single | Restarts AMF (simulates upgrade) |
 | Cascading IMS Failure | IMS | multi | Multiple IMS faults in sequence |
 
-## Custom Grafana Dashboards
+## Operations Layer (`network-ops.yaml`)
 
-Custom Grafana dashboards are stored in the **parent repo** (not the `network/` submodule) and mounted into the Grafana container via a Docker Compose override. This keeps the upstream `docker_open5gs` submodule untouched.
+Everything on top of the upstream `docker_open5gs` network stack is managed by a single `network-ops.yaml` compose file. This keeps the submodule untouched while providing a clean, containerized operations layer.
 
-### How It Works
+The operations layer is split into two compose files:
 
-The `docker-compose.grafana.yml` override adds two volume mounts to the Grafana container:
+| File | Contains | Depends on network? |
+|------|----------|---------------------|
+| `network-ops.yaml` | GUI, Neo4j ontology, ontology loader | No — starts independently |
+| `grafana-dashboards.yaml` | Custom Grafana dashboard mounts | Yes — overrides Grafana from `sa-vonr-deploy.yaml` |
 
-1. `grafana/custom_dashboards.yml` → `/etc/grafana/provisioning/dashboards/custom_dashboards.yml` — tells Grafana to load dashboards from a custom path
-2. `grafana/dashboards/` → `/var/lib/grafana/custom-dashboards/` — the actual dashboard JSON files
+### Services
 
-Grafana picks up both the submodule's dashboards (under "Services" folder) and custom dashboards (under "5G Core" folder) on startup.
+| Service | Container | Port | Compose file |
+|---------|-----------|------|-------------|
+| `gui` | `ops_gui` | 8073 | `network-ops.yaml` |
+| `ontology` | `ontology` | 7474, 7687 | `network-ops.yaml` |
+| `ontology-loader` | `ontology_loader` | — | `network-ops.yaml` |
+| `grafana` (override) | `grafana` | 3000 | `grafana-dashboards.yaml` |
 
-### Dashboards
+### Custom Grafana Dashboards
 
-| Dashboard | File | Description |
-|-----------|------|-------------|
-| 5G Core | `grafana/dashboards/5g_core_dashboard.json` | AMF, SMF, UPF, PCF metrics from Prometheus |
-| IMS | Planned — see `grafana/ims-metrics-plan.md` | P-CSCF, I-CSCF, S-CSCF, RTPEngine, PyHSS (requires exporter) |
-
-### Adding a New Dashboard
-
-1. Create a dashboard JSON file in `grafana/dashboards/`
-2. Use datasource UID `PA240B69645956401` (the provisioned Prometheus datasource)
-3. Redeploy or restart Grafana — the new dashboard is automatically discovered
-
-### Grafana Access
-
-- **URL:** `http://<DOCKER_HOST_IP>:3000`
-- **Username:** `open5gs`
-- **Password:** `open5gs`
-
-### Manual Stack Start (with custom dashboards)
-
-The deploy scripts already include the override, but if starting manually:
+Custom dashboards in `grafana/dashboards/` are mounted into Grafana via `grafana-dashboards.yaml`. This file is always paired with the network stack:
 
 ```bash
-docker compose -p vonr -f network/sa-vonr-deploy.yaml -f docker-compose.grafana.yml up -d
+docker compose -p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml up -d
 ```
+
+| Dashboard | File |
+|-----------|------|
+| 5G Core | `grafana/dashboards/5g_core_dashboard.json` |
+| IMS | Planned — see `grafana/ims-metrics-plan.md` |
+
+To add a new dashboard: drop a JSON file in `grafana/dashboards/` and restart Grafana.
+
+### Network Ontology
+
+The ontology is a Neo4j graph database encoding the network's component topology, causal failure chains, log semantics, symptom signatures, and protocol stack rules. It replaces LLM causal reasoning with pre-computed domain knowledge.
+
+YAML source files live in `network_ontology/data/`. The `ontology-loader` container seeds Neo4j automatically on startup. See `docs/network-ontology-brainstorm.md` for design details.
 
 ## Directory Structure
 
@@ -278,12 +313,20 @@ agentic-network-ops/
 │   ├── cli.py                  # CLI: run scenarios, list episodes, heal
 │   ├── engine.py               # Fault injection engine (triple-lock safety)
 │   └── scenarios/              # Pre-built failure scenarios
+├── network-ops.yaml             # Docker Compose: operations layer (GUI, ontology)
+├── grafana-dashboards.yaml      # Docker Compose override: custom Grafana dashboards
+├── ops.env.example             # Template for ops.env (API keys, GCP project)
 ├── grafana/                    # Custom Grafana dashboards (overlay on submodule)
 │   ├── dashboards/             # Dashboard JSON files
 │   │   └── 5g_core_dashboard.json
-│   ├── custom_dashboards.yml   # Provisioning config for custom dashboards
+│   ├── custom_dashboards.yaml  # Provisioning config for custom dashboards
 │   └── ims-metrics-plan.md     # Plan for IMS metrics exporter
-├── docker-compose.grafana.yml  # Compose override: mounts custom dashboards into Grafana
+├── network_ontology/           # Network domain knowledge graph
+│   ├── data/                   # YAML source files (components, causal chains, etc.)
+│   ├── schema/                 # Neo4j graph schema
+│   ├── loader.py               # Seeds Neo4j from YAML
+│   ├── query.py                # Python query API for agents
+│   └── Dockerfile              # One-shot loader container
 ├── network/                    # Full 5G SA + IMS stack (from docker_open5gs)
 │   ├── sa-vonr-deploy.yaml     # Docker Compose: core + IMS (17 containers)
 │   ├── nr-gnb.yaml             # Docker Compose: gNB

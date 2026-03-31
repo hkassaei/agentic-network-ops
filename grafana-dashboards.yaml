@@ -1,0 +1,22 @@
+# =============================================================================
+# Custom Grafana Dashboards
+# =============================================================================
+#
+# Compose override that mounts custom dashboards into the Grafana container
+# defined in the network stack (network/sa-vonr-deploy.yaml).
+#
+# Usage (always paired with the network stack):
+#   docker compose -p vonr \
+#     -f network/sa-vonr-deploy.yaml \
+#     -f grafana-dashboards.yaml \
+#     up -d
+#
+# Custom dashboards appear under the "5G Core" folder in Grafana.
+# To add a new dashboard, drop a JSON file in grafana/dashboards/.
+# =============================================================================
+
+services:
+  grafana:
+    volumes:
+      - ./grafana/custom_dashboards.yaml:/etc/grafana/provisioning/dashboards/custom_dashboards.yaml:ro
+      - ./grafana/dashboards/:/var/lib/grafana/custom-dashboards/:ro

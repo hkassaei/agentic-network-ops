@@ -1,0 +1,477 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260401_025407_p_cscf_latency",
+  "timestamp": "2026-04-01T02:54:08.095328+00:00",
+  "duration_seconds": 96.79939,
+  "scenario": {
+    "name": "P-CSCF Latency",
+    "description": "Inject 500ms latency on the P-CSCF (SIP edge proxy). SIP T1 timer is 500ms, so REGISTER transactions will start timing out. Tests IMS resilience to WAN-like latency on the signaling path.",
+    "category": "network",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "network_latency",
+        "target": "pcscf",
+        "params": {
+          "delay_ms": 500,
+          "jitter_ms": 50
+        },
+        "ttl_seconds": 300
+      }
+    ],
+    "expected_symptoms": [
+      "SIP REGISTER 408 Request Timeout",
+      "Kamailio tm transaction timeouts",
+      "IMS registration failures at UEs"
+    ],
+    "escalation": true,
+    "challenge_mode": true,
+    "requires_active_call": false,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 300
+  },
+  "baseline": {
+    "timestamp": "2026-04-01T02:54:08.095328+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 0.0,
+          "ran_ue": 0.0,
+          "gnb": 1.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 0.0,
+          "ues_active": 0.0,
+          "bearers_active": 0.0,
+          "pfcp_sessions_active": 0.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 0.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 132.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 8.0
+        },
+        "badge": "140 pkt",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 0.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 2.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 2.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 4.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 4.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 4452.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 4453.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_impus": 2.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 2.0,
+          "script:register_time": 647.0,
+          "sl:1xx_replies": 4.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 96.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 2.0,
+          "cdp:replies_response_time": 193.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 96.0,
+          "ims_icscf:uar_replies_received": 2.0,
+          "ims_icscf:uar_replies_response_time": 193.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "4 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 103.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 412.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 103.0,
+          "ims_auth:mar_replies_received": 2.0,
+          "ims_auth:mar_replies_response_time": 207.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 2.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 102.0,
+          "ims_registrar_scscf:sar_replies_received": 2.0,
+          "ims_registrar_scscf:sar_replies_response_time": 205.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 0.0,
+          "ims_usrloc_scscf:active_impus": 0.0,
+          "ims_usrloc_scscf:active_subscriptions": 0.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 regs",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_cdd8dbcc",
+      "fault_type": "network_latency",
+      "target": "pcscf",
+      "params": {
+        "delay_ms": 500,
+        "jitter_ms": 50
+      },
+      "mechanism": "sudo nsenter -t 896906 -n tc qdisc add dev eth0 root netem delay 500ms 50ms",
+      "heal_command": "sudo nsenter -t 896906 -n tc qdisc del dev eth0 root",
+      "injected_at": "2026-04-01T02:54:08.096020+00:00",
+      "ttl_seconds": 300,
+      "expires_at": "2026-04-01T02:59:08.096020+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "qdisc netem 800a: root refcnt 9 limit 1000 delay 500ms  50ms"
+    }
+  ],
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-04-01T02:54:08.179365+00:00",
+      "elapsed_seconds": 0.084037,
+      "metrics_delta": {},
+      "log_samples": {
+        "amf": [
+          "\u001b[32m03/31 22:04:35.404\u001b[0m: [\u001b[33mamf\u001b[0m] \u001b[1;32mINFO\u001b[0m: gNB-N2[172.22.0.23] connection refused!!! (../src/amf/amf-sm.c:997)",
+          "\u001b[32m03/31 22:09:20.727\u001b[0m: [\u001b[33mamf\u001b[0m] \u001b[1;32mINFO\u001b[0m: gNB-N2[172.22.0.23] connection refused!!! (../src/amf/amf-sm.c:997)",
+          "\u001b[32m03/31 22:28:53.063\u001b[0m: [\u001b[33mamf\u001b[0m] \u001b[1;32mINFO\u001b[0m: gNB-N2[172.22.0.23] connection refused!!! (../src/amf/amf-sm.c:997)"
+        ],
+        "icscf": [
+          "\u001b[0;39;49m\u001b[0;31;49m28(73) ERROR: cdp [receiver.c:1064]: peer_connect(): Error opening connection to to 172.22.0.18 port 3875 proto  >Connection refused",
+          "\u001b[0;39;49m\u001b[0;36;49m 9(54) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_result_code: Failed finding avp",
+          "\u001b[0;39;49m\u001b[0;36;49m10(55) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_result_code: Failed finding avp"
+        ],
+        "scscf": [
+          "\u001b[0;39;49m\u001b[0;39;49m 5(43) DEBUG: ims_usrloc_scscf [ims_usrloc_scscf_mod.c:500]: timer(): Syncing cache"
+        ],
+        "e2e_ue1": [
+          "22:49:12.705            pjsua_acc.c  ...SIP registration failed, status=408 (Request Timeout)"
+        ]
+      },
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-04-01T02:55:44.894718+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 0.0,
+          "ran_ue": 0.0,
+          "gnb": 1.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 0.0,
+          "ues_active": 0.0,
+          "bearers_active": 0.0,
+          "pfcp_sessions_active": 0.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 0.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 132.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 8.0
+        },
+        "badge": "140 pkt",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 0.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 2.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 2.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 4.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 4.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 4468.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 4469.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_impus": 2.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 2.0,
+          "script:register_time": 647.0,
+          "sl:1xx_replies": 4.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 96.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 2.0,
+          "cdp:replies_response_time": 193.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 96.0,
+          "ims_icscf:uar_replies_received": 2.0,
+          "ims_icscf:uar_replies_response_time": 193.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "4 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 103.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 412.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 103.0,
+          "ims_auth:mar_replies_received": 2.0,
+          "ims_auth:mar_replies_response_time": 207.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 2.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 102.0,
+          "ims_registrar_scscf:sar_replies_received": 2.0,
+          "ims_registrar_scscf:sar_replies_response_time": 205.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 0.0,
+          "ims_usrloc_scscf:active_impus": 0.0,
+          "ims_usrloc_scscf:active_subscriptions": 0.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 regs",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 96.798698,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Inject 500ms latency on the P-CSCF (SIP edge proxy). SIP T1 timer is 500ms, so REGISTER transactions will start timing out. Tests IMS resilience to WAN-like latency on the signaling path.",
+    "affected_components": [
+      "pcscf"
+    ],
+    "severity": "degraded",
+    "failure_domain": "ims_signaling",
+    "protocol_impact": "SIP"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v5-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: Extreme network latency originating from the `pcscf` container is causing application-level timeouts, preventing UE registrations and session establishment across the entire stack.\n- **timeline**:\n    1.  A severe transport layer issue introduces catastrophic latency (500-1000ms RTT) on egress traffic from the `pcscf` container.\n    2.  `pcscf`'s internal health checks (HTTP OPTIONS requests) to other IMS components like `icscf` begin to time out. This is reflected in the `pcscf` metric `httpclient:connfail`, which increments for each failed attempt.\n    3.  UE registration requests arriving at the `pcscf` cannot be forwarded to the `icscf`/`scscf` due to the same timeouts, preventing any IMS registrations from completing.\n    4.  Without successful UE registration, PDU session establishment requests are never initiated towards the 5G Core.\n    5.  As a result, all session-related metrics in the AMF, SMF, UPF, and PCF remain at zero, triggering the baseline alarms.\n- **root_cause**: The definitive first cause is a transport layer failure specific to the `pcscf` container. The investigation confirmed this with direct RTT measurements showing latency over 500x the norm. This network failure is the root cause of the cascading application failures and the resulting lack of user sessions.\n- **affected_components**:\n    - **Root Cause**: `pcscf` (container network interface)\n    - **Downstream Impact**: `icscf`, `scscf`, `amf`, `smf`, `upf`, `pcf`\n- **recommendation**: Investigate and resolve the source of the extreme network latency on the `pcscf` container. Check for misconfigured traffic control policies (e.g., `tc`, `netem`), iptables rules, or container resource constraints (CPU/memory) that could be causing packet processing delays.\n- **confidence**: high\n- **explanation**: The investigator confirmed the ontology's finding that there was no known failure signature. The subsequent bottom-up investigation found that while alarms are firing across the core, the problem is not with the core logic itself. The `pcscf` container, which is the entry point for user traffic, is experiencing catastrophic network lag. Evidence shows a round-trip time of over 500ms from `pcscf` to its peers, which should be sub-millisecond. This extreme latency causes application-level protocols like HTTP and SIP to time out, effectively isolating the `pcscf` and preventing any user from registering or creating a data session. The thousands of `httpclient:connfail` events on the `pcscf` are a direct symptom of this network failure.\n\n",
+    "score": {
+      "root_cause_correct": true,
+      "root_cause_rationale": "The agent correctly identified 'extreme network latency originating from the pcscf container' and 'transport layer failure specific to the pcscf container' with 'latency over 500x the norm' as the root cause, which perfectly matches the simulated P-CSCF latency of 500ms.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent precisely identified 'pcscf (container network interface)' as the root cause component. It also correctly listed downstream affected components, which is acceptable.",
+      "severity_correct": true,
+      "severity_rationale": "The agent described the latency as 'extreme' and 'catastrophic', leading to 'application-level timeouts' and 'preventing UE registrations', effectively 'isolating the pcscf'. This accurately reflects the severe impact of 500ms latency causing timeouts and service disruption.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent clearly identified 'extreme network latency' and 'transport layer issue' as the fault type, which is an observable network degradation. The mention of 'tc, netem' in the recommendation is a suggestion for investigation/resolution, not part of the diagnosis of the observable fault type itself.",
+      "confidence_calibrated": true,
+      "confidence_rationale": "The agent stated 'high' confidence, which is well-calibrated given the highly accurate, detailed, and evidence-backed diagnosis (500-1000ms RTT, httpclient:connfail).",
+      "ranking_position": 1,
+      "ranking_rationale": "The agent provided a single, primary diagnosis that was correct.",
+      "total_score": 1.0,
+      "summary": "The agent provided an outstanding diagnosis, perfectly identifying the root cause, affected component, severity, and fault type with high confidence, demonstrating a complete understanding of the simulated failure and its observable symptoms."
+    },
+    "time_to_diagnosis_seconds": 86.7,
+    "token_usage": {
+      "input_tokens": 30512,
+      "output_tokens": 2921,
+      "thinking_tokens": 5644,
+      "total_tokens": 39077,
+      "per_phase": [
+        {
+          "agent": "TriageAgent",
+          "tokens": 10767,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "OntologyAnalysis",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent",
+          "tokens": 23009,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 5301,
+          "tool_calls": 0,
+          "llm_calls": 1
+        }
+      ]
+    }
+  }
+}

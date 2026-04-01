@@ -187,12 +187,12 @@ Every injected fault is registered in SQLite before injection. A background TTL 
 
 ### Setup
 
-The chaos CLI runs independently from the GUI.
+The chaos CLI runs independently from the GUI. It must run from the **repo root**.
 
 ```bash
 cd $HOME/agentic-network-ops
 
-# Create a dedicated venv
+# Create a dedicated venv (one-time)
 python3 -m venv agentic_chaos/.venv
 source agentic_chaos/.venv/bin/activate
 pip install -r agentic_chaos/requirements.txt
@@ -203,9 +203,27 @@ export GOOGLE_CLOUD_LOCATION="<region>"
 export GOOGLE_GENAI_USE_VERTEXAI="TRUE"
 ```
 
+#### Additional setup for v5 agent (ontology-backed)
+
+v5 requires the Neo4j ontology database to be running and seeded:
+
+```bash
+# Activate the chaos venv
+source agentic_chaos/.venv/bin/activate
+
+# neo4j driver is already in requirements.txt — verify it's installed
+pip install neo4j
+
+# Start the ops layer (includes Neo4j)
+./scripts/start-ops.sh
+
+# Seed the ontology database (run once, or after ontology YAML changes)
+python -m network_ontology --uri bolt://localhost:7687 --reset -v
+```
+
 ### CLI Usage
 
-The stack must be up (via GUI or scripts) before running scenarios.
+The stack must be up (via GUI or scripts) before running scenarios. Always run from the **repo root** with the chaos venv activated.
 
 ```bash
 # List available scenarios
@@ -215,6 +233,7 @@ python -m agentic_chaos list-scenarios
 python -m agentic_chaos run "DNS Failure" --agent v1.5
 python -m agentic_chaos run "P-CSCF Latency" --agent v3
 python -m agentic_chaos run "Data Plane Degradation" --agent v4
+python -m agentic_chaos run "gNB Radio Link Failure" --agent v5
 
 # List recorded episodes
 python -m agentic_chaos list-episodes

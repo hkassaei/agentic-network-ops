@@ -39,6 +39,7 @@ _AGENT_LOG_DIRS = {
     "v1.5": _OPERATE_DIR / "agentic_ops" / "docs" / "agent_logs",
     "v3": _OPERATE_DIR / "agentic_ops_v3" / "docs" / "agent_logs",
     "v4": _OPERATE_DIR / "agentic_ops_v4" / "docs" / "agent_logs",
+    "v5": _OPERATE_DIR / "agentic_ops_v5" / "docs" / "agent_logs",
 }
 
 
@@ -244,8 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Run a chaos scenario")
     p_run.add_argument("scenario", help="Scenario name (use list-scenarios to see options)")
     p_run.add_argument(
-        "--agent", required=True, choices=["v1.5", "v3", "v4"],
-        help="Agent version to evaluate (v1.5, v3, or v4)",
+        "--agent", required=True, choices=["v1.5", "v3", "v4", "v5"],
+        help="Agent version to evaluate (v1.5, v3, v4, or v5)",
     )
 
     # list-scenarios

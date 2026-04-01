@@ -119,42 +119,36 @@ def load_causal_chains(tx):
     data = _load_yaml("causal_chains.yaml")
     for chain_id, chain in data["causal_chains"].items():
         # Create CausalChain node
-        trigger_target = chain["trigger_target"]
-        if isinstance(trigger_target, list):
-            trigger_target = ",".join(trigger_target)
+        affected_interface = chain.get("affected_interface", "")
+        if isinstance(affected_interface, list):
+            affected_interface = ",".join(affected_interface)
+
+        possible_causes = chain.get("possible_causes", [])
 
         tx.run("""
             MERGE (cc:CausalChain {id: $id})
-            SET cc.trigger_type = $trigger_type,
-                cc.trigger_target = $trigger_target,
-                cc.description = $description,
+            SET cc.description = $description,
+                cc.affected_interface = $affected_interface,
+                cc.affected_protocol = $affected_protocol,
                 cc.failure_domain = $failure_domain,
-                cc.severity = $severity
+                cc.severity = $severity,
+                cc.possible_causes = $possible_causes
         """,
             id=chain_id,
-            trigger_type=chain["trigger_type"],
-            trigger_target=trigger_target,
             description=chain["description"],
+            affected_interface=affected_interface,
+            affected_protocol=chain.get("affected_protocol", ""),
             failure_domain=chain["failure_domain"],
             severity=chain["severity"],
+            possible_causes=possible_causes,
         )
 
-        # TRIGGERS: chain → component
-        targets = chain["trigger_target"]
-        if isinstance(targets, str):
-            targets = [targets]
-        for t in targets:
-            tx.run("""
-                MATCH (cc:CausalChain {id: $chain_id})
-                MATCH (c:Component {name: $target})
-                MERGE (cc)-[:TRIGGERS]->(c)
-            """, chain_id=chain_id, target=t)
-
-        # Create Symptom nodes from immediate_effects
-        for i, effect in enumerate(chain.get("immediate_effects", [])):
+        # Create Symptom nodes from observable_symptoms.immediate
+        observable = chain.get("observable_symptoms", {})
+        for i, effect in enumerate(observable.get("immediate", [])):
             symptom_id = f"{chain_id}_imm_{i}"
-            metric = effect.get("metric", effect.get("interface", ""))
-            at = effect.get("at", effect.get("observable", ""))
+            metric = effect.get("metric", effect.get("log", ""))
+            at = effect.get("at", "")
             if isinstance(at, list):
                 at = ",".join(at)
 
@@ -163,36 +157,37 @@ def load_causal_chains(tx):
                 SET s.metric = $metric,
                     s.expected_value = $becomes,
                     s.lag = $lag,
-                    s.description = $observable,
+                    s.description = $description,
+                    s.observed_at = $at,
                     s.type = 'immediate'
             """,
                 sid=symptom_id,
                 metric=str(metric),
                 becomes=str(effect.get("becomes", effect.get("state", ""))),
                 lag=str(effect.get("lag", "")),
-                observable=str(effect.get("observable", "")),
+                description=str(effect.get("description", "")),
+                at=at,
             )
 
-            # CAUSES_SYMPTOM: chain → symptom
             tx.run("""
                 MATCH (cc:CausalChain {id: $chain_id})
                 MATCH (s:Symptom {id: $sid})
                 MERGE (cc)-[:CAUSES_SYMPTOM {order: $order, type: 'immediate'}]->(s)
             """, chain_id=chain_id, sid=symptom_id, order=i)
 
-        # Create Symptom nodes from cascading_effects
-        for i, effect in enumerate(chain.get("cascading_effects", [])):
+        # Create Symptom nodes from observable_symptoms.cascading
+        for i, effect in enumerate(observable.get("cascading", [])):
             symptom_id = f"{chain_id}_casc_{i}"
             tx.run("""
                 MERGE (s:Symptom {id: $sid})
                 SET s.condition = $condition,
-                    s.description = $effect,
+                    s.description = $description,
                     s.lag = $lag,
                     s.type = 'cascading'
             """,
                 sid=symptom_id,
                 condition=effect.get("condition", ""),
-                effect=effect.get("effect", ""),
+                description=effect.get("effect", effect.get("description", "")),
                 lag=str(effect.get("lag", "")),
             )
 
@@ -202,7 +197,7 @@ def load_causal_chains(tx):
                 MERGE (cc)-[:CAUSES_SYMPTOM {order: $order, type: 'cascading'}]->(s)
             """, chain_id=chain_id, sid=symptom_id, order=100 + i)
 
-        # Store does_NOT_mean as property on the chain
+        # Store does_NOT_mean
         does_not_mean = chain.get("does_NOT_mean", [])
         if does_not_mean:
             tx.run("""
@@ -210,12 +205,20 @@ def load_causal_chains(tx):
                 SET cc.does_not_mean = $dnm
             """, chain_id=chain_id, dnm=does_not_mean)
 
-        # Store diagnostic_actions
-        for j, action in enumerate(chain.get("diagnostic_actions", [])):
+        # Store diagnostic_approach
+        for j, action in enumerate(chain.get("diagnostic_approach", [])):
             tx.run("""
                 MATCH (cc:CausalChain {id: $chain_id})
                 SET cc.diagnostic_actions = coalesce(cc.diagnostic_actions, []) + [$action]
             """, chain_id=chain_id, action=str(action))
+
+        # Store key_diagnostic_signal
+        signals = chain.get("key_diagnostic_signal", [])
+        if signals:
+            tx.run("""
+                MATCH (cc:CausalChain {id: $chain_id})
+                SET cc.key_diagnostic_signal = $signals
+            """, chain_id=chain_id, signals=signals)
 
     count = len(data["causal_chains"])
     log.info("Loaded %d causal chains.", count)

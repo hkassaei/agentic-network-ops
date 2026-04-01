@@ -1,16 +1,20 @@
 """
 Challenge Mode Scorer — LLM-based evaluation of RCA agent diagnosis.
 
-The chaos platform knows exactly what fault was injected. The RCA agent does NOT
-know — it only sees symptoms. The scorer uses an LLM to evaluate how well the
-RCA agent diagnosed the problem, comparing the raw diagnosis text against
-ground truth.
+The chaos platform injects faults to SIMULATE real-world failure modes. The
+scorer evaluates the agent against the SIMULATED FAILURE MODE (what went wrong
+from the network's perspective), NOT the injection mechanism (how we broke it).
+
+Example: "Kill gNB to simulate a radio link failure"
+  - The agent should diagnose: "radio link failure" / "RAN unreachable" / "N2 connectivity loss"
+  - The agent should NOT need to know: "container was killed"
+  - The scorer accepts any semantically equivalent description of the failure mode
 
 Scoring dimensions:
-  - root_cause_correct: Did the agent identify the right component/failure?
-  - component_overlap:  Did it name the right container(s)?
+  - root_cause_correct: Did the agent identify the simulated failure mode?
+  - component_overlap:  Did it name the right affected component(s)?
   - severity_correct:   Did it assess severity accurately?
-  - fault_type_identified: Did it identify the class of failure?
+  - fault_type_identified: Did it identify the observable class of failure?
   - confidence_calibrated: Is confidence justified by evidence quality?
   - ranking_position:   Where did the correct cause rank in the agent's list?
 """
@@ -27,50 +31,78 @@ _SCORER_MODEL = "gemini-2.5-flash"
 
 _SCORER_PROMPT = """\
 You are an evaluation judge for a telecom troubleshooting agent. Your job is to
-score how well the agent diagnosed a fault that was injected into a 5G SA + IMS
-network stack.
+score how well the agent diagnosed a failure in a 5G SA + IMS network stack.
+
+IMPORTANT CONTEXT: The failure was created by a chaos testing platform that uses
+simulation techniques (killing containers, injecting tc netem rules, pausing
+processes) to reproduce real-world failure modes. The agent has NO visibility
+into the simulation mechanism — it can only observe the network from the
+perspective of a NOC operator.
+
+Therefore, you MUST score the agent against the SIMULATED FAILURE MODE (what
+the failure looks like from the network), NOT the injection mechanism (how the
+platform created it).
+
+Example: If the platform killed a gNB container to simulate a radio link
+failure, the agent should be scored on whether it diagnosed "radio link failure"
+/ "RAN unreachable" / "N2 connectivity loss" / "gNB not responding" — NOT on
+whether it said "container was killed."
 
 You will receive:
-1. GROUND TRUTH — what was actually injected (this is 100% reliable)
+1. SIMULATED FAILURE — what failure mode was being simulated and what the agent
+   should have been able to observe
 2. AGENT DIAGNOSIS — the agent's raw output (this is what you are evaluating)
 
-Score the diagnosis on these dimensions. For each, provide a boolean or numeric
-score AND a one-sentence rationale explaining your judgment.
+Score the diagnosis on these dimensions:
 
 ## Scoring Dimensions
 
-1. **root_cause_correct** (bool): Did the agent identify the actual injected
-   fault as the root cause (or primary cause)? The agent doesn't need to use
-   the exact same words — semantic equivalence counts. For example, "DNS
-   container crashed" = "dns service is down" = "BIND9 exited". If the agent
-   listed multiple candidates, the correct cause must be ranked as the
-   primary/top candidate to score True.
+1. **root_cause_correct** (bool): Did the agent identify the simulated failure
+   mode as the root cause? Semantic equivalence counts — the agent doesn't need
+   to use the exact same words. Accept any diagnosis that describes the same
+   observable failure from the network's perspective.
 
-2. **component_overlap** (float 0.0-1.0): Did the agent name the correct
-   container(s) that were targeted by the fault? Score 1.0 if all injected
-   targets were identified. Do NOT penalize the agent for also listing
-   downstream/cascading components — only check that the injected targets
-   are present.
+   Examples of EQUIVALENT diagnoses for "radio link failure":
+   - "RAN is unreachable" ✓
+   - "N2 connectivity loss between gNB and AMF" ✓
+   - "gNB not responding, 100% packet loss" ✓
+   - "Transport failure on N2 path" ✓
+   - "gNB container killed" ✓ (more specific than needed, but correct)
 
-3. **severity_correct** (bool): Did the agent's assessment of severity match
-   the actual impact? Container kills/stops = "down"/"outage"/"crashed".
-   Network faults (latency/loss/corruption) = "degraded"/"slow"/"impaired".
+   Examples of WRONG diagnoses:
+   - "I-CSCF misconfiguration" ✗ (wrong component, wrong failure mode)
+   - "HSS subscriber profile incomplete" ✗ (unrelated)
 
-4. **fault_type_identified** (bool): Did the agent identify the CLASS of
-   failure? For container_kill: crash/down/exited/killed. For
-   network_latency: delay/latency/slow/netem. For network_loss: packet
-   loss/drops. For network_partition: unreachable/partitioned. For
-   container_pause: frozen/hung/unresponsive.
+   If the agent listed multiple candidates, the correct cause must be ranked
+   as the primary/top candidate to score True.
+
+2. **component_overlap** (float 0.0-1.0): Did the agent correctly identify
+   the affected component(s)? Score 1.0 if the primary affected component is
+   named. Do NOT penalize for also listing cascading/downstream components —
+   that shows correct causal reasoning.
+
+3. **severity_correct** (bool): Did the agent's severity assessment match the
+   actual impact? A complete outage (container killed, network partitioned) =
+   "down"/"outage"/"unreachable"/"100% loss". A degradation (packet loss,
+   latency) = "degraded"/"slow"/"impaired"/"quality issues".
+
+4. **fault_type_identified** (bool): Did the agent identify the OBSERVABLE
+   class of failure? Score based on what can be observed from the network:
+   - Component unreachable: "down"/"unreachable"/"not responding"/"100% packet loss"
+   - Network degradation: "packet loss"/"latency"/"delay"/"congestion"
+   - Service partition: "partitioned"/"unreachable"/"isolated"
+   - Service hang: "unresponsive"/"timeout"/"hung"
+   Do NOT require the agent to name the simulation mechanism (container_kill,
+   tc netem, docker pause).
 
 5. **confidence_calibrated** (bool): Is the agent's stated confidence level
    appropriate given the quality of its diagnosis? High confidence + correct
-   diagnosis = well calibrated. High confidence + wrong diagnosis = poorly
-   calibrated. Low confidence + correct = also poorly calibrated (under-confident).
+   diagnosis with tool evidence = well calibrated. High confidence + wrong
+   diagnosis = poorly calibrated.
 
 6. **ranking_position** (int or null): If the agent returned multiple ranked
-   candidates/causes, what position (1-based) is the correct cause? 1 = top
-   candidate, null = correct cause not listed at all. If the agent returned
-   only one cause, use 1 if correct, null if wrong.
+   candidates, what position (1-based) is the correct cause? 1 = top,
+   null = correct cause not listed.
 
 ## Output Format
 
@@ -102,6 +134,23 @@ Compute total_score as:
 """
 
 
+# Map injection mechanisms to observable failure descriptions
+_FAULT_TYPE_DESCRIPTIONS = {
+    "container_kill": "Component completely unreachable (down/not responding)",
+    "container_stop": "Component temporarily unavailable (stopped, may recover)",
+    "container_pause": "Component unresponsive (appears running but not processing requests)",
+    "container_restart": "Component temporarily disrupted (brief outage, then recovery)",
+    "network_latency": "Elevated network latency on the component's interfaces",
+    "network_loss": "Packet loss on the component's network path",
+    "network_corruption": "Packet corruption on the component's network path",
+    "network_bandwidth": "Bandwidth constraint on the component's network path",
+    "network_partition": "Network partition — component isolated from specified peers",
+    "config_corruption": "Configuration error causing service malfunction",
+    "subscriber_delete": "Subscriber data missing from database",
+    "collection_drop": "Database collection/table dropped",
+}
+
+
 async def score_diagnosis(
     diagnosis_text: str,
     injected_faults: list[dict],
@@ -109,33 +158,46 @@ async def score_diagnosis(
 ) -> dict:
     """Score an RCA diagnosis using an LLM judge.
 
-    Args:
-        diagnosis_text: The raw diagnosis text from the RCA agent (unparsed).
-        injected_faults: List of fault dicts from the episode (with target, fault_type, params).
-        scenario: The scenario dict (with name, description, expected_symptoms).
-
-    Returns:
-        Scoring dict with all dimensions, rationales, and total_score.
+    The scorer evaluates against the SIMULATED FAILURE MODE, not the
+    injection mechanism.
     """
-    # Build ground truth summary
+    # Build ground truth focused on the simulated failure mode
     fault_descriptions = []
     for f in injected_faults:
+        fault_type = f.get("fault_type", "?")
+        target = f.get("target", "?")
         params = f.get("params", {})
-        params_str = f" with params {params}" if params else ""
+        observable = _FAULT_TYPE_DESCRIPTIONS.get(fault_type, fault_type)
+
+        # Include params that describe the observable effect
+        if fault_type == "network_latency" and "delay_ms" in params:
+            observable += f" ({params['delay_ms']}ms delay)"
+        elif fault_type == "network_loss" and "loss_pct" in params:
+            observable += f" ({params['loss_pct']}% packet loss)"
+        elif fault_type == "network_partition" and "target_ip" in params:
+            observable += f" (isolated from {params['target_ip']})"
+
         fault_descriptions.append(
-            f"- {f.get('fault_type', '?')} on container '{f.get('target', '?')}'{params_str}"
+            f"- Component '{target}': {observable}"
         )
+
+    scenario_desc = scenario.get("description", "?")
+    expected_symptoms = scenario.get("expected_symptoms", [])
 
     ground_truth = (
         f"Scenario: {scenario.get('name', '?')}\n"
-        f"Description: {scenario.get('description', '?')}\n"
-        f"Injected faults:\n" + "\n".join(fault_descriptions) + "\n"
-        f"Expected symptoms: {', '.join(scenario.get('expected_symptoms', []))}"
+        f"Description: {scenario_desc}\n"
+        f"\nSimulated failure mode (what the agent should observe):\n"
+        + "\n".join(fault_descriptions) + "\n"
+        f"\nExpected observable symptoms:\n"
+        + "\n".join(f"- {s}" for s in expected_symptoms)
+        + "\n\nNote: The agent cannot see HOW the failure was injected "
+        "(container kill, tc netem, etc.). Score based on whether the agent "
+        "correctly identified the failure from the network's observable perspective."
     )
 
-    # Build the evaluation prompt
     user_message = (
-        f"## GROUND TRUTH\n\n{ground_truth}\n\n"
+        f"## SIMULATED FAILURE\n\n{ground_truth}\n\n"
         f"## AGENT DIAGNOSIS\n\n{diagnosis_text}"
     )
 
@@ -175,8 +237,6 @@ async def _call_scorer_llm(user_message: str) -> dict:
     )
 
     text = response.text.strip()
-
-    # Parse the JSON response
     parsed = json.loads(text)
 
     # Validate and ensure required fields
@@ -190,7 +250,6 @@ async def _call_scorer_llm(user_message: str) -> dict:
         parsed["component_overlap"] = 0.0
 
     if "total_score" not in parsed:
-        # Recompute from components
         parsed["total_score"] = round(
             0.40 * float(parsed.get("root_cause_correct", False))
             + 0.25 * float(parsed.get("component_overlap", 0))

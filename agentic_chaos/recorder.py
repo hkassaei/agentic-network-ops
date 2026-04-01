@@ -33,6 +33,7 @@ _AGENT_LOG_DIRS = {
     "v1.5": _OPERATE_DIR / "agentic_ops" / "docs" / "agent_logs",
     "v3": _OPERATE_DIR / "agentic_ops_v3" / "docs" / "agent_logs",
     "v4": _OPERATE_DIR / "agentic_ops_v4" / "docs" / "agent_logs",
+    "v5": _OPERATE_DIR / "agentic_ops_v5" / "docs" / "agent_logs",
 }
 
 
@@ -227,14 +228,8 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
                 lines.append(f"| {node} | {metric} | {b} | {c} | {d} |")
         lines.append("")
 
-    if all_logs:
-        lines.append("### Notable Log Lines")
-        lines.append("")
-        for container, log_lines in sorted(all_logs.items()):
-            lines.append(f"**{container}:**")
-            for line in log_lines[:5]:
-                lines.append(f"- `{line[:150]}`")
-        lines.append("")
+    # Notable log lines omitted from report — they contain stale logs
+    # from previous runs and are not useful for diagnosis evaluation.
 
     # Ground truth
     lines.append("## Ground Truth")

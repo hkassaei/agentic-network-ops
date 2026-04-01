@@ -231,6 +231,27 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     # Notable log lines omitted from report — they contain stale logs
     # from previous runs and are not useful for diagnosis evaluation.
 
+    # Ontology Analysis (Phase 0.5) — v5 only
+    challenge = episode.get("challenge_result", {})
+    ontology_diag = challenge.get("ontology_diagnosis", "")
+    investigation_plan = challenge.get("investigation_plan", {})
+    if ontology_diag:
+        lines.append("## Ontology Analysis (Phase 0.5)")
+        lines.append("")
+        lines.append(f"```")
+        lines.append(ontology_diag)
+        lines.append(f"```")
+        lines.append("")
+        if investigation_plan:
+            mandate = investigation_plan.get("mandate", "")
+            focus = investigation_plan.get("focus_domain", "unknown")
+            confidence = investigation_plan.get("confidence", "low")
+            lines.append(f"**Focus domain:** {focus}  ")
+            lines.append(f"**Confidence:** {confidence}  ")
+            if mandate:
+                lines.append(f"**Mandate to investigator:** {mandate[:300]}")
+            lines.append("")
+
     # Ground truth
     lines.append("## Ground Truth")
     lines.append("")

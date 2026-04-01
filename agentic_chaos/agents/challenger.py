@@ -140,6 +140,8 @@ class ChallengeAgent(BaseAgent):
             "score": score,
             "time_to_diagnosis_seconds": round(elapsed, 1),
             "token_usage": token_usage,
+            "ontology_diagnosis": diagnosis_dict.get("_ontology_diagnosis", ""),
+            "investigation_plan": diagnosis_dict.get("_investigation_plan", {}),
         }
 
         total = score.get("total_score", 0)
@@ -290,6 +292,8 @@ class ChallengeAgent(BaseAgent):
         return {
             "_raw_diagnosis": diagnosis_raw,
             "_token_usage": token_usage,
+            "_ontology_diagnosis": result.get("ontology_diagnosis", ""),
+            "_investigation_plan": result.get("investigation_plan", {}),
         }
 
     async def _run_live_impl(self, ctx):

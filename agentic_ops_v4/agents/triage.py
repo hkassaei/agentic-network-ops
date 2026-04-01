@@ -21,5 +21,9 @@ def create_triage_agent() -> LlmAgent:
             tools.get_nf_metrics,
             tools.read_env_config,
             tools.query_prometheus,
+            tools.check_tc_rules,
+            tools.query_ontology,
+            tools.interpret_log_message,
+            tools.check_component_health,
         ],
     )

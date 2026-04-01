@@ -337,3 +337,163 @@ async def get_network_topology() -> str:
     lines.extend(active)
 
     return "\n".join(lines)
+
+
+# -------------------------------------------------------------------------
+# Network Ontology tool (v4 — knowledge graph queries)
+# -------------------------------------------------------------------------
+
+async def query_ontology(
+    observations_json: str,
+) -> str:
+    """Query the network ontology for diagnosis based on observed symptoms.
+
+    The ontology encodes pre-computed causal chains, log semantics, symptom
+    signatures, and protocol stack rules for the 5G SA + IMS stack. It
+    replaces open-ended LLM reasoning about causality with deterministic
+    pattern matching.
+
+    Args:
+        observations_json: JSON string with observed state. Keys:
+            - Metric names with current values (e.g. "ran_ue": 0, "gnb": 0)
+            - "container_status": {"nr_gnb": "exited", "amf": "running", ...}
+            - "log_patterns_seen": ["amf_sctp_refused", "ue_jitter_buffer_reset"]
+            - "tc_rules_found": true/false (if check_tc_rules found netem/tbf)
+
+    Returns:
+        Structured diagnosis including matched signatures, triggered stack
+        rules, baseline anomalies, and recommended diagnostic actions.
+    """
+    import json as _json
+
+    try:
+        observations = _json.loads(observations_json)
+    except _json.JSONDecodeError:
+        return "ERROR: observations_json must be valid JSON"
+
+    try:
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        result = client.diagnose(observations)
+        client.close()
+        return _json.dumps(result, indent=2, default=str)
+    except ImportError:
+        return "ERROR: network_ontology package not installed. Run: pip install -e network_ontology/"
+    except Exception as e:
+        return f"ERROR: Ontology query failed: {e}"
+
+
+async def interpret_log_message(
+    message: str,
+    source: str = "",
+) -> str:
+    """Look up the semantic meaning of a log message in the network ontology.
+
+    The ontology contains annotated log patterns with their actual meaning,
+    common misinterpretations, and diagnostic actions. This prevents the
+    most common agent failure: misinterpreting log messages.
+
+    Args:
+        message: The log message text to interpret.
+        source: Optional container name that produced the log (e.g. "amf", "icscf").
+
+    Returns:
+        Matching patterns with meaning, does_NOT_mean warnings, and actions.
+    """
+    import json as _json
+
+    try:
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        matches = client.interpret_log(message, source=source or None)
+        client.close()
+
+        if not matches:
+            return "No matching log pattern found in ontology."
+
+        results = []
+        for m in matches:
+            entry = {
+                "pattern": m.get("pattern"),
+                "meaning": m.get("meaning"),
+                "is_benign": m.get("is_benign", False),
+                "does_NOT_mean": m.get("does_not_mean", []),
+                "actual_implication": m.get("actual_implication", ""),
+                "is_root_cause": m.get("is_root_cause"),
+            }
+            results.append(entry)
+
+        return _json.dumps(results, indent=2, default=str)
+    except ImportError:
+        return "ERROR: network_ontology package not installed."
+    except Exception as e:
+        return f"ERROR: Log interpretation failed: {e}"
+
+
+async def check_component_health(component: str) -> str:
+    """Look up the health check protocol for a component from the ontology,
+    then explain what probes to run and how to interpret results.
+
+    Use this to resolve ambiguity: when symptoms could point to multiple
+    failure modes, a health check on a suspected component determines
+    whether it is the root cause or an innocent bystander.
+
+    Example: ran_ue=0 could mean "gNB is down" OR "AMF crashed."
+    Health-checking AMF resolves this — if AMF is healthy, the problem
+    is upstream at the gNB.
+
+    Args:
+        component: Component name (e.g. "amf", "upf", "pcscf", "nr_gnb", "pyhss").
+
+    Returns:
+        Health check protocol with probes (ordered cheapest-first),
+        healthy/degraded/down criteria, and disambiguation guidance.
+    """
+    import json as _json
+
+    try:
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        hc = client.get_healthcheck(component)
+        client.close()
+
+        if not hc:
+            return f"No health check defined for component '{component}'."
+
+        return _json.dumps(hc, indent=2, default=str)
+    except ImportError:
+        return "ERROR: network_ontology package not installed."
+    except Exception as e:
+        return f"ERROR: Health check query failed: {e}"
+
+
+async def get_causal_chain(component: str) -> str:
+    """Get the pre-computed causal failure chain for a component.
+
+    Returns what happens when this component fails: immediate effects on
+    connected interfaces, cascading effects on downstream components,
+    observable symptoms at each node, and common misinterpretations to avoid.
+
+    Args:
+        component: Component name (e.g. "nr_gnb", "upf", "pcscf", "scscf").
+
+    Returns:
+        Complete causal chain with symptoms, does_NOT_mean warnings, and
+        diagnostic actions.
+    """
+    import json as _json
+
+    try:
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        chains = client.get_causal_chain_for_component(component)
+        client.close()
+
+        if not chains:
+            return f"No causal chain found for component '{component}'."
+
+        return _json.dumps(chains, indent=2, default=str)
+    except ImportError:
+        return "ERROR: network_ontology package not installed."
+    except Exception as e:
+        return f"ERROR: Causal chain query failed: {e}"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 from google.adk.agents import LlmAgent
+from .. import tools
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "synthesis.md"
 
@@ -14,5 +15,10 @@ def create_synthesis_agent() -> LlmAgent:
         instruction=_PROMPT_PATH.read_text(),
         description="Synthesizes all findings into a final diagnosis for a NOC engineer.",
         output_key="diagnosis",
-        tools=[],
+        tools=[
+            tools.query_ontology,
+            tools.interpret_log_message,
+            tools.get_causal_chain,
+            tools.check_component_health,
+        ],
     )

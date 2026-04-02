@@ -231,26 +231,46 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     # Notable log lines omitted from report — they contain stale logs
     # from previous runs and are not useful for diagnosis evaluation.
 
-    # Ontology Analysis (Phase 0.5) — v5 only
+    # Pipeline intermediate state — v5 6-phase pipeline
     challenge = episode.get("challenge_result", {})
+
+    pattern_match = challenge.get("pattern_match", "")
+    if pattern_match:
+        lines.append("## Pattern Match (Phase 2)")
+        lines.append("")
+        lines.append(f"```")
+        lines.append(str(pattern_match)[:500])
+        lines.append(f"```")
+        lines.append("")
+
+    anomaly_analysis = challenge.get("anomaly_analysis", "")
+    if anomaly_analysis and "Skipped" not in str(anomaly_analysis):
+        lines.append("## Anomaly Analysis (Phase 3)")
+        lines.append("")
+        lines.append(f"> {str(anomaly_analysis)[:500]}")
+        lines.append("")
+    elif anomaly_analysis:
+        lines.append(f"## Anomaly Analysis (Phase 3)")
+        lines.append("")
+        lines.append(f"*{anomaly_analysis}*")
+        lines.append("")
+
+    investigation_instruction = challenge.get("investigation_instruction", "")
+    if investigation_instruction:
+        lines.append("## Investigation Instruction (Phase 4)")
+        lines.append("")
+        lines.append(f"> {str(investigation_instruction)[:500]}")
+        lines.append("")
+
+    # Legacy support: ontology_diagnosis from older v5 runs
     ontology_diag = challenge.get("ontology_diagnosis", "")
-    investigation_plan = challenge.get("investigation_plan", {})
-    if ontology_diag:
-        lines.append("## Ontology Analysis (Phase 0.5)")
+    if ontology_diag and not pattern_match:
+        lines.append("## Ontology Analysis")
         lines.append("")
         lines.append(f"```")
         lines.append(ontology_diag)
         lines.append(f"```")
         lines.append("")
-        if investigation_plan:
-            mandate = investigation_plan.get("mandate", "")
-            focus = investigation_plan.get("focus_domain", "unknown")
-            confidence = investigation_plan.get("confidence", "low")
-            lines.append(f"**Focus domain:** {focus}  ")
-            lines.append(f"**Confidence:** {confidence}  ")
-            if mandate:
-                lines.append(f"**Mandate to investigator:** {mandate[:300]}")
-            lines.append("")
 
     # Ground truth
     lines.append("## Ground Truth")

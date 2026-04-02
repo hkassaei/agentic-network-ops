@@ -109,6 +109,163 @@ def create_chaos_director(
     )
 
 
+# -------------------------------------------------------------------------
+# Pre-check: verify stack health before starting a scenario
+# -------------------------------------------------------------------------
+
+# Critical metrics that must be at expected values for a healthy stack.
+# Covers 5G attachment AND IMS registration — both must be healthy.
+_HEALTH_CHECKS = {
+    "ran_ue": {"expected": 2.0, "source": "amf", "description": "Connected UEs at AMF"},
+    "gnb": {"expected": 1.0, "source": "amf", "description": "Connected gNBs at AMF"},
+    "amf_session": {"expected": 4.0, "source": "amf", "description": "AMF sessions (2 UEs x 2 PDU)"},
+    "fivegs_smffunction_sm_sessionnbr": {"expected": 4.0, "source": "smf", "description": "SMF PDU sessions"},
+    "ims_usrloc_pcscf:registered_contacts": {"expected": 2.0, "source": "pcscf", "description": "UEs registered at P-CSCF"},
+    "ims_usrloc_scscf:active_contacts": {"expected": 2.0, "source": "scscf", "description": "Active contacts at S-CSCF"},
+}
+
+
+async def _collect_health_metrics() -> dict[str, float]:
+    """Collect key health metrics from the live network."""
+    from .tools.observation_tools import snapshot_metrics
+    all_metrics = await snapshot_metrics()
+
+    # Extract the specific metrics we care about, from the right source
+    health: dict[str, float] = {}
+    for key, check in _HEALTH_CHECKS.items():
+        source = check["source"]
+        source_metrics = all_metrics.get(source, {}).get("metrics", {})
+        if key in source_metrics:
+            health[key] = source_metrics[key]
+    return health
+
+
+async def _auto_heal_stack() -> bool:
+    """Attempt to auto-heal the stack by redeploying UEs."""
+    import asyncio
+    import subprocess
+
+    log.info("Auto-heal: redeploying UEs...")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", "scripts/deploy-ues.sh",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(_get_repo_root()),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+
+        if proc.returncode == 0:
+            log.info("Auto-heal: UEs redeployed successfully")
+            # Wait for UEs to attach to 5G and register with IMS
+            # IMS registration can take up to 60s (Kamailio timers + Diameter auth)
+            log.info("Auto-heal: waiting 60s for 5G attachment + IMS registration...")
+            await asyncio.sleep(60)
+            return True
+        else:
+            log.error("Auto-heal: deploy-ues.sh failed (exit %d): %s",
+                      proc.returncode, stderr.decode(errors="replace")[-200:])
+            return False
+    except asyncio.TimeoutError:
+        log.error("Auto-heal: deploy-ues.sh timed out after 180s")
+        return False
+    except Exception as e:
+        log.error("Auto-heal failed: %s", e)
+        return False
+
+
+def _get_repo_root():
+    """Get the repo root path."""
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1]
+
+
+async def _pre_check_stack_health() -> bool:
+    """Verify the stack is healthy before starting a chaos scenario.
+
+    Compares live metrics against expected baselines. If unhealthy,
+    prompts the user for auto-heal or manual cleanup.
+    """
+    log.info("Pre-check: verifying stack health...")
+
+    health = await _collect_health_metrics()
+    if not health:
+        log.warning("Pre-check: could not collect health metrics — proceeding anyway")
+        return True
+
+    # Check each metric against expected
+    failures: list[str] = []
+    for metric, check in _HEALTH_CHECKS.items():
+        actual = health.get(metric)
+        expected = check["expected"]
+        if actual is None:
+            failures.append(f"  {metric}: MISSING (expected {expected}) — {check['description']}")
+        elif actual != expected:
+            failures.append(f"  {metric}: {actual} (expected {expected}) — {check['description']}")
+
+    if not failures:
+        log.info("Pre-check: stack is healthy ✓")
+        return True
+
+    # Stack is unhealthy — report and prompt
+    print()
+    print("=" * 60)
+    print("  STACK HEALTH CHECK FAILED")
+    print("=" * 60)
+    print()
+    print("The following metrics are not at expected values:")
+    for f in failures:
+        print(f)
+    print()
+    print("This means the stack has residual issues from a previous test.")
+    print("Running a scenario on an unhealthy stack will produce unreliable results.")
+    print()
+    print("Options:")
+    print("  [a] Auto-heal: redeploy UEs and wait for registration")
+    print("  [s] Skip: proceed anyway (results may be unreliable)")
+    print("  [q] Quit: abort the scenario")
+    print()
+
+    while True:
+        try:
+            choice = input("Choose [a/s/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+
+        if choice == "a":
+            healed = await _auto_heal_stack()
+            if healed:
+                # Re-check after healing
+                health2 = await _collect_health_metrics()
+                still_bad = []
+                for metric, check in _HEALTH_CHECKS.items():
+                    actual = health2.get(metric)
+                    if actual != check["expected"]:
+                        still_bad.append(f"  {metric}: {actual} (expected {check['expected']})")
+                if still_bad:
+                    print()
+                    print("Auto-heal completed but some metrics are still unhealthy:")
+                    for f in still_bad:
+                        print(f)
+                    print()
+                    continue  # Ask again
+                else:
+                    log.info("Pre-check: stack is healthy after auto-heal ✓")
+                    return True
+            else:
+                print("Auto-heal failed. Choose another option.")
+                continue
+
+        elif choice == "s":
+            log.warning("Pre-check: proceeding with unhealthy stack (user chose skip)")
+            return True
+
+        elif choice == "q":
+            log.info("Pre-check: scenario aborted by user")
+            return False
+
+
 async def run_scenario(
     scenario: Scenario,
     registry: FaultRegistry | None = None,
@@ -139,6 +296,11 @@ async def run_scenario(
         log.warning("Found %d active faults from a previous run — healing before starting", len(active))
         healed = await reg.heal_all(method="pre_run_cleanup")
         log.info("Pre-run cleanup: healed %d faults", healed)
+
+    # Pre-check: verify the stack is healthy before starting
+    health_ok = await _pre_check_stack_health()
+    if not health_ok:
+        return {"error": "Stack health check failed — episode aborted"}
 
     # Generate episode ID
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

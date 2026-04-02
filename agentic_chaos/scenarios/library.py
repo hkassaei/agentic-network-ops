@@ -103,14 +103,21 @@ scscf_crash = Scenario(
 hss_unresponsive = Scenario(
     name="HSS Unresponsive",
     description=(
-        "Pause PyHSS (freeze all processes). The HSS is still 'running' from "
-        "Docker's perspective but cannot process Diameter requests. Tests "
-        "how the I-CSCF and S-CSCF handle a hung Diameter peer."
+        "Inject 60-second outbound delay on the HSS (PyHSS). The HSS container "
+        "is running, the process is alive, and the IP is reachable — but all "
+        "Diameter responses are delayed by 60 seconds, far exceeding the Cx "
+        "Diameter timeout. Tests how the I-CSCF and S-CSCF handle a Diameter "
+        "peer that accepts connections but never responds in time."
     ),
-    category=FaultCategory.CONTAINER,
+    category=FaultCategory.NETWORK,
     blast_radius=BlastRadius.SINGLE_NF,
     faults=[
-        FaultSpec(fault_type="container_pause", target="pyhss", ttl_seconds=300),
+        FaultSpec(
+            fault_type="network_latency",
+            target="pyhss",
+            params={"delay_ms": 60000, "jitter_ms": 0},
+            ttl_seconds=300,
+        ),
     ],
     expected_symptoms=[
         "Diameter UAR/UAA timeout at I-CSCF",

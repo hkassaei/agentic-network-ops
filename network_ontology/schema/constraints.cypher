@@ -44,6 +44,10 @@ CREATE CONSTRAINT stack_rule_id IF NOT EXISTS
 CREATE CONSTRAINT healthcheck_id IF NOT EXISTS
   FOR (hc:HealthCheck) REQUIRE hc.id IS UNIQUE;
 
+// Subsystems: mereological grouping of components
+CREATE CONSTRAINT subsystem_name IF NOT EXISTS
+  FOR (sub:Subsystem) REQUIRE sub.name IS UNIQUE;
+
 // Protocols
 CREATE CONSTRAINT protocol_name IF NOT EXISTS
   FOR (p:Protocol) REQUIRE p.name IS UNIQUE;
@@ -54,6 +58,12 @@ CREATE CONSTRAINT protocol_name IF NOT EXISTS
 
 CREATE INDEX component_layer IF NOT EXISTS
   FOR (c:Component) ON (c.layer);
+
+CREATE INDEX component_subsystem IF NOT EXISTS
+  FOR (c:Component) ON (c.subsystem);
+
+CREATE INDEX component_diagnostic IF NOT EXISTS
+  FOR (c:Component) ON (c.diagnostic);
 
 CREATE INDEX symptom_metric IF NOT EXISTS
   FOR (s:Symptom) ON (s.metric);

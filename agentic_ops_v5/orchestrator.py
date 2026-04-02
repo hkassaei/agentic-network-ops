@@ -1,14 +1,17 @@
 """
-Investigation Director v5 — Deterministic Backbone & Lean Investigation.
+Investigation Director v5 — 6-Phase Agent Pipeline.
 
 Pipeline:
-  Phase 0:   TriageAgent (LLM)          → state["triage"]
-  Phase 0.5: OntologyAnalysis (Python)   → state["ontology_diagnosis"], state["investigation_plan"]
-  Phase 1:   InvestigatorAgent (LLM)     → state["investigation"]
-  Phase 2:   SynthesisAgent (LLM)        → state["diagnosis"]
+  Phase 1: TriageAgent (LLM)              → Collects metrics, topology, health
+  Phase 2: PatternMatcherAgent (BaseAgent) → Deterministic signature matching
+  Phase 3: AnomalyDetectorAgent (LLM)     → Ontology-guided anomaly analysis (optional)
+  Phase 4: InstructionGeneratorAgent (LLM) → Synthesizes investigator instruction
+  Phase 5: InvestigatorAgent (LLM)         → Verifies hypothesis with tools + OntologyConsultation
+  Phase 6: SynthesisAgent (LLM)            → NOC-ready diagnosis
 
-The key innovation: Phase 0.5 runs as pure Python code — no LLM involved.
-The ontology diagnoses the failure deterministically, then the LLM verifies.
+The orchestrator is pure workflow plumbing — every agent is invoked via
+_run_phase() with session isolation. The only logic in the orchestrator
+is the skip decision for Phase 3.
 
 Usage:
     from agentic_ops_v5.orchestrator import investigate
@@ -27,14 +30,12 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from .agents.triage import create_triage_agent
-from .agents.investigator import create_investigator_agent
-from .agents.synthesis import create_synthesis_agent
-from .ontology_bridge import (
-    collect_observations,
-    run_deterministic_diagnosis,
-    format_ontology_for_prompt,
-)
+from .subagents.triage import create_triage_agent
+from .subagents.pattern_matcher import create_pattern_matcher
+from .subagents.anomaly_detector import create_anomaly_detector
+from .subagents.instruction_generator import create_instruction_generator
+from .subagents.investigator import create_investigator_agent
+from .subagents.synthesis import create_synthesis_agent
 from .models import (
     InvestigationTrace,
     PhaseTrace,
@@ -46,7 +47,7 @@ log = logging.getLogger("v5.orchestrator")
 
 
 # -------------------------------------------------------------------------
-# Session-per-phase execution (ported from v4, identical pattern)
+# Session-per-phase execution
 # -------------------------------------------------------------------------
 
 async def _run_phase(
@@ -183,13 +184,14 @@ async def _run_phase(
 # -------------------------------------------------------------------------
 
 async def investigate(question: str, on_event=None) -> dict:
-    """Run the v5 deterministic backbone investigation.
+    """Run the v5 6-phase investigation pipeline.
 
-    Pipeline:
-      Phase 0:   TriageAgent (LLM) — collects metrics and topology
-      Phase 0.5: OntologyAnalysis (Python) — deterministic diagnosis + short-circuit
-      Phase 1:   InvestigatorAgent (LLM) — verifies ontology hypothesis
-      Phase 2:   SynthesisAgent (LLM) — produces NOC-ready diagnosis
+    Phase 1: TriageAgent — collect metrics, topology, health
+    Phase 2: PatternMatcherAgent — deterministic signature matching
+    Phase 3: AnomalyDetectorAgent — ontology-guided analysis (optional)
+    Phase 4: InstructionGeneratorAgent — synthesize investigator instruction
+    Phase 5: InvestigatorAgent — verify hypothesis with tools
+    Phase 6: SynthesisAgent — NOC-ready diagnosis
     """
     session_service = InMemorySessionService()
     state: dict[str, Any] = {"user_question": question}
@@ -200,7 +202,7 @@ async def investigate(question: str, on_event=None) -> dict:
     log.info("Starting v5 investigation: %s", question[:100])
 
     # =================================================================
-    # Phase 0: Triage (LLM) — collect metrics, topology, health
+    # Phase 1: Triage (LLM)
     # =================================================================
     state, traces = await _run_phase(
         create_triage_agent(), state, question, session_service, on_event)
@@ -208,70 +210,66 @@ async def investigate(question: str, on_event=None) -> dict:
     invocation_order.extend(t.agent_name for t in traces)
 
     # =================================================================
-    # Phase 0.5: Deterministic Ontology Analysis (Python, NOT LLM)
+    # Phase 2: Pattern Matcher (deterministic BaseAgent)
     # =================================================================
-    phase05_start = time.time()
+    state, traces = await _run_phase(
+        create_pattern_matcher(), state, question, session_service, on_event)
+    all_phases.extend(traces)
+    invocation_order.extend(t.agent_name for t in traces)
 
-    if on_event:
-        try:
-            await on_event({"type": "phase_start", "agent": "OntologyAnalysis"})
-        except Exception:
-            pass
-
-    # Collect structured observations directly from tools (not from triage text)
+    # =================================================================
+    # Phase 3: Anomaly Detector (LLM, optional)
+    # Skip if Pattern Matcher found a high-confidence match
+    # =================================================================
+    pattern_match_raw = state.get("pattern_match", "{}")
     try:
-        observations = await collect_observations()
-    except Exception as e:
-        log.warning("Direct observation collection failed: %s — using triage text", e)
-        observations = None
+        pattern_match = json.loads(pattern_match_raw) if isinstance(pattern_match_raw, str) else pattern_match_raw
+    except (json.JSONDecodeError, TypeError):
+        pattern_match = {}
 
-    # Run deterministic diagnosis
-    ontology_result, investigation_plan = await run_deterministic_diagnosis(
-        triage_text=state.get("triage", ""),
-        observations=observations,
-    )
+    confidence = pattern_match.get("confidence", "low")
 
-    # Inject into state as established facts for downstream agents
-    state["ontology_diagnosis"] = format_ontology_for_prompt(ontology_result)
-    state["investigation_mandate"] = investigation_plan["mandate"]
-    state["suggested_tools"] = ", ".join(investigation_plan.get("suggested_tools", []))
-    state["investigation_plan"] = investigation_plan
-
-    # Log what the ontology found
-    log.info("  Ontology diagnosis: %s (confidence: %s, domain: %s)",
-             ontology_result.get("top_diagnosis", "?"),
-             ontology_result.get("confidence", "?"),
-             investigation_plan.get("focus_domain", "?"))
-
-    if on_event:
+    if confidence in ("very_high", "high"):
+        log.info("  Phase 3 skipped — high-confidence pattern match (%s)", confidence)
+        state["anomaly_analysis"] = (
+            f"Skipped — Pattern Matcher found high-confidence match: "
+            f"{pattern_match.get('top_diagnosis', '?')} ({confidence})"
+        )
+        if on_event:
+            try:
+                await on_event({
+                    "type": "phase_skip", "agent": "AnomalyDetectorAgent",
+                    "reason": f"High-confidence pattern match ({confidence})",
+                })
+            except Exception:
+                pass
+    else:
         try:
-            await on_event({
-                "type": "text", "agent": "OntologyAnalysis",
-                "content": (
-                    f"Diagnosis: {ontology_result.get('top_diagnosis', 'No match')} "
-                    f"(confidence: {ontology_result.get('confidence', 'low')})\n"
-                    f"Focus: {investigation_plan.get('focus_domain', 'unknown')}"
-                ),
-            })
-        except Exception:
-            pass
-
-    # Create PhaseTrace for Phase 0.5 (no tokens — pure Python)
-    phase05_trace = PhaseTrace(
-        agent_name="OntologyAnalysis",
-        started_at=phase05_start,
-        finished_at=time.time(),
-        duration_ms=int((time.time() - phase05_start) * 1000),
-        tokens=TokenBreakdown(),  # Zero tokens — no LLM
-        llm_calls=0,
-        output_summary=f"{ontology_result.get('top_diagnosis', 'No match')} ({ontology_result.get('confidence', 'low')})",
-        state_keys_written=["ontology_diagnosis", "investigation_mandate", "suggested_tools", "investigation_plan"],
-    )
-    all_phases.append(phase05_trace)
-    invocation_order.append("OntologyAnalysis")
+            state, traces = await _run_phase(
+                create_anomaly_detector(), state, question, session_service, on_event)
+            all_phases.extend(traces)
+            invocation_order.extend(t.agent_name for t in traces)
+        except Exception as e:
+            log.error("AnomalyDetectorAgent failed: %s", e)
+            state["anomaly_analysis"] = f"Anomaly detection failed: {e}"
 
     # =================================================================
-    # Phase 1: Investigator (LLM) — verify ontology hypothesis
+    # Phase 4: Instruction Generator (LLM)
+    # =================================================================
+    try:
+        state, traces = await _run_phase(
+            create_instruction_generator(), state, question, session_service, on_event)
+        all_phases.extend(traces)
+        invocation_order.extend(t.agent_name for t in traces)
+    except Exception as e:
+        log.error("InstructionGeneratorAgent failed: %s", e)
+        state["investigation_instruction"] = (
+            "Instruction generation failed. Perform a full bottom-up investigation: "
+            "transport first, then core, then application. Cite tool outputs."
+        )
+
+    # =================================================================
+    # Phase 5: Investigator (LLM)
     # =================================================================
     try:
         state, traces = await _run_phase(
@@ -281,15 +279,9 @@ async def investigate(question: str, on_event=None) -> dict:
     except Exception as e:
         log.error("InvestigatorAgent failed: %s", e)
         state["investigation"] = f"Investigation failed: {e}"
-        if on_event:
-            try:
-                await on_event({"type": "text", "agent": "InvestigatorAgent",
-                                "content": f"ERROR: {e}"})
-            except Exception:
-                pass
 
     # =================================================================
-    # Phase 2: Synthesis (LLM) — produce final diagnosis
+    # Phase 6: Synthesis (LLM)
     # =================================================================
     try:
         state, traces = await _run_phase(
@@ -298,14 +290,7 @@ async def investigate(question: str, on_event=None) -> dict:
         invocation_order.extend(t.agent_name for t in traces)
     except Exception as e:
         log.error("SynthesisAgent failed: %s", e)
-        # Fall back: use investigator output as diagnosis
         state["diagnosis"] = state.get("investigation", f"Synthesis failed: {e}")
-        if on_event:
-            try:
-                await on_event({"type": "text", "agent": "SynthesisAgent",
-                                "content": f"ERROR: {e}. Using investigator output as diagnosis."})
-            except Exception:
-                pass
 
     # =================================================================
     # Build investigation trace
@@ -331,7 +316,7 @@ async def investigate(question: str, on_event=None) -> dict:
     log.info("Investigation trace: %d phases, %d total tokens, %d ms",
              len(all_phases), total_breakdown.total, trace_obj.duration_ms)
     for p in all_phases:
-        log.info("  %-25s %6d ms  %7d tokens  %d tool calls  %d LLM calls",
+        log.info("  %-30s %6d ms  %7d tokens  %d tool calls  %d LLM calls",
                  p.agent_name, p.duration_ms, p.tokens.total,
                  len(p.tool_calls), p.llm_calls)
 
@@ -340,8 +325,9 @@ async def investigate(question: str, on_event=None) -> dict:
     # =================================================================
     result = {
         "triage": state.get("triage"),
-        "ontology_diagnosis": state.get("ontology_diagnosis"),
-        "investigation_plan": state.get("investigation_plan"),
+        "pattern_match": state.get("pattern_match"),
+        "anomaly_analysis": state.get("anomaly_analysis"),
+        "investigation_instruction": state.get("investigation_instruction"),
         "investigation": state.get("investigation"),
         "diagnosis": state.get("diagnosis"),
         "events": [f"[{p.agent_name}] {p.output_summary}" for p in all_phases if p.output_summary],

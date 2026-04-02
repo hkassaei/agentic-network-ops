@@ -1,19 +1,27 @@
-"""Phase 1: Investigator Agent — unified, mandate-driven verification."""
+"""Phase 3: Investigator Agent — unified, mandate-driven verification.
+
+Uses AgentTool to wrap the OntologyConsultationAgent, allowing the
+investigator to consult the ontology for follow-up queries mid-investigation.
+"""
 
 from __future__ import annotations
 from pathlib import Path
 from google.adk.agents import LlmAgent
+from google.adk.tools import AgentTool
 from .. import tools
+from .ontology_consultation import create_ontology_consultation_agent
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "investigator.md"
 
 
 def create_investigator_agent() -> LlmAgent:
-    """Create the unified InvestigatorAgent with ALL diagnostic tools.
+    """Create the unified InvestigatorAgent.
 
-    The agent's behavior is steered by the ontology mandate injected into
-    its prompt context via state placeholders, not by tool filtering.
+    The agent has all network diagnostic tools plus the OntologyConsultationAgent
+    as an AgentTool for follow-up ontology queries during investigation.
     """
+    ontology_agent = create_ontology_consultation_agent()
+
     return LlmAgent(
         name="InvestigatorAgent",
         model="gemini-2.5-pro",
@@ -38,9 +46,7 @@ def create_investigator_agent() -> LlmAgent:
             tools.read_env_config,
             # Subscriber data
             tools.query_subscriber,
-            # Ontology reference (for consulting during investigation)
-            tools.interpret_log_message,
-            tools.check_component_health,
-            tools.get_causal_chain,
+            # Ontology consultation (sub-agent for follow-up queries)
+            AgentTool(ontology_agent, skip_summarization=True),
         ],
     )

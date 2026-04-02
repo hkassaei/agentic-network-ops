@@ -1,0 +1,32 @@
+"""v5 tools — split by purpose, re-exported here for backward compatibility."""
+
+# Network diagnostic tools
+from .topology import get_network_topology
+from .metrics import get_nf_metrics, query_prometheus
+from .container_status import get_network_status
+from .log_search import read_container_logs, search_logs
+from .reachability import measure_rtt, check_process_listeners, check_tc_rules
+from .config_inspection import read_config, read_running_config, read_env_config
+from .kamailio_state import run_kamcmd
+from .subscriber_lookup import query_subscriber
+
+# Ontology tools
+from .symptom_matching import match_symptoms, check_stack_rules, compare_to_baseline
+from .log_interpretation import interpret_log_message
+from .health_checks import check_component_health, get_disambiguation
+from .causal_reasoning import get_causal_chain, get_causal_chain_for_component
+
+__all__ = [
+    "get_network_topology",
+    "get_nf_metrics", "query_prometheus",
+    "get_network_status",
+    "read_container_logs", "search_logs",
+    "measure_rtt", "check_process_listeners", "check_tc_rules",
+    "read_config", "read_running_config", "read_env_config",
+    "run_kamcmd",
+    "query_subscriber",
+    "match_symptoms", "check_stack_rules", "compare_to_baseline",
+    "interpret_log_message",
+    "check_component_health", "get_disambiguation",
+    "get_causal_chain", "get_causal_chain_for_component",
+]

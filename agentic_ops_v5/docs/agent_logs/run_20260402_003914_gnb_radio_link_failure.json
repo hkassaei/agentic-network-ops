@@ -1,0 +1,496 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260402_003735_gnb_radio_link_failure",
+  "timestamp": "2026-04-02T00:37:35.798886+00:00",
+  "duration_seconds": 98.016847,
+  "scenario": {
+    "name": "gNB Radio Link Failure",
+    "description": "Kill the gNB to simulate a radio link failure. All UEs lose 5G registration, PDU sessions drop, and IMS SIP unregisters.",
+    "category": "container",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "container_kill",
+        "target": "nr_gnb",
+        "params": {},
+        "ttl_seconds": 300
+      }
+    ],
+    "expected_symptoms": [
+      "UEs lose RAN connection",
+      "PDU sessions dropped",
+      "SIP REGISTER expires without renewal",
+      "gNB disappears from AMF"
+    ],
+    "escalation": false,
+    "challenge_mode": true,
+    "requires_active_call": false,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 300
+  },
+  "baseline": {
+    "timestamp": "2026-04-02T00:37:35.798886+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 314.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 8.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 9.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 9.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 8.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 8.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 7398.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 7399.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_impus": 2.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 2.0,
+          "script:register_time": 682.0,
+          "sl:1xx_replies": 4.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 108.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 2.0,
+          "cdp:replies_response_time": 216.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 108.0,
+          "ims_icscf:uar_replies_received": 2.0,
+          "ims_icscf:uar_replies_response_time": 216.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "4 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 103.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 415.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 126.0,
+          "ims_auth:mar_replies_received": 2.0,
+          "ims_auth:mar_replies_response_time": 253.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 2.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 81.0,
+          "ims_registrar_scscf:sar_replies_received": 2.0,
+          "ims_registrar_scscf:sar_replies_response_time": 162.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 0.0,
+          "ims_usrloc_scscf:active_impus": 0.0,
+          "ims_usrloc_scscf:active_subscriptions": 0.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 regs",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_626f89db",
+      "fault_type": "container_kill",
+      "target": "nr_gnb",
+      "params": {},
+      "mechanism": "docker kill nr_gnb",
+      "heal_command": "docker start nr_gnb",
+      "injected_at": "2026-04-02T00:37:35.799582+00:00",
+      "ttl_seconds": 300,
+      "expires_at": "2026-04-02T00:42:35.799582+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "Expected 'exited', got 'exited'"
+    }
+  ],
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-04-02T00:37:36.230129+00:00",
+      "elapsed_seconds": 0.431243,
+      "metrics_delta": {},
+      "log_samples": {
+        "amf": [
+          "\u001b[32m04/01 20:37:35.882\u001b[0m: [\u001b[33mamf\u001b[0m] \u001b[1;32mINFO\u001b[0m: gNB-N2[172.22.0.23] connection refused!!! (../src/amf/amf-sm.c:997)"
+        ],
+        "icscf": [
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1064]: peer_connect(): Error opening connection to to 172.22.0.18 port 3875 proto  >No route to host",
+          "\u001b[0;39;49m\u001b[0;31;49m26(76) ERROR: cdp [receiver.c:1383]: receive_message(): [hss.ims.mnc001.mcc001.3gppnetwork.org] Received msg while peer in state 0 -ignored",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress"
+        ],
+        "scscf": [
+          "\u001b[0;39;49m\u001b[0;39;49m 5(44) DEBUG: ims_usrloc_scscf [ims_usrloc_scscf_mod.c:500]: timer(): Syncing cache"
+        ],
+        "nr_gnb": [
+          "[2026-04-01 17:20:48.509] [rls] [\u001b[36mdebug\u001b[m] UE[11] signal lost",
+          "[2026-04-01 19:13:19.975] [rls] [\u001b[36mdebug\u001b[m] UE[12] signal lost",
+          "[2026-04-01 19:22:38.128] [rls] [\u001b[36mdebug\u001b[m] UE[12] signal lost",
+          "[2026-04-01 20:24:58.570] [rls] [\u001b[36mdebug\u001b[m] UE[13] signal lost",
+          "[2026-04-01 20:24:58.573] [rls] [\u001b[36mdebug\u001b[m] UE[14] signal lost",
+          "[2026-04-01 20:34:15.652] [rls] [\u001b[36mdebug\u001b[m] UE[14] signal lost"
+        ],
+        "e2e_ue1": [
+          "20:37:36.799      tsx0x70bee0009398  ..Failed to send Request msg REGISTER/cseq=11359 (tdta0x70bee00073d8)! err=120101 (Network is unreachable)",
+          "20:37:36.799            pjsua_acc.c  ....SIP registration failed, status=503 (Network is unreachable)",
+          "20:37:36.799              sip_reg.c  .Error sending request: Network is unreachable"
+        ],
+        "e2e_ue2": [
+          "20:34:49.847      tsx0x77bb58009288  ..Failed to send Request msg REGISTER/cseq=30751 (tdta0x77bb580072c8)! err=120101 (Network is unreachable)",
+          "20:34:49.847            pjsua_acc.c  ....SIP registration failed, status=503 (Network is unreachable)",
+          "20:34:49.847              sip_reg.c  .Error sending request: Network is unreachable"
+        ]
+      },
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-04-02T00:39:13.815733+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 0.0,
+          "gnb": 0.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 314.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 8.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 9.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 9.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 8.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 8.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 7417.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 7418.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_impus": 2.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 2.0,
+          "script:register_time": 682.0,
+          "sl:1xx_replies": 4.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 108.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 2.0,
+          "cdp:replies_response_time": 216.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 108.0,
+          "ims_icscf:uar_replies_received": 2.0,
+          "ims_icscf:uar_replies_response_time": 216.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "4 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 103.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 415.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 126.0,
+          "ims_auth:mar_replies_received": 2.0,
+          "ims_auth:mar_replies_response_time": 253.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 2.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 81.0,
+          "ims_registrar_scscf:sar_replies_received": 2.0,
+          "ims_registrar_scscf:sar_replies_response_time": 162.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 0.0,
+          "ims_usrloc_scscf:active_impus": 0.0,
+          "ims_usrloc_scscf:active_subscriptions": 0.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 regs",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 98.016151,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Kill the gNB to simulate a radio link failure. All UEs lose 5G registration, PDU sessions drop, and IMS SIP unregisters.",
+    "affected_components": [
+      "nr_gnb"
+    ],
+    "severity": "degraded",
+    "failure_domain": "data_plane",
+    "protocol_impact": "GTP-U"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v5-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: The Radio Access Network (RAN), specifically the gNodeB (gNB), is unreachable from the 5G core, resulting in a complete loss of radio access for all UEs.\n- **timeline**:\n    1.  The transport layer link between the AMF and the gNB at IP `172.22.0.23` failed.\n    2.  The AMF lost its N2 (NGAP/SCTP) connection to the gNB, causing its `gnb` metric to drop to 0.\n    3.  Without a path to the core, all UEs disconnected, causing the AMF's `ran_ue` metric to drop to 0.\n    4.  Consequently, PDU sessions were lost, and UEs were unable to register with the IMS, leading to IMS registration failures and the expiration of existing contacts.\n- **root_cause**: A definitive transport layer failure has isolated the gNB from the AMF. The investigator confirmed the `very_high` confidence diagnosis from the pattern matcher by proving the gNB is unreachable at the IP layer.\n    - **[EVIDENCE: measure_rtt(container = \"amf\", target_ip = \"172.22.0.23\") -> \"100% packet loss\"]**\n    - The impact of this transport failure is visible in the AMF's key metrics, which show zero connected RAN nodes or UEs.\n    - **[EVIDENCE: get_nf_metrics() -> \"gnb = 0.0\", \"ran_ue = 0.0\"]**\n- **affected_components**:\n    - **Primary**: gNB (unreachable), AMF (cannot connect to gNB)\n    - **Secondary**: All UEs (no access), SMF/UPF (stale sessions, no traffic), entire IMS Stack (no registered users)\n- **recommendation**: **Do not investigate the 5G core or IMS components.** The issue is external to the core network containers. The NOC must investigate the network path to the RAN. Check for:\n    1.  The operational status of the gNB hardware/software at IP `172.22.0.23`.\n    2.  Physical connectivity (e.g., fiber, cabling) between the core and RAN sites.\n    3.  Intermediate network device health (switches, routers) and firewall rules that may be blocking SCTP or ICMP traffic between the AMF and the gNB.\n- **confidence**: high\n- **explanation**: The investigation confirmed the initial hypothesis of a RAN failure. Evidence shows the AMF cannot reach the gNB at a basic IP level, indicated by 100% packet loss. This transport failure is the root cause of the outage. As a result, the AMF correctly reports zero connected gNBs and UEs. All observed issues in the IMS system, such as zero registered contacts and high connection failures at the P-CSCF, are symptoms of the fact that no UEs can connect to the network in the first place. The core network and IMS are functioning but have no users to serve.",
+    "score": {
+      "root_cause_correct": true,
+      "root_cause_rationale": "The agent correctly identified the gNB being unreachable due to a transport layer failure as the root cause, which directly corresponds to the simulated 'gNB Radio Link Failure' and 'Component completely unreachable'. The diagnosis is semantically equivalent and well-supported by evidence.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent explicitly named 'gNB (unreachable)' as the primary affected component, which is the exact component targeted by the simulation. It also correctly identified the AMF as directly affected and other components as secondary/cascading.",
+      "severity_correct": true,
+      "severity_rationale": "The agent's diagnosis of 'complete loss of radio access for all UEs' and '100% packet loss' to the gNB accurately reflects the 'Component completely unreachable' and 'All UEs lose 5G registration' severity of the simulated failure.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent identified the fault type as 'unreachable' and 'transport layer link failed' with '100% packet loss', which correctly describes the observable 'Component completely unreachable' fault type.",
+      "confidence_calibrated": true,
+      "confidence_rationale": "The agent stated 'high' confidence, which is well-calibrated given the accuracy of its diagnosis and the strong, direct evidence provided (100% packet loss to gNB IP, AMF metrics showing zero gNBs/UEs).",
+      "ranking_position": 1,
+      "ranking_rationale": "The agent provided a single, clear root cause, which was correct.",
+      "total_score": 1.0,
+      "summary": "The agent provided an excellent and highly accurate diagnosis, correctly identifying the gNB unreachability due to a transport layer failure as the root cause, supported by strong evidence, and with appropriate confidence."
+    },
+    "time_to_diagnosis_seconds": 89.1,
+    "token_usage": {
+      "input_tokens": 59407,
+      "output_tokens": 3691,
+      "thinking_tokens": 6232,
+      "total_tokens": 69330,
+      "per_phase": [
+        {
+          "agent": "TriageAgent",
+          "tokens": 13670,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "PatternMatcherAgent",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 6127,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "InvestigatorAgent",
+          "tokens": 41487,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 8046,
+          "tool_calls": 0,
+          "llm_calls": 1
+        }
+      ]
+    },
+    "ontology_diagnosis": "",
+    "investigation_plan": {}
+  }
+}

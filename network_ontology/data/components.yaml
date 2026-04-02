@@ -1,195 +1,366 @@
 # =============================================================================
-# Network Ontology — Component Model
+# Network Ontology — Component Model (Static Structure)
 # =============================================================================
-# Source: gui/topology.py (_KNOWN_NF_TYPES), network/.env
+# This file contains ONLY static structural data — the 3GPP-defined components,
+# their roles, protocols, subsystem memberships, and use-case participation.
 #
-# Each component is a network function or infrastructure element in the
-# 5G SA + IMS Docker stack.
+# Deployment-specific data (IPs, ports, container names, UI positions) lives
+# in deployment.yaml and is loaded separately.
+#
+# Subsystems capture mereological (part-whole) relationships:
+#   "AMF is part of 5G Core Control Plane"
+#   "P-CSCF is part of IMS SIP Layer"
 
 components:
-  # --- Data Stores ---
+
+  # =========================================================================
+  # Infrastructure — Data stores, DNS
+  # =========================================================================
+
   mongo:
     label: MongoDB
-    layer: data
+    layer: infrastructure
     role: document-store
-    ip_env_key: MONGO_IP
-    ip: "172.22.0.2"
+    tgpp_role: "Not a 3GPP NF. Document database backend for UDR, PCF, BSF."
+    subsystem: Infrastructure
+    diagnostic: true
     protocols: [MongoDB]
-    description: "5G subscriber data store (UDR backend). Stores subscriber profiles, session state."
+    use_cases:
+      vonr: {enabled: true, note: "Stores subscriber profiles accessed by UDR for 5G registration and session setup"}
+    description: "5G subscriber data store (UDR backend). Stores subscriber profiles, session state, and policy data."
 
   mysql:
     label: MySQL
-    layer: data
+    layer: infrastructure
     role: relational-store
-    ip_env_key: MYSQL_IP
-    ip: "172.22.0.17"
+    tgpp_role: "Not a 3GPP NF. Relational database backend for Kamailio IMS components and PyHSS."
+    subsystem: Infrastructure
+    diagnostic: true
     protocols: [SQL]
-    description: "IMS subscriber data store (PyHSS and Kamailio backend)."
+    use_cases:
+      vonr: {enabled: true, note: "Stores IMS subscriber location data and Kamailio runtime state"}
+    description: "IMS subscriber data store. Backend for PyHSS and Kamailio CSCFs."
 
   dns:
     label: DNS
-    layer: data
+    layer: infrastructure
     role: name-resolution
-    ip_env_key: DNS_IP
-    ip: "172.22.0.15"
+    tgpp_role: "Not a 3GPP NF. DNS server providing NAPTR/SRV records for IMS SIP routing."
+    subsystem: Infrastructure
+    diagnostic: true
     protocols: [DNS]
-    description: "IMS DNS server. Provides NAPTR/SRV records for SIP routing within the IMS domain."
+    use_cases:
+      vonr: {enabled: true, note: "Provides IMS domain resolution for SIP routing (NAPTR/SRV)"}
+    description: "IMS DNS server. Provides domain resolution for SIP routing within the IMS domain."
 
-  # --- 5G Core Control Plane ---
+  webui:
+    label: WebUI
+    layer: infrastructure
+    role: web-management
+    tgpp_role: "Not a 3GPP NF. Open5GS web management interface."
+    subsystem: Infrastructure
+    diagnostic: false
+    protocols: [HTTP]
+    use_cases:
+      vonr: {enabled: false, note: "Management UI only — not in the signaling or data path"}
+    description: "Open5GS web management dashboard for subscriber provisioning."
+
+  # =========================================================================
+  # 5G Core — Control Plane
+  # =========================================================================
+
   nrf:
     label: NRF
     layer: core
     role: nf-discovery
-    ip_env_key: NRF_IP
-    ip: "172.22.0.12"
+    tgpp_role: "NF Repository Function (TS 23.501 clause 6.2.6). Service registry for 5G core NFs."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI]
-    description: "NF Repository Function. Service registry for 5G core NFs."
+    use_cases:
+      vonr: {enabled: true, note: "All NFs register here for service discovery via SBI"}
+    description: "NF Repository Function. Central service registry that all 5G core NFs register with."
 
   scp:
     label: SCP
     layer: core
     role: service-proxy
-    ip_env_key: SCP_IP
-    ip: "172.22.0.35"
+    tgpp_role: "Service Communication Proxy (TS 23.501 clause 6.2.18). Routes SBI messages between NFs."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI]
+    use_cases:
+      vonr: {enabled: true, note: "Routes inter-NF SBI communication for all 5G procedures"}
     description: "Service Communication Proxy. Routes SBI messages between NFs."
 
   ausf:
     label: AUSF
     layer: core
     role: authentication
-    ip_env_key: AUSF_IP
-    ip: "172.22.0.11"
+    tgpp_role: "Authentication Server Function (TS 23.501 clause 6.2.5). Handles 5G-AKA authentication."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI]
-    description: "Authentication Server Function. Handles 5G-AKA authentication."
+    use_cases:
+      vonr: {enabled: true, note: "Authenticates UEs during 5G registration (5G-AKA)"}
+    description: "Authentication Server Function. Handles 5G-AKA authentication for UE registration."
 
   udm:
     label: UDM
     layer: core
     role: data-management
-    ip_env_key: UDM_IP
-    ip: "172.22.0.13"
+    tgpp_role: "Unified Data Management (TS 23.501 clause 6.2.4). Manages subscriber data and auth credentials."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI]
+    use_cases:
+      vonr: {enabled: true, note: "Provides subscriber data and authentication vectors to AUSF"}
     description: "Unified Data Management. Manages subscriber data and authentication credentials."
 
   udr:
     label: UDR
     layer: core
     role: data-repository
-    ip_env_key: UDR_IP
-    ip: "172.22.0.14"
+    tgpp_role: "Unified Data Repository (TS 23.501 clause 6.2.7). Backend data access to subscriber store."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI]
-    description: "Unified Data Repository. Backend data access to MongoDB."
+    use_cases:
+      vonr: {enabled: true, note: "Data access layer between UDM/PCF and MongoDB"}
+    description: "Unified Data Repository. Provides data access to MongoDB for UDM and PCF."
 
   amf:
     label: AMF
     layer: core
     role: access-mobility
-    ip_env_key: AMF_IP
-    ip: "172.22.0.10"
+    tgpp_role: "Access and Mobility Management Function (TS 23.501 clause 6.2.1). Handles UE registration, mobility, NAS signaling."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI, NGAP]
-    metrics_port: 9091
+    use_cases:
+      vonr: {enabled: true, note: "Handles UE registration, mobility management, and NAS signaling for all services including VoNR"}
     description: "Access and Mobility Management Function. Handles UE registration, mobility, and NAS signaling."
 
   smf:
     label: SMF
     layer: core
     role: session-management
-    ip_env_key: SMF_IP
-    ip: "172.22.0.7"
+    tgpp_role: "Session Management Function (TS 23.501 clause 6.2.2). Manages PDU sessions and controls UPF via PFCP."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI, PFCP]
-    metrics_port: 9091
+    use_cases:
+      vonr: {enabled: true, note: "Establishes internet and IMS PDU sessions, controls UPF forwarding rules via PFCP"}
     description: "Session Management Function. Manages PDU sessions and controls the UPF via PFCP."
-
-  upf:
-    label: UPF
-    layer: core
-    role: user-plane-anchor
-    ip_env_key: UPF_IP
-    ip: "172.22.0.8"
-    protocols: [PFCP, GTP-U]
-    metrics_port: 9091
-    description: "User Plane Function. Forwards user data packets between gNB and external networks. The data plane anchor."
 
   pcf:
     label: PCF
     layer: core
     role: policy-control
-    ip_env_key: PCF_IP
-    ip: "172.22.0.27"
+    tgpp_role: "Policy Control Function (TS 23.501 clause 6.2.8). Provides policy rules for QoS and charging."
+    subsystem: 5G Core Control Plane
+    diagnostic: true
     protocols: [SBI, Diameter]
-    metrics_port: 9091
-    description: "Policy Control Function. Provides policy rules for QoS, charging. Connected to P-CSCF via Rx."
+    use_cases:
+      vonr: {enabled: true, note: "Provides QoS policy for VoNR dedicated bearers via Rx interface from P-CSCF"}
+    description: "Policy Control Function. Provides policy rules for QoS, charging. Connected to P-CSCF via Rx for VoNR QoS."
 
-  # --- IMS ---
+  # =========================================================================
+  # 5G Core — User Plane
+  # =========================================================================
+
+  upf:
+    label: UPF
+    layer: core
+    role: user-plane-anchor
+    tgpp_role: "User Plane Function (TS 23.501 clause 6.2.3). Forwards user data packets. The data plane anchor (PSA)."
+    subsystem: 5G Core User Plane
+    diagnostic: true
+    protocols: [PFCP, GTP-U]
+    use_cases:
+      vonr: {enabled: true, note: "Forwards all user data including RTP voice media between gNB and IMS/RTPEngine"}
+    description: "User Plane Function. Forwards user data packets between gNB and external networks. The data plane anchor."
+
+  # =========================================================================
+  # 5G Core — Service Plane
+  # =========================================================================
+
+  nssf:
+    label: NSSF
+    layer: core
+    role: slice-selection
+    tgpp_role: "Network Slice Selection Function (TS 23.501 clause 6.2.14). Selects network slice for UE sessions."
+    subsystem: 5G Core Service Plane
+    diagnostic: false
+    protocols: [SBI]
+    use_cases:
+      vonr: {enabled: false, note: "Single slice deployment — no slice selection needed. Registered with NRF but idle."}
+    description: "Network Slice Selection Function. Selects the appropriate network slice for UE sessions."
+
+  bsf:
+    label: BSF
+    layer: core
+    role: binding-support
+    tgpp_role: "Binding Support Function (TS 23.501 clause 6.2.16). Manages PCF session bindings."
+    subsystem: 5G Core Service Plane
+    diagnostic: false
+    protocols: [SBI]
+    use_cases:
+      vonr: {enabled: false, note: "Single PCF deployment — no binding resolution needed. Registered with NRF but idle."}
+    description: "Binding Support Function. Manages PCF session bindings for multi-PCF deployments."
+
+  # =========================================================================
+  # IMS — SIP Layer
+  # =========================================================================
+
   pcscf:
     label: P-CSCF
     layer: ims
     role: sip-edge-proxy
-    ip_env_key: PCSCF_IP
-    ip: "172.22.0.21"
+    tgpp_role: "Proxy-CSCF (TS 23.228 clause 4.2.3). SIP edge proxy — first contact point for UE SIP signaling."
+    subsystem: IMS SIP Layer
+    diagnostic: true
     protocols: [SIP, Diameter]
+    use_cases:
+      vonr: {enabled: true, note: "Entry point for all UE SIP signaling. Controls RTPEngine for voice media."}
     description: "Proxy-CSCF. SIP edge proxy — first contact point for UE SIP signaling. Controls RTPEngine for media."
-
-  rtpengine:
-    label: RTPEngine
-    layer: ims
-    role: media-relay
-    ip_env_key: RTPENGINE_IP
-    ip: "172.22.0.16"
-    protocols: [RTP, ng]
-    description: "RTP media relay/proxy. Handles RTP stream relay for VoNR voice calls."
 
   icscf:
     label: I-CSCF
     layer: ims
     role: sip-interrogating
-    ip_env_key: ICSCF_IP
-    ip: "172.22.0.19"
+    tgpp_role: "Interrogating-CSCF (TS 23.228 clause 4.2.4). Entry point to IMS core for routing."
+    subsystem: IMS SIP Layer
+    diagnostic: true
     protocols: [SIP, Diameter]
+    use_cases:
+      vonr: {enabled: true, note: "Queries HSS to find the assigned S-CSCF for subscriber registration and call routing"}
     description: "Interrogating-CSCF. Entry point to the IMS core. Queries HSS to find the assigned S-CSCF."
 
   scscf:
     label: S-CSCF
     layer: ims
     role: sip-serving
-    ip_env_key: SCSCF_IP
-    ip: "172.22.0.20"
+    tgpp_role: "Serving-CSCF (TS 23.228 clause 4.2.5). Core SIP registrar and call controller."
+    subsystem: IMS SIP Layer
+    diagnostic: true
     protocols: [SIP, Diameter]
+    use_cases:
+      vonr: {enabled: true, note: "Core SIP registrar. Authenticates IMS users via HSS and controls call routing."}
     description: "Serving-CSCF. Core SIP registrar and call controller. Authenticates users via HSS."
+
+  smsc:
+    label: SMSC
+    layer: ims
+    role: sms-center
+    tgpp_role: "SMS Center. Routes SMS over IMS (SMS over SIP)."
+    subsystem: IMS SIP Layer
+    diagnostic: false
+    protocols: [SIP]
+    use_cases:
+      vonr: {enabled: false, note: "VoNR is voice calls only — no SMS traffic in this use case"}
+    description: "SMS Center (Kamailio-based). Routes SMS messages over the IMS SIP infrastructure."
+
+  # =========================================================================
+  # IMS — Subscriber DB
+  # =========================================================================
 
   pyhss:
     label: HSS
     layer: ims
     role: subscriber-db
-    ip_env_key: PYHSS_IP
-    ip: "172.22.0.18"
+    tgpp_role: "Home Subscriber Server (TS 23.228 clause 4.2.6). IMS subscriber database."
+    subsystem: IMS Subscriber DB
+    diagnostic: true
     protocols: [Diameter]
+    use_cases:
+      vonr: {enabled: true, note: "Handles Diameter Cx queries from I-CSCF (UAR/LIR) and S-CSCF (MAR/SAR) for IMS authentication"}
     description: "Home Subscriber Server (PyHSS). IMS subscriber database. Handles Cx Diameter queries from I/S-CSCF."
 
-  # --- RAN ---
+  # =========================================================================
+  # IMS — Media
+  # =========================================================================
+
+  rtpengine:
+    label: RTPEngine
+    layer: ims
+    role: media-relay
+    tgpp_role: "Not a 3GPP NF. RTP media relay/proxy for VoNR voice calls."
+    subsystem: IMS Media
+    diagnostic: true
+    protocols: [RTP, ng]
+    use_cases:
+      vonr: {enabled: true, note: "Relays RTP voice media streams between UEs during VoNR calls"}
+    description: "RTP media relay/proxy. Handles RTP stream relay for VoNR voice calls."
+
+  # =========================================================================
+  # RAN
+  # =========================================================================
+
   nr_gnb:
     label: gNB
     layer: ran
     role: radio-access
-    ip_env_key: NR_GNB_IP
-    ip: "172.22.0.23"
+    tgpp_role: "gNodeB (TS 38.300). 5G NR base station providing radio access."
+    subsystem: RAN
+    diagnostic: true
     protocols: [NGAP, GTP-U]
+    use_cases:
+      vonr: {enabled: true, note: "Provides 5G NR radio access. Connects UEs to AMF (N2) and UPF (N3)."}
     description: "5G NR gNodeB (UERANSIM). Radio access node connecting UEs to the 5G core."
 
-  # --- UEs ---
+  # =========================================================================
+  # UEs
+  # =========================================================================
+
   e2e_ue1:
     label: UE1
     layer: ue
     role: subscriber
-    ip: "172.22.0.50"
+    tgpp_role: "User Equipment (TS 23.501). Test subscriber — caller."
+    subsystem: UE
+    diagnostic: false
     protocols: [NAS, SIP]
+    use_cases:
+      vonr: {enabled: true, note: "Test UE1 (UERANSIM + pjsua). Caller in VoNR voice tests."}
     description: "User Equipment 1 (UERANSIM + pjsua). Test subscriber — caller."
 
   e2e_ue2:
     label: UE2
     layer: ue
     role: subscriber
-    ip: "172.22.0.51"
+    tgpp_role: "User Equipment (TS 23.501). Test subscriber — callee."
+    subsystem: UE
+    diagnostic: false
     protocols: [NAS, SIP]
+    use_cases:
+      vonr: {enabled: true, note: "Test UE2 (UERANSIM + pjsua). Callee in VoNR voice tests."}
     description: "User Equipment 2 (UERANSIM + pjsua). Test subscriber — callee."
+
+  # =========================================================================
+  # Observability
+  # =========================================================================
+
+  metrics:
+    label: Prometheus
+    layer: observability
+    role: metrics-collection
+    tgpp_role: "Not a 3GPP NF. Prometheus metrics collection server."
+    subsystem: Observability
+    diagnostic: false
+    protocols: [HTTP]
+    use_cases:
+      vonr: {enabled: false, note: "Observability infrastructure — not in the signaling or data path"}
+    description: "Prometheus metrics server. Scrapes metrics from all Open5GS NFs on port 9091."
+
+  grafana:
+    label: Grafana
+    layer: observability
+    role: metrics-visualization
+    tgpp_role: "Not a 3GPP NF. Grafana dashboards for network observability."
+    subsystem: Observability
+    diagnostic: false
+    protocols: [HTTP]
+    use_cases:
+      vonr: {enabled: false, note: "Observability infrastructure — visualization only"}
+    description: "Grafana dashboard server. Visualizes Prometheus metrics for network observability."

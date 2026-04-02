@@ -1,4 +1,4 @@
-"""Phase 0: Triage Agent — data collection only, no reasoning."""
+"""Phase 1: Triage Agent — data collection only, no reasoning."""
 
 from __future__ import annotations
 from pathlib import Path

@@ -1,0 +1,495 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260402_010136_hss_unresponsive",
+  "timestamp": "2026-04-02T01:01:37.201507+00:00",
+  "duration_seconds": 214.994974,
+  "scenario": {
+    "name": "HSS Unresponsive",
+    "description": "Inject 60-second outbound delay on the HSS (PyHSS). The HSS container is running, the process is alive, and the IP is reachable \u2014 but all Diameter responses are delayed by 60 seconds, far exceeding the Cx Diameter timeout. Tests how the I-CSCF and S-CSCF handle a Diameter peer that accepts connections but never responds in time.",
+    "category": "network",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "network_latency",
+        "target": "pyhss",
+        "params": {
+          "delay_ms": 60000,
+          "jitter_ms": 0
+        },
+        "ttl_seconds": 300
+      }
+    ],
+    "expected_symptoms": [
+      "Diameter UAR/UAA timeout at I-CSCF",
+      "Diameter MAR/MAA timeout at S-CSCF",
+      "SIP REGISTER stalls (waiting for Diameter)",
+      "CDP peer state changes"
+    ],
+    "escalation": false,
+    "challenge_mode": true,
+    "requires_active_call": false,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 300
+  },
+  "baseline": {
+    "timestamp": "2026-04-02T01:01:37.201507+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 319.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 14.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 11.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 11.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 12.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 12.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 12.0,
+          "core:rcv_requests_register": 3.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 13.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 1.0,
+          "script:register_success": 1.0,
+          "script:register_time": 418.0,
+          "sl:1xx_replies": 3.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 116.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 3.0,
+          "cdp:replies_response_time": 348.0,
+          "cdp:timeout": 1.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 7.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 116.0,
+          "ims_icscf:uar_replies_received": 3.0,
+          "ims_icscf:uar_replies_response_time": 348.0,
+          "ims_icscf:uar_timeouts": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "7 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 118.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 2.0,
+          "cdp:replies_response_time": 236.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 2.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 119.0,
+          "ims_auth:mar_replies_received": 1.0,
+          "ims_auth:mar_replies_response_time": 119.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 1.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 117.0,
+          "ims_registrar_scscf:sar_replies_received": 1.0,
+          "ims_registrar_scscf:sar_replies_response_time": 117.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 1.0,
+          "ims_usrloc_scscf:active_impus": 3.0,
+          "ims_usrloc_scscf:active_subscriptions": 1.0,
+          "ims_usrloc_scscf:contact_collisions": 0.0,
+          "ims_usrloc_scscf:impu_collisions": 0.0,
+          "ims_usrloc_scscf:subscription_collisions": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "1 reg",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_eae094aa",
+      "fault_type": "network_latency",
+      "target": "pyhss",
+      "params": {
+        "delay_ms": 60000,
+        "jitter_ms": 0
+      },
+      "mechanism": "sudo nsenter -t 1302251 -n tc qdisc add dev eth0 root netem delay 60000ms",
+      "heal_command": "sudo nsenter -t 1302251 -n tc qdisc del dev eth0 root",
+      "injected_at": "2026-04-02T01:01:37.202252+00:00",
+      "ttl_seconds": 300,
+      "expires_at": "2026-04-02T01:06:37.202252+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "qdisc netem 800d: root refcnt 9 limit 1000 delay 60s"
+    }
+  ],
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-04-02T01:01:37.318948+00:00",
+      "elapsed_seconds": 0.117441,
+      "metrics_delta": {},
+      "log_samples": {
+        "icscf": [
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: cdp [receiver.c:1073]: peer_connect(): Timeout or error opening connection to to 172.22.0.18 port 3875 proto  >Operation now in progress",
+          "\u001b[0;39;49m\u001b[0;39;49m\u001b[0;36;49m11(61) INFO: ims_icscf [cxdx_avp.c:140]: cxdx_get_avp(): cxdx_get_result_code: Failed finding avp",
+          "\u001b[0;39;49m\u001b[0;31;49m28(78) ERROR: ims_icscf [cxdx_uar.c:113]: async_cdp_uar_callback(): Error timeout when  sending message via CDP"
+        ],
+        "scscf": [
+          "\u001b[0;39;49m\u001b[0;39;49m11(49) DEBUG: {1 24099 REGISTER 4CLMsUny0m9RUnWkI9Us8tcCg6QLuTrL PRE_REG_SAR_REPLY} ims_isc [checker.c:375]: isc_check_filter_criteria(): Total compromised, aborting..."
+        ],
+        "nr_gnb": [
+          "[2026-04-01 21:01:02.960] [rls] [\u001b[36mdebug\u001b[m] UE[1] signal lost",
+          "[2026-04-01 21:01:03.981] [rls] [\u001b[36mdebug\u001b[m] UE[2] signal lost"
+        ],
+        "e2e_ue1": [
+          "21:01:09.694            pjsua_acc.c  ....SIP registration failed, status=504 (Server Time-Out)"
+        ]
+      },
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-04-02T01:05:12.196481+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 336.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 16.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 11.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 11.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 12.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 12.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 55.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 56.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 1.0,
+          "ims_usrloc_pcscf:registered_contacts": 1.0,
+          "ims_usrloc_pcscf:registered_impus": 1.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 2.0,
+          "script:register_success": 1.0,
+          "script:register_time": 418.0,
+          "sl:1xx_replies": 4.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "1 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 116.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 3.0,
+          "cdp:replies_response_time": 348.0,
+          "cdp:timeout": 2.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 8.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 116.0,
+          "ims_icscf:uar_replies_received": 3.0,
+          "ims_icscf:uar_replies_response_time": 348.0,
+          "ims_icscf:uar_timeouts": 2.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "8 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 118.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 2.0,
+          "cdp:replies_response_time": 236.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 2.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 119.0,
+          "ims_auth:mar_replies_received": 1.0,
+          "ims_auth:mar_replies_response_time": 119.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 1.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 117.0,
+          "ims_registrar_scscf:sar_replies_received": 1.0,
+          "ims_registrar_scscf:sar_replies_response_time": 117.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 1.0,
+          "ims_usrloc_scscf:active_impus": 3.0,
+          "ims_usrloc_scscf:active_subscriptions": 1.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "1 reg",
+        "source": "kamcmd"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 214.994229,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Inject 60-second outbound delay on the HSS (PyHSS). The HSS container is running, the process is alive, and the IP is reachable \u2014 but all Diameter responses are delayed by 60 seconds, far exceeding the Cx Diameter timeout. Tests how the I-CSCF and S-CSCF handle a Diameter peer that accepts connections but never responds in time.",
+    "affected_components": [
+      "pyhss"
+    ],
+    "severity": "degraded",
+    "failure_domain": "ims_signaling",
+    "protocol_impact": "Diameter"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v5-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: The root cause of the IMS failure is a complete network partition between the ICSCF and the HSS (pyhss), preventing user authorization and halting the IMS registration process.\n- **timeline**:\n    1.  A network fault occurs, causing 100% packet loss between the `icscf` and `pyhss` containers.\n    2.  A UE attempts to register. The SIP REGISTER request is forwarded by the PCSCF to the ICSCF.\n    3.  The ICSCF sends a Diameter User-Authorization-Request (UAR) to the HSS to authenticate the user.\n    4.  Due to the network partition, the UAR packets never reach the HSS.\n    5.  The Diameter request on the ICSCF times out, incrementing the `ims_icscf:uar_timeouts` and `cdp:timeout` metrics.\n    6.  The registration process fails. As a result, users cannot get online, and no IMS calls can be established, explaining the zero values for `core:rcv_requests_invite`.\n- **root_cause**: **Transport Layer Failure**. A network fault is dropping all packets between the `icscf` container and the `pyhss` container. This was definitively proven by a network reachability test.\n- **affected_components**: `icscf`, `pyhss`. Downstream effects are seen on `pcscf` and `scscf`.\n- **recommendation**: Resolve the network connectivity issue between the `icscf` and `pyhss` containers. Investigate the underlying container networking configuration, firewall rules, or routing policies affecting traffic between these two specific components.\n- **confidence**: high\n- **explanation**: The investigation confirmed the initial anomaly analysis pointing to a connectivity issue. While initial metrics showed errors across multiple IMS components, the definitive root cause was isolated to the transport layer. The ICSCF is unable to authorize users because it cannot reach the HSS, as evidenced by `measure_rtt` showing 100% packet loss. This network failure is the first and most critical fault in the chain, directly causing the `ims_icscf:uar_timeouts`. All other symptoms, including one failed registration (`script:register_failed`) and a low number of active contacts (`ims_usrloc_scscf:active_contacts`), are direct consequences of this primary network outage. The `httpclient` failures on the PCSCF are a separate, secondary issue that is not blocking the system in the same way.",
+    "score": {
+      "root_cause_correct": false,
+      "root_cause_rationale": "The simulated failure was a 60-second network delay on the HSS (pyhss), causing Diameter timeouts. The agent diagnosed a 'complete network partition' and '100% packet loss' between the ICSCF and HSS, explicitly stating packets 'never reach the HSS' and are 'dropping all packets'. These are distinct network phenomena; packets were delayed, not dropped.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent correctly identified 'pyhss' (HSS) as the primary component experiencing the network issue, and 'icscf' as directly affected, with 'pcscf' and 'scscf' as downstream impacts.",
+      "severity_correct": true,
+      "severity_rationale": "The 60-second delay 'far exceeding the Cx Diameter timeout' effectively causes a complete service outage for IMS registration, which the agent correctly described as 'halting the IMS registration process' and 'users cannot get online'.",
+      "fault_type_identified": false,
+      "fault_type_rationale": "The simulated fault type was 'Elevated network latency' (a form of network degradation). The agent identified 'complete network partition' and '100% packet loss' (a form of component unreachable/service partition). These are different observable fault types.",
+      "confidence_calibrated": false,
+      "confidence_rationale": "The agent expressed 'high' confidence in its diagnosis of '100% packet loss' based on a 'network reachability test' showing this. However, the actual simulated failure was a 60-second delay, not packet loss. While the agent's tools might have reported 100% loss due to timeouts, the underlying network fault type was misidentified, making the high confidence poorly calibrated to the actual failure mode.",
+      "ranking_position": null,
+      "ranking_rationale": "The agent provided only one primary diagnosis, which was incorrect.",
+      "total_score": 0.4,
+      "summary": "The agent correctly identified the affected components and the severity of the impact (outage due to timeouts), but misidentified the specific network fault as packet loss/partition instead of high latency. Its high confidence was therefore not calibrated."
+    },
+    "time_to_diagnosis_seconds": 194.0,
+    "token_usage": {
+      "input_tokens": 123704,
+      "output_tokens": 11538,
+      "thinking_tokens": 13790,
+      "total_tokens": 149032,
+      "per_phase": [
+        {
+          "agent": "TriageAgent",
+          "tokens": 11563,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "PatternMatcherAgent",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "AnomalyDetectorAgent",
+          "tokens": 39275,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 7083,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "InvestigatorAgent",
+          "tokens": 83259,
+          "tool_calls": 9,
+          "llm_calls": 7
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 7852,
+          "tool_calls": 0,
+          "llm_calls": 1
+        }
+      ]
+    },
+    "pattern_match": "{\"matched\": false, \"top_diagnosis\": \"No matching signature found\", \"confidence\": \"low\", \"failure_domain\": \"unknown\", \"matched_signatures\": [], \"baseline_anomalies\": {\"icscf\": [{\"metric\": \"ims_icscf:uar_timeouts\", \"expected\": 0.0, \"actual\": 1.0, \"alarm_if\": \"> 0\", \"note\": \"\"}], \"scscf\": [{\"metric\": \"ims_usrloc_scscf:active_contacts\", \"expected\": 2.0, \"actual\": 1.0, \"alarm_if\": \"\", \"note\": \"\"}]}, \"health_check_suggestions\": [], \"diagnostic_actions\": [], \"observations\": {\"amf_session\": 4.0, \"gnb\": 1.0, \"ran_ue\": 2.0, \"cdp:average_response_time\": 118.0, \"cdp:queuelength\": 0.0, \"cdp:replies_received\": 2.0, \"cdp:replies_response_time\": 236.0, \"cdp:timeout\": 0.0, \"core:rcv_requests_invite\": 0.0, \"core:rcv_requests_register\": 2.0, \"ims_icscf:lir_avg_response_time\": 0.0, \"ims_icscf:lir_replies_received\": 0.0, \"ims_icscf:lir_replies_response_time\": 0.0, \"ims_icscf:lir_timeouts\": 0.0, \"ims_icscf:uar_avg_response_time\": 116.0, \"ims_icscf:uar_replies_received\": 3.0, \"ims_icscf:uar_replies_response_time\": 348.0, \"ims_icscf:uar_timeouts\": 1.0, \"tmx:active_transactions\": 0.0, \"subscribers\": 2.0, \"fivegs_pcffunction_pa_policyamassoreq\": 11.0, \"fivegs_pcffunction_pa_policyamassosucc\": 11.0, \"fivegs_pcffunction_pa_policysmassoreq\": 12.0, \"fivegs_pcffunction_pa_policysmassosucc\": 12.0, \"fivegs_pcffunction_pa_sessionnbr\": 4.0, \"core:rcv_requests_bye\": 0.0, \"core:rcv_requests_options\": 17.0, \"dialog_ng:active\": 0.0, \"dialog_ng:early\": 0.0, \"dialog_ng:expired\": 0.0, \"dialog_ng:processed\": 0.0, \"httpclient:connections\": 0.0, \"httpclient:connfail\": 18.0, \"httpclient:connok\": 0.0, \"ims_usrloc_pcscf:expired_contacts\": 0.0, \"ims_usrloc_pcscf:registered_contacts\": 2.0, \"ims_usrloc_pcscf:registered_impus\": 0.0, \"registrar:accepted_regs\": 0.0, \"registrar:default_expire\": 3600.0, \"registrar:default_expires_range\": 0.0, \"registrar:expires_range\": 0.0, \"registrar:max_contacts\": 0.0, \"registrar:max_expires\": 0.0, \"registrar:rejected_regs\": 0.0, \"script:register_failed\": 1.0, \"script:register_success\": 1.0, \"script:register_time\": 418.0, \"sl:1xx_replies\": 3.0, \"sl:200_replies\": 0.0, \"sl:4xx_replies\": 0.0, \"sl:5xx_replies\": 0.0, \"ims_auth:mar_avg_response_time\": 119.0, \"ims_auth:mar_replies_received\": 1.0, \"ims_auth:mar_replies_response_time\": 119.0, \"ims_auth:mar_timeouts\": 0.0, \"ims_registrar_scscf:accepted_regs\": 1.0, \"ims_registrar_scscf:default_expire\": 3600.0, \"ims_registrar_scscf:default_expires_range\": 0.0, \"ims_registrar_scscf:max_contacts\": 5.0, \"ims_registrar_scscf:max_expires\": 3600.0, \"ims_registrar_scscf:notifies_in_q\": 0.0, \"ims_registrar_scscf:rejected_regs\": 0.0, \"ims_registrar_scscf:sar_avg_response_time\": 117.0, \"ims_registrar_scscf:sar_replies_received\": 1.0, \"ims_registrar_scscf:sar_replies_response_time\": 117.0, \"ims_registrar_scscf:sar_timeouts\": 0.0, \"ims_usrloc_scscf:active_contacts\": 1.0, \"ims_usrloc_scscf:active_impus\": 3.0, \"ims_usrloc_scscf:active_subscriptions\": 1.0, \"ims_usrloc_scscf:contact_collisions\": 0.0, \"ims_usrloc_scscf:impu_collisions\": 0.0, \"ims_usrloc_scscf:subscription_collisions\": 0.0, \"bearers_active\": 4.0, \"fivegs_smffunction_sm_sessionnbr\": 4.0, \"pfcp_sessions_active\": 4.0, \"ues_active\": 2.0, \"fivegs_ep_n3_gtp_indatapktn3upf\": 320.0, \"fivegs_ep_n3_gtp_outdatapktn3upf\": 14.0, \"fivegs_upffunction_upf_sessionnbr\": 4.0, \"container_status\": {\"mongo\": \"running\", \"nrf\": \"running\", \"scp\": \"running\", \"ausf\": \"running\", \"udr\": \"running\", \"udm\": \"running\", \"amf\": \"running\", \"smf\": \"running\", \"upf\": \"running\", \"pcf\": \"running\", \"dns\": \"running\", \"mysql\": \"running\", \"pyhss\": \"running\", \"icscf\": \"running\", \"scscf\": \"running\", \"pcscf\": \"running\", \"rtpengine\": \"running\"}}}",
+    "anomaly_analysis": "**Layer Status**\n- **RAN:** GREEN \u2014 `gnb = 1.0`, `ran_ue = 2.0` (active UEs and gNodeBs)\n- **Core:** GREEN \u2014 `amf_session = 4.0`, `pfcp_sessions_active = 4.0`, `ues_active = 2.0`, `bearers_active = 4.0` (core functions appear active and handling sessions)\n- **IMS:** YELLOW \u2014 `core:rcv_requests_invite = 0.0` for ICSCF, PCSCF, and SCSCF (no IMS calls initiated/received), `dialog_ng:active = 0.0` for PCSCF and SCSCF, `httpclient:connfail = 18.0` on PCSCF, `ims_icscf:uar_timeouts = 1.0`, `ims_usrloc_scscf:active_contacts = 1.0` (expected 2.0). These indicate significant issues in IMS call handling and registration.\n- **Infrastructure:** YELLOW \u2014 Grafana container is exited. All core containers are running.\n\n**Triggered Stack Rules**\nThe `check_stack_rules` function could not be executed due to an issue with the JSON string parsing within the tool code environment. Therefore, no stack rules were explicitly triggered. Assuming no rules would block further investigation of the IMS layer.\n\n**Baseline Anomalies**\nThe pattern matcher already identified some baseline anomalies:\n- **ICSCF**:\n    - `ims_icscf:uar_timeouts`: Actual 1.0, Expected 0.0\n- **SCSCF**:\n    - `ims_usrloc_scscf:active_contacts`: Actual 1.0, Expected 2.0\n\nAdditionally, based on the triage findings and observations:\n- **ICSCF**:\n    - `core:rcv_requests_invite`: Actual 0.0 (expected > 0 if calls are being initiated)\n- **PCSCF**:\n    - `httpclient:connfail`: Actual 18.0 (expected 0.0)\n    - `httpclient:connok`: Actual 0.0 (expected > 0 if HTTP connections are succeeding)\n    - `script:register_failed`: Actual 1.0 (expected 0.0)\n    - `core:rcv_requests_invite`: Actual 0.0 (expected > 0)\n    - `dialog_ng:active`: Actual 0.0 (expected > 0 if calls are active)\n    - `sl:200_replies`: Actual 0.0 (expected > 0 if successful SIP responses are sent)\n- **SCSCF**:\n    - `core:rcv_requests_invite`: Actual 0.0 (expected > 0)\n    - `dialog_ng:active`: Actual 0.0 (expected > 0 if calls are active)\n\n**Suspect Components**\n\n- **PCSCF**:\n    - **Health Check Guidance**: This component shows multiple critical anomalies (`httpclient:connfail`, `httpclient:connok`, `script:register_failed`, `core:rcv_requests_invite`, `dialog_ng:active`, `sl:200_replies`). The primary concern is the inability to establish HTTP connections and handle SIP INVITE requests. This could indicate network connectivity issues from PCSCF or problems with its internal processing of SIP messages.\n- **ICSCF**:\n    - **Health Check Guidance**: The `ims_icscf:uar_timeouts` suggests issues with User Authorization Request (UAR) handling, likely towards the HSS/UDM. The `core:rcv_requests_invite = 0.0` further indicates it's not processing any call initiation requests.\n- **SCSCF**:\n    - **Health Check Guidance**: `ims_usrloc_scscf:active_contacts` being lower than expected, along with `core:rcv_requests_invite = 0.0` and `dialog_ng:active = 0.0`, points to issues with user registration and call handling.\n\n**Causal Chain Hints**\nConsidering the observed anomalies, particularly the lack of `INVITE` requests and active dialogs across IMS components, coupled with `httpclient:connfail` on PCSCF and `uar_timeouts` on ICSCF, the following causal chain patterns could be relevant:\n- **IMS Registration Failure**: The `script:register_failed` on PCSCF and `ims_usrloc_scscf:active_contacts` being less than expected on SCSCF suggest problems with user registration. This could be due to connectivity issues (e.g., PCSCF's `httpclient:connfail`) or problems with communicating with subscriber databases (e.g., ICSCF's `uar_timeouts` talking to HSS/UDM).\n- **IMS Call Setup Failure**: The complete absence of `core:rcv_requests_invite` and `dialog_ng:active` metrics strongly implies that IMS call setup is not progressing, or calls are not even being attempted successfully. This would logically follow from registration issues, or could be an independent problem.\n- **Diameter/HTTP Connectivity Issues**: The `cdp:timeout` (though 0.0 in pattern match results, noted in triage findings) and `ims_icscf:uar_timeouts` point to Diameter connectivity problems. The `httpclient:connfail` on PCSCF points to HTTP connectivity issues. These could be underlying network problems or misconfigurations impacting signaling.\n\nThe most critical observations are the complete lack of IMS invite requests and active dialogs, combined with registration failures and connection issues. This points to a fundamental problem in the IMS layer, likely affecting both registration and subsequent call establishment.",
+    "investigation_instruction": "INVESTIGATE: The IMS layer is failing with registration and call setup. RAN and 5G Core functions (AMF, SMF, UPF, PCF) are GREEN \u2014 do not investigate them.\n\n**Key Anomalies:**\n*   **PCSCF:** `httpclient:connfail` (18.0), `script:register_failed` (1.0), `core:rcv_requests_invite` (0.0), `dialog_ng:active` (0.0). No successful HTTP connections (`httpclient:connok = 0.0`) or SIP 200 replies (`sl:200_replies = 0.0`).\n*   **ICSCF:** `ims_icscf:uar_timeouts` (1.0), `cdp:timeout` (1.0), `core:rcv_requests_invite` (0.0).\n*   **SCSCF:** `ims_usrloc_scscf:active_contacts` (1.0, expected 2.0), `core:rcv_requests_invite` (0.0), `dialog_ng:active` (0.0).\n\n**Your ONLY job:** Diagnose the root cause of the IMS registration and call setup failures. Focus on the connectivity and signaling issues indicated by the listed metrics.\n\n**Investigation Steps (Follow Hierarchy of Truth):**\n1.  **Transport Layer (Network Connectivity):**\n    *   Use `measure_rtt` to check network connectivity from PCSCF to its HTTP targets, and from ICSCF/SCSCF to UDM/HSS (pyhss).\n    *   Verify DNS resolution for external services used by IMS components if applicable.\n2.  **Core (Process & Configuration):**\n    *   Examine PCSCF logs for details on `httpclient:connfail` errors. Are target IPs/ports correct and accessible?\n    *   Examine ICSCF and SCSCF logs for detailed Diameter errors related to UAR/MAR/SAR requests and `cdp:timeout`. Is the UDM/HSS reachable and responding correctly?\n    *   Use `kamcmd` on PCSCF, ICSCF, and SCSCF to inspect SIP routing tables (`sip_route_dump`), registered users (`usrloc_dump`), and dialog status.\n3.  **Application (Internal Logic/State):**\n    *   If transport and basic signaling appear functional, deep dive into application logs for specific misconfigurations or logic errors preventing successful registration or INVITE processing.\n\nCite tool outputs for every claim."
+  }
+}

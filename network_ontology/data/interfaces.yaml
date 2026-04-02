@@ -385,3 +385,140 @@ interfaces:
     transport: UDP/53
     plane: management
     label: "DNS"
+
+  # =========================================================================
+  # New component interfaces (NSSF, BSF, WebUI, Metrics, Grafana, SMSC)
+  # =========================================================================
+
+  # --- NSSF SBI ---
+  - id: sbi_nssf_nrf
+    name: Nnrf
+    source: nssf
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_nssf_scp
+    name: SBI
+    source: nssf
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  # --- BSF SBI ---
+  - id: sbi_bsf_nrf
+    name: Nnrf
+    source: bsf
+    target: nrf
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (NRF)"
+
+  - id: sbi_bsf_scp
+    name: SBI
+    source: bsf
+    target: scp
+    protocol: SBI
+    transport: HTTP2
+    plane: control
+    label: "SBI (SCP)"
+
+  # --- NSSF/BSF MongoDB ---
+  - id: db_nssf_mongo
+    name: MongoDB
+    source: nssf
+    target: mongo
+    protocol: MongoDB
+    transport: TCP/27017
+    plane: management
+    label: "MongoDB"
+
+  - id: db_bsf_mongo
+    name: MongoDB
+    source: bsf
+    target: mongo
+    protocol: MongoDB
+    transport: TCP/27017
+    plane: management
+    label: "MongoDB"
+
+  # --- WebUI MongoDB ---
+  - id: db_webui_mongo
+    name: MongoDB
+    source: webui
+    target: mongo
+    protocol: MongoDB
+    transport: TCP/27017
+    plane: management
+    label: "MongoDB"
+
+  # --- Metrics (Prometheus) scrape targets ---
+  - id: metrics_scrape_amf
+    name: Prometheus
+    source: metrics
+    target: amf
+    protocol: HTTP
+    transport: TCP/9091
+    plane: management
+    label: "Metrics Scrape"
+
+  - id: metrics_scrape_smf
+    name: Prometheus
+    source: metrics
+    target: smf
+    protocol: HTTP
+    transport: TCP/9091
+    plane: management
+    label: "Metrics Scrape"
+
+  - id: metrics_scrape_upf
+    name: Prometheus
+    source: metrics
+    target: upf
+    protocol: HTTP
+    transport: TCP/9091
+    plane: management
+    label: "Metrics Scrape"
+
+  - id: metrics_scrape_pcf
+    name: Prometheus
+    source: metrics
+    target: pcf
+    protocol: HTTP
+    transport: TCP/9091
+    plane: management
+    label: "Metrics Scrape"
+
+  # --- Grafana reads from Prometheus ---
+  - id: grafana_metrics
+    name: HTTP
+    source: grafana
+    target: metrics
+    protocol: HTTP
+    transport: TCP/9090
+    plane: management
+    label: "Datasource"
+
+  # --- SMSC ---
+  - id: db_smsc_mysql
+    name: SQL
+    source: smsc
+    target: mysql
+    protocol: SQL
+    transport: TCP/3306
+    plane: management
+    label: "MySQL"
+
+  - id: dns_smsc
+    name: DNS
+    source: smsc
+    target: dns
+    protocol: DNS
+    transport: UDP/53
+    plane: management
+    label: "DNS"

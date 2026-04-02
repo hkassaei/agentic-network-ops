@@ -1,15 +1,13 @@
 """
-Agentic Ops v5 — Deterministic Backbone & Lean Investigation.
-
-Replaces v4's 8-agent LLM pipeline with a 3-agent pipeline backed by
-a deterministic ontology analysis step (Phase 0.5). The ontology diagnoses
-the failure in Python code, then the LLM verifies the hypothesis.
+Agentic Ops v5 — 6-Phase Agent Pipeline.
 
 Pipeline:
-  Phase 0:   TriageAgent (LLM)         → Collects metrics, topology, logs
-  Phase 0.5: OntologyAnalysis (Python)  → Deterministic diagnosis + short-circuit
-  Phase 1:   InvestigatorAgent (LLM)    → Proves/disproves ontology hypothesis
-  Phase 2:   SynthesisAgent (LLM)       → NOC-ready diagnosis
+  Phase 1: TriageAgent (LLM)              → Collects metrics, topology, health
+  Phase 2: PatternMatcherAgent (BaseAgent) → Deterministic signature matching
+  Phase 3: AnomalyDetectorAgent (LLM)     → Ontology-guided anomaly analysis (optional)
+  Phase 4: InstructionGeneratorAgent (LLM) → Synthesizes investigator instruction
+  Phase 5: InvestigatorAgent (LLM)         → Verifies hypothesis with tools + OntologyConsultation
+  Phase 6: SynthesisAgent (LLM)            → NOC-ready diagnosis
 """
 
-__version__ = "5.0.0"
+__version__ = "5.1.0"

@@ -39,36 +39,102 @@ def load_constraints(tx):
 
 
 def load_components(tx):
-    """Load Component nodes from components.yaml."""
+    """Load Component nodes from components.yaml (static structure only)."""
     data = _load_yaml("components.yaml")
     for name, comp in data["components"].items():
+        # Serialize use_cases as JSON string for Neo4j storage
+        import json
+        use_cases_json = json.dumps(comp.get("use_cases", {}))
+
         tx.run("""
             MERGE (c:Component {name: $name})
             SET c.label = $label,
                 c.layer = $layer,
                 c.role = $role,
-                c.ip = $ip,
+                c.tgpp_role = $tgpp_role,
+                c.subsystem = $subsystem,
+                c.diagnostic = $diagnostic,
                 c.description = $description,
-                c.protocols = $protocols
+                c.protocols = $protocols,
+                c.use_cases = $use_cases
         """,
             name=name,
             label=comp["label"],
             layer=comp["layer"],
             role=comp["role"],
-            ip=comp.get("ip", ""),
+            tgpp_role=comp.get("tgpp_role", ""),
+            subsystem=comp.get("subsystem", ""),
+            diagnostic=comp.get("diagnostic", False),
             description=comp.get("description", ""),
             protocols=comp.get("protocols", []),
+            use_cases=use_cases_json,
         )
-
-        # Create Metric nodes for components with metrics_port
-        if comp.get("metrics_port"):
-            tx.run("""
-                MATCH (c:Component {name: $name})
-                SET c.metrics_port = $port
-            """, name=name, port=comp["metrics_port"])
 
     count = len(data["components"])
     log.info("Loaded %d components.", count)
+
+
+def load_subsystems(tx):
+    """Create Subsystem nodes and PART_OF relationships from component subsystem fields."""
+    data = _load_yaml("components.yaml")
+
+    # Collect unique subsystem names
+    subsystems = set()
+    for comp in data["components"].values():
+        sub = comp.get("subsystem")
+        if sub:
+            subsystems.add(sub)
+
+    # Create Subsystem nodes
+    for name in subsystems:
+        tx.run("MERGE (s:Subsystem {name: $name})", name=name)
+
+    # Create PART_OF relationships
+    for comp_name, comp in data["components"].items():
+        sub = comp.get("subsystem")
+        if sub:
+            tx.run("""
+                MATCH (c:Component {name: $comp})
+                MATCH (s:Subsystem {name: $sub})
+                MERGE (c)-[:PART_OF]->(s)
+            """, comp=comp_name, sub=sub)
+
+    log.info("Loaded %d subsystems with PART_OF relationships.", len(subsystems))
+
+
+def load_deployment(tx):
+    """Enrich Component nodes with deployment-specific data from deployment.yaml."""
+    path = _DATA_DIR / "deployment.yaml"
+    if not path.exists():
+        log.info("No deployment.yaml found, skipping deployment enrichment.")
+        return
+
+    with open(path) as f:
+        data = yaml.safe_load(f)
+
+    count = 0
+    for comp_name, deploy in data.get("deployment", {}).items():
+        grid = deploy.get("grid_position", [0, 0])
+        tx.run("""
+            MATCH (c:Component {name: $name})
+            SET c.ip_env_key = $ip_env_key,
+                c.container_name = $container_name,
+                c.metrics_port = $metrics_port,
+                c.grid_row = $grid_row,
+                c.grid_slot = $grid_slot,
+                c.sublabel = $sublabel
+        """,
+            name=comp_name,
+            ip_env_key=deploy.get("ip_env_key", ""),
+            container_name=deploy.get("container_name", comp_name),
+            metrics_port=deploy.get("metrics_port"),
+            grid_row=grid[0] if len(grid) > 0 else 0,
+            grid_slot=grid[1] if len(grid) > 1 else 0,
+            sublabel=deploy.get("sublabel", ""),
+        )
+        count += 1
+
+    log.info("Enriched %d components with deployment data.", count)
 
 
 def load_interfaces(tx):
@@ -449,6 +515,8 @@ def load_all(uri: str = "bolt://localhost:7687", auth: tuple = ("neo4j", "ontolo
 
         session.execute_write(load_constraints)
         session.execute_write(load_components)
+        session.execute_write(load_subsystems)
+        session.execute_write(load_deployment)
         session.execute_write(load_interfaces)
         session.execute_write(load_causal_chains)
         session.execute_write(load_log_patterns)

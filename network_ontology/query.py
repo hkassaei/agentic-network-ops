@@ -425,6 +425,54 @@ class OntologyClient:
     # Component Topology
     # -----------------------------------------------------------------
 
+    # -----------------------------------------------------------------
+    # Topology Queries (for GUI and agent tools)
+    # -----------------------------------------------------------------
+
+    def get_all_components(self) -> list[dict]:
+        """Return all components with their static + deployment properties."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (c:Component)
+                OPTIONAL MATCH (c)-[:PART_OF]->(s:Subsystem)
+                RETURN c, s.name AS subsystem_name
+            """)
+            return [
+                {**dict(record["c"]), "subsystem_name": record["subsystem_name"]}
+                for record in result
+            ]
+
+    def get_all_interfaces(self) -> list[dict]:
+        """Return all interfaces with source and target component names."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (src:Component)-[:CONNECTS_VIA]->(i:Interface)-[:PEERS_WITH]->(tgt:Component)
+                RETURN i, src.name AS source, tgt.name AS target
+            """)
+            return [
+                {**dict(record["i"]), "source": record["source"], "target": record["target"]}
+                for record in result
+            ]
+
+    def get_topology_data(self) -> dict:
+        """Return complete topology structure for GUI consumption.
+
+        Returns:
+            {"components": [...], "interfaces": [...], "subsystems": [...]}
+        """
+        components = self.get_all_components()
+        interfaces = self.get_all_interfaces()
+
+        with self._driver.session() as session:
+            result = session.run("MATCH (s:Subsystem) RETURN s")
+            subsystems = [dict(record["s"]) for record in result]
+
+        return {
+            "components": components,
+            "interfaces": interfaces,
+            "subsystems": subsystems,
+        }
+
     def get_component(self, name: str) -> dict | None:
         """Get a component with its interfaces and connected peers."""
         with self._driver.session() as session:

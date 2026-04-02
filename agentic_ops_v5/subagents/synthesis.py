@@ -1,4 +1,4 @@
-"""Phase 2: Synthesis Agent — pure text synthesis, no tools."""
+"""Phase 4: Synthesis Agent — pure text synthesis, no tools."""
 
 from __future__ import annotations
 from pathlib import Path

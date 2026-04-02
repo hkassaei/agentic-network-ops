@@ -576,6 +576,26 @@
     from { stroke-dashoffset: 20; }
     to   { stroke-dashoffset: 0; }
   }
+
+  /* Data plane gauge strip */
+  .dp-gauge-strip {
+    display: flex; gap: 24px; padding: 6px 24px;
+    background: #1a1a2e; border-bottom: 1px solid #333;
+    font-family: inherit;
+  }
+  .dp-gauge {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #888;
+  }
+  .dp-gauge .gauge-label { text-transform: uppercase; letter-spacing: 0.5px; }
+  .dp-gauge .gauge-val {
+    font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: #e0e0e0; min-width: 48px; text-align: right;
+  }
+  .dp-gauge .gauge-val.good { color: #4caf50; }
+  .dp-gauge .gauge-val.warn { color: #ff9800; }
+  .dp-gauge .gauge-val.crit { color: #f44336; }
+  .dp-gauge .gauge-val.idle { color: #555; }
 </style>
 </head>
 <body>
@@ -591,6 +611,21 @@
     <div id="stack-status" class="status-pill pill-down">Checking...</div>
   </div>
 </header>
+
+<div class="dp-gauge-strip" id="dp-gauges">
+  <div class="dp-gauge">
+    <span class="gauge-label">RTP pps</span>
+    <span class="gauge-val" id="gauge-rtp-pps">--</span>
+  </div>
+  <div class="dp-gauge">
+    <span class="gauge-label">MOS</span>
+    <span class="gauge-val" id="gauge-rtp-mos">--</span>
+  </div>
+  <div class="dp-gauge">
+    <span class="gauge-label">UPF KB/s</span>
+    <span class="gauge-val" id="gauge-upf-kbps">--</span>
+  </div>
+</div>
 
 <main>
   <!-- Stack controls -->
@@ -2462,13 +2497,45 @@ function switchTab(tabName) {
   }
 }
 
+// --- Data plane gauges ---
+async function pollDataPlaneGauges() {
+  try {
+    const res = await fetch(`${API_BASE}/data-plane-gauges`);
+    const g = await res.json();
+
+    // RTP pps
+    const ppsEl = document.getElementById('gauge-rtp-pps');
+    const pps = g.rtpengine_pps || 0;
+    ppsEl.textContent = pps ? Math.round(pps) : '--';
+    ppsEl.className = 'gauge-val ' + (pps > 0 ? 'good' : 'idle');
+
+    // MOS
+    const mosEl = document.getElementById('gauge-rtp-mos');
+    const mos = g.rtpengine_mos || 0;
+    mosEl.textContent = mos ? mos.toFixed(1) : '--';
+    mosEl.className = 'gauge-val ' + (
+      mos >= 4.0 ? 'good' : mos >= 3.5 ? 'warn' : mos > 0 ? 'crit' : 'idle'
+    );
+
+    // UPF KB/s
+    const kbEl = document.getElementById('gauge-upf-kbps');
+    const kb = g.upf_kbps || 0;
+    kbEl.textContent = kb ? kb.toFixed(1) : '--';
+    kbEl.className = 'gauge-val ' + (
+      kb > 0 ? 'good' : g.upf_sessions > 0 ? 'crit' : 'idle'
+    );
+  } catch (e) { /* ignore */ }
+}
+
 // --- Init ---
 pollStatus();
 pollTopology();
 pollMetrics();
+pollDataPlaneGauges();
 statusInterval = setInterval(pollStatus, 5000);
 setInterval(pollTopology, 5000);
 setInterval(pollMetrics, 5000);
+setInterval(pollDataPlaneGauges, 5000);
 
 // Allow Enter key to submit investigation
 document.getElementById('inv-question').addEventListener('keydown', (e) => {

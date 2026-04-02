@@ -223,10 +223,15 @@ function renderStepList() {
 // =============================================================================
 // Playback Controls
 // =============================================================================
+// Callback: fired by the dot animation when the forward pass reaches destination.
+// scheduleNextStep uses this to advance at exactly the right time.
+let onDotArrived = null;
+
 function togglePlay() {
   if (playing) {
     playing = false;
-    clearInterval(playTimer);
+    clearTimeout(playTimer);
+    onDotArrived = null;
     // Stop all dot animations
     d3.select('#topo-svg').selectAll('.flow-dot').interrupt();
     document.getElementById('btn-play').textContent = '▶ Play';
@@ -234,16 +239,30 @@ function togglePlay() {
     playing = true;
     document.getElementById('btn-play').textContent = '⏸ Pause';
     if (currentStepIdx < 0) currentStepIdx = 0;
-    playTimer = setInterval(() => {
+    updateAll();
+    scheduleNextStep();
+  }
+}
+
+function scheduleNextStep() {
+  if (!playing || !currentFlow) return;
+
+  // Wait for the dot to arrive at its destination, then pause 500ms, then advance.
+  onDotArrived = function() {
+    onDotArrived = null;
+    if (!playing) return;
+    playTimer = setTimeout(() => {
+      if (!playing) return;
       if (currentStepIdx < currentFlow.steps.length - 1) {
         currentStepIdx++;
         updateAll();
+        scheduleNextStep();
       } else {
-        togglePlay(); // stop at end
+        playing = false;
+        document.getElementById('btn-play').textContent = '▶ Play';
       }
-    }, 2000);
-    updateAll();
-  }
+    }, 500);
+  };
 }
 
 function stepNext() {
@@ -509,7 +528,10 @@ function highlightFlow() {
               .attr('cx', waypoints[w].x).attr('cy', waypoints[w].y);
           }
           t.on('end', function() {
-            if (isLastStep) return;
+            // Notify that the dot reached the destination
+            if (onDotArrived) onDotArrived();
+            // Only bounce back when not auto-playing and not the last step
+            if (isLastStep || playing) return;
             animateBackward();
           });
         }

@@ -95,7 +95,7 @@ deployment:
     container_name: upf
     metrics_port: 9091
     grid_position: [1, 7]
-    sublabel: "PSA"
+    sublabel: ""
 
   # --- 5G Core Service Plane ---
   nssf:
@@ -174,7 +174,7 @@ deployment:
     ip_env_key: METRICS_IP
     container_name: metrics
     grid_position: [0, 7]
-    sublabel: "Prometheus"
+    sublabel: ""
 
   grafana:
     ip_env_key: GRAFANA_IP

@@ -69,6 +69,49 @@ baselines:
         type: counter
         note: "Must be > 0 and incrementing. Zero = data plane dead."
         alarm_if: "= 0 or stopped incrementing"
+      upf_kbps:
+        type: gauge
+        source: "get_dp_quality_gauges"
+        note: "GTP-U throughput on voice bearer (QFI=1), computed from consecutive byte-volume snapshots. ~16 KB/s during healthy G.711 bidirectional call."
+        during_call: 16
+        alarm_if: "= 0 with active sessions (data plane dead) or < 10 during call (degraded)"
+
+  # --- Data Plane Quality (RTPEngine) ---
+  # These metrics are only meaningful during active VoNR calls.
+  # Query via get_dp_quality_gauges tool.
+  rtpengine:
+    metrics:
+      rtpengine_mos:
+        type: gauge
+        source: "get_dp_quality_gauges"
+        note: "Mean Opinion Score — ITU-T G.107 E-model computed from RTCP reports (packet loss, jitter, latency). THE key indicator for voice quality."
+        expected: 4.3
+        condition: "Healthy call with no packet loss"
+        thresholds:
+          excellent: ">= 4.3 (toll quality, no perceptible degradation)"
+          good: ">= 4.0 (minor degradation, acceptable for VoIP)"
+          acceptable: ">= 3.5 (noticeable degradation, still usable)"
+          poor: ">= 3.0 (significant quality issues, user complaints likely)"
+          unusable: "< 3.0 (severe degradation, call effectively broken)"
+        alarm_if: "< 3.5 during active call (data plane degradation)"
+      rtpengine_pps:
+        type: gauge
+        source: "get_dp_quality_gauges"
+        note: "Live media packet rate across all active streams. ~100 pps per bidirectional G.711 stream (50 pps per direction at 20ms packetization)."
+        during_call: 100
+        alarm_if: "= 0 with active sessions (media relay dead) or drop > 20% from expected (packet loss on data path)"
+      rtpengine_loss_pct:
+        type: gauge
+        source: "get_dp_quality_gauges"
+        note: "Average packet loss from RTCP reports. Directly degrades MOS."
+        expected: 0
+        alarm_if: "> 5 (noticeable quality impact) or > 20 (severe degradation)"
+      rtpengine_jitter:
+        type: gauge
+        source: "get_dp_quality_gauges"
+        note: "Average inter-packet arrival jitter from RTCP reports (ms). High jitter causes audio artifacts."
+        expected: 1
+        alarm_if: "> 30 (quality impact) or > 50 (severe)"
 
   pcf:
     metrics:

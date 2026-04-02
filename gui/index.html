@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VoNR Learning Tool</title>
+<script src="/static/lib/d3.v7.min.js"></script>
 <style>
   :root {
     --bg: #0f1117;
@@ -581,6 +582,7 @@
 
 <header>
   <h1>VoNR Learning Tool</h1>
+  <a href="/flows" style="position:absolute;top:12px;right:24px;color:#58a6ff;text-decoration:none;font-size:14px;padding:6px 12px;border:1px solid #30363d;border-radius:6px;background:#21262d;">Protocol Flows →</a>
   <div class="tab-bar">
     <button class="tab-btn active" onclick="switchTab('topology')">Topology</button>
     <button class="tab-btn" onclick="switchTab('ue-control')">UE Control</button>
@@ -632,7 +634,7 @@
       </div>
       <div class="topology-main">
         <div class="topology-body" id="topology-body">
-          <svg class="topology-svg" id="topology-svg" viewBox="0 0 1000 400" preserveAspectRatio="xMidYMid meet"></svg>
+          <svg class="topology-svg" id="topology-svg" viewBox="0 0 1200 420" preserveAspectRatio="xMidYMid meet"></svg>
           <div class="topo-tooltip" id="topo-tooltip"></div>
         </div>
         <div class="metrics-detail" id="metrics-detail"></div>
@@ -1917,19 +1919,20 @@ function closeInvestigationV4() {
 }
 
 // --- Topology ---
-const TOPO_SVG_W = 1000;
-const TOPO_SVG_H = 400;
+const TOPO_SVG_W = 1200;
+const TOPO_SVG_H = 420;
 const TOPO_ROWS = 5;
-const TOPO_SLOTS = 9;
-const NODE_W = 80;
-const NODE_H = 36;
+const TOPO_SLOTS = 12;
+const NODE_W = 72;
+const NODE_H = 34;
 
 // SBI bus NFs — drawn as stubs to a horizontal bus line
-const SBI_BUS_NFS = ['nrf','scp','ausf','udm','udr','amf','smf','pcf'];
+const SBI_BUS_NFS = ['nrf','scp','ausf','udm','udr','amf','smf','pcf','nssf','bsf'];
 
 // Layer border colors
 const LAYER_COLORS = {
-  core: '#4f8ff7', ims: '#26c6da', ran: '#ab47bc', ue: '#4caf50', data: '#8b90a5'
+  core: '#4f8ff7', ims: '#26c6da', ran: '#ab47bc', ue: '#4caf50',
+  data: '#8b90a5', infrastructure: '#8b90a5', observability: '#ff9800'
 };
 
 // Edge style by plane
@@ -1960,8 +1963,9 @@ async function pollTopology() {
 }
 
 function renderTopology(topo) {
-  const svg = document.getElementById('topology-svg');
-  const ns = 'http://www.w3.org/2000/svg';
+  const svgEl = document.getElementById('topology-svg');
+  const svg = d3.select(svgEl);
+  svg.selectAll('*').remove();
 
   // Build node position map
   const nodeMap = {};
@@ -1970,258 +1974,112 @@ function renderTopology(topo) {
     nodeMap[n.id] = { ...n, cx: pos.x, cy: pos.y };
   }
 
-  // Clear SVG
-  svg.innerHTML = '';
-
   // --- SBI Bus ---
   const sbiNodes = SBI_BUS_NFS.filter(id => nodeMap[id]);
   if (sbiNodes.length >= 2) {
-    const busY = gridToSvg(1, 0).y; // Core row Y
+    const busY = gridToSvg(1, 0).y;
     const xs = sbiNodes.map(id => nodeMap[id].cx).sort((a, b) => a - b);
     const busX1 = xs[0] - 20;
     const busX2 = xs[xs.length - 1] + 20;
+    const busLineY = busY - NODE_H / 2 - 14;
 
     const sbiEdgeInfo = { label: 'SBI Service Bus', protocol: 'HTTP/2', interface: 'SBI', plane: 'control', source: 'NRF/SCP', target: 'All Core NFs', active: true };
 
-    // Bus group (hit-area + visible line + label)
-    const busG = document.createElementNS(ns, 'g');
-    busG.classList.add('topo-edge');
-    busG.classList.add('topo-edge-group');
-    busG.setAttribute('data-plane', 'control');
-
-    // Invisible hit-area for the bus line
-    const busHit = document.createElementNS(ns, 'line');
-    busHit.setAttribute('x1', busX1);
-    busHit.setAttribute('y1', busY - NODE_H / 2 - 14);
-    busHit.setAttribute('x2', busX2);
-    busHit.setAttribute('y2', busY - NODE_H / 2 - 14);
-    busHit.setAttribute('stroke', 'transparent');
-    busHit.setAttribute('stroke-width', '14');
-    busHit.style.pointerEvents = 'stroke';
-    busG.appendChild(busHit);
-
-    // Visible bus line
-    const busLine = document.createElementNS(ns, 'line');
-    busLine.setAttribute('x1', busX1);
-    busLine.setAttribute('y1', busY - NODE_H / 2 - 14);
-    busLine.setAttribute('x2', busX2);
-    busLine.setAttribute('y2', busY - NODE_H / 2 - 14);
-    busLine.setAttribute('stroke', '#4f8ff7');
-    busLine.setAttribute('stroke-width', '2.5');
-    busLine.setAttribute('opacity', '0.5');
-    busLine.style.pointerEvents = 'none';
-    busLine.classList.add('topo-edge-visual');
-    busG.appendChild(busLine);
-
-    // Bus label
-    const busLabel = document.createElementNS(ns, 'text');
-    busLabel.setAttribute('x', (busX1 + busX2) / 2);
-    busLabel.setAttribute('y', busY - NODE_H / 2 - 20);
-    busLabel.setAttribute('text-anchor', 'middle');
-    busLabel.setAttribute('fill', '#4f8ff7');
-    busLabel.setAttribute('font-size', '10');
-    busLabel.setAttribute('opacity', '0.7');
-    busLabel.textContent = 'SBI Service Bus';
-    busLabel.style.pointerEvents = 'none';
-    busG.appendChild(busLabel);
-
-    busG.addEventListener('mouseenter', (ev) => showEdgeTooltip(ev, sbiEdgeInfo));
-    busG.addEventListener('mouseleave', hideTooltip);
-    svg.appendChild(busG);
+    const busG = svg.append('g').attr('class', 'topo-edge topo-edge-group');
+    // Hit area
+    busG.append('line').attr('x1', busX1).attr('y1', busLineY).attr('x2', busX2).attr('y2', busLineY)
+      .attr('stroke', 'transparent').attr('stroke-width', 14).style('pointer-events', 'stroke');
+    // Visible line
+    busG.append('line').attr('x1', busX1).attr('y1', busLineY).attr('x2', busX2).attr('y2', busLineY)
+      .attr('stroke', '#4f8ff7').attr('stroke-width', 2.5).attr('opacity', 0.5)
+      .style('pointer-events', 'none');
+    // Label
+    busG.append('text').attr('x', (busX1 + busX2) / 2).attr('y', busLineY - 6)
+      .attr('text-anchor', 'middle').attr('fill', '#4f8ff7').attr('font-size', 10).attr('opacity', 0.7)
+      .style('pointer-events', 'none').text('SBI Service Bus');
+    busG.on('mouseenter', (ev) => showEdgeTooltip(ev, sbiEdgeInfo)).on('mouseleave', hideTooltip);
 
     // Stubs from each NF to the bus
     for (const id of sbiNodes) {
       const n = nodeMap[id];
-      const stubG = document.createElementNS(ns, 'g');
-      stubG.classList.add('topo-edge');
-      stubG.classList.add('topo-edge-group');
-      stubG.setAttribute('data-plane', 'control');
-      stubG.setAttribute('data-edge-src', id);
-      stubG.setAttribute('data-edge-tgt', 'sbi_bus');
-
-      // Invisible hit-area
-      const stubHit = document.createElementNS(ns, 'line');
-      stubHit.setAttribute('x1', n.cx);
-      stubHit.setAttribute('y1', n.cy - NODE_H / 2);
-      stubHit.setAttribute('x2', n.cx);
-      stubHit.setAttribute('y2', busY - NODE_H / 2 - 14);
-      stubHit.setAttribute('stroke', 'transparent');
-      stubHit.setAttribute('stroke-width', '14');
-      stubHit.style.pointerEvents = 'stroke';
-      stubG.appendChild(stubHit);
-
-      // Visible stub
-      const stub = document.createElementNS(ns, 'line');
-      stub.setAttribute('x1', n.cx);
-      stub.setAttribute('y1', n.cy - NODE_H / 2);
-      stub.setAttribute('x2', n.cx);
-      stub.setAttribute('y2', busY - NODE_H / 2 - 14);
-      stub.setAttribute('stroke', '#4f8ff7');
-      stub.setAttribute('stroke-width', '1.5');
-      stub.setAttribute('opacity', n.status === 'running' ? '0.5' : '0.15');
-      stub.style.pointerEvents = 'none';
-      stub.classList.add('topo-edge-visual');
-      stubG.appendChild(stub);
-
-      const stubInfo = { label: `SBI (${nodeMap[id].label})`, protocol: 'HTTP/2', interface: 'SBI', plane: 'control', source: id, target: 'NRF/SCP', active: n.status === 'running' };
-      stubG.addEventListener('mouseenter', (ev) => showEdgeTooltip(ev, stubInfo));
-      stubG.addEventListener('mouseleave', hideTooltip);
-      svg.appendChild(stubG);
+      const stubG = svg.append('g').attr('class', 'topo-edge topo-edge-group');
+      stubG.append('line').attr('x1', n.cx).attr('y1', n.cy - NODE_H / 2).attr('x2', n.cx).attr('y2', busLineY)
+        .attr('stroke', 'transparent').attr('stroke-width', 14).style('pointer-events', 'stroke');
+      stubG.append('line').attr('x1', n.cx).attr('y1', n.cy - NODE_H / 2).attr('x2', n.cx).attr('y2', busLineY)
+        .attr('stroke', '#4f8ff7').attr('stroke-width', 1.5).attr('opacity', n.status === 'running' ? 0.5 : 0.15)
+        .style('pointer-events', 'none');
+      const stubInfo = { label: `SBI (${n.label})`, protocol: 'HTTP/2', interface: 'SBI', plane: 'control', source: id, target: 'NRF/SCP', active: n.status === 'running' };
+      stubG.on('mouseenter', (ev) => showEdgeTooltip(ev, stubInfo)).on('mouseleave', hideTooltip);
     }
   }
 
   // --- Edges (non-SBI) ---
-  // Each edge is a <g> containing: invisible wide hit-area + visible styled line.
-  // The hit-area ensures reliable mouse detection on thin lines.
   for (const e of topo.edges) {
-    // Skip SBI edges — rendered as bus above
     if (e.protocol === 'SBI') continue;
-
     const src = nodeMap[e.source];
     const tgt = nodeMap[e.target];
     if (!src || !tgt) continue;
 
     const style = PLANE_STYLES[e.plane] || PLANE_STYLES.control;
-    const g = document.createElementNS(ns, 'g');
-    g.classList.add('topo-edge');
-    g.classList.add('topo-edge-group');
-    if (!e.active) g.classList.add('edge-inactive');
-    g.setAttribute('data-plane', e.plane);
-    g.setAttribute('data-edge-src', e.source);
-    g.setAttribute('data-edge-tgt', e.target);
+    const g = svg.append('g').attr('class', `topo-edge topo-edge-group${e.active ? '' : ' edge-inactive'}`);
 
     if (e.logical) {
-      // N1 NAS: curved dashed arc
-      const dx = tgt.cx - src.cx;
-      const dy = tgt.cy - src.cy;
-      const cx1 = src.cx + dx * 0.2 - 40;
-      const cy1 = src.cy + dy * 0.3;
-      const cx2 = tgt.cx - dx * 0.2 - 40;
-      const cy2 = tgt.cy - dy * 0.3;
-      const d = `M ${src.cx} ${src.cy} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${tgt.cx} ${tgt.cy}`;
-
-      // Invisible hit-area
-      const hit = document.createElementNS(ns, 'path');
-      hit.setAttribute('d', d);
-      hit.setAttribute('fill', 'none');
-      hit.setAttribute('stroke', 'transparent');
-      hit.setAttribute('stroke-width', '14');
-      hit.style.pointerEvents = 'stroke';
-      g.appendChild(hit);
-
-      // Visible path
-      const path = document.createElementNS(ns, 'path');
-      path.setAttribute('d', d);
-      path.setAttribute('fill', 'none');
-      path.setAttribute('stroke', style.stroke);
-      path.setAttribute('stroke-width', '1');
-      path.setAttribute('stroke-dasharray', '4,4');
-      path.setAttribute('opacity', e.active ? '0.35' : '0.1');
-      path.style.pointerEvents = 'none';
-      path.classList.add('topo-edge-visual');
-      g.appendChild(path);
+      const dx = tgt.cx - src.cx, dy = tgt.cy - src.cy;
+      const d = `M ${src.cx} ${src.cy} C ${src.cx + dx*0.2-40} ${src.cy + dy*0.3}, ${tgt.cx - dx*0.2-40} ${tgt.cy - dy*0.3}, ${tgt.cx} ${tgt.cy}`;
+      g.append('path').attr('d', d).attr('fill', 'none').attr('stroke', 'transparent').attr('stroke-width', 14).style('pointer-events', 'stroke');
+      g.append('path').attr('d', d).attr('fill', 'none').attr('stroke', style.stroke).attr('stroke-width', 1)
+        .attr('stroke-dasharray', '4,4').attr('opacity', e.active ? 0.35 : 0.1).style('pointer-events', 'none');
     } else {
-      // Invisible hit-area
-      const hit = document.createElementNS(ns, 'line');
-      hit.setAttribute('x1', src.cx);
-      hit.setAttribute('y1', src.cy);
-      hit.setAttribute('x2', tgt.cx);
-      hit.setAttribute('y2', tgt.cy);
-      hit.setAttribute('stroke', 'transparent');
-      hit.setAttribute('stroke-width', '14');
-      hit.style.pointerEvents = 'stroke';
-      g.appendChild(hit);
-
-      // Visible line
-      const line = document.createElementNS(ns, 'line');
-      line.setAttribute('x1', src.cx);
-      line.setAttribute('y1', src.cy);
-      line.setAttribute('x2', tgt.cx);
-      line.setAttribute('y2', tgt.cy);
-      line.setAttribute('stroke', style.stroke);
-      line.setAttribute('stroke-width', style.width);
-      if (style.dash) line.setAttribute('stroke-dasharray', style.dash);
-      line.setAttribute('opacity', e.active ? '0.6' : '0.15');
-      line.style.pointerEvents = 'none';
-      line.classList.add('topo-edge-visual');
-      g.appendChild(line);
+      g.append('line').attr('x1', src.cx).attr('y1', src.cy).attr('x2', tgt.cx).attr('y2', tgt.cy)
+        .attr('stroke', 'transparent').attr('stroke-width', 14).style('pointer-events', 'stroke');
+      g.append('line').attr('x1', src.cx).attr('y1', src.cy).attr('x2', tgt.cx).attr('y2', tgt.cy)
+        .attr('stroke', style.stroke).attr('stroke-width', style.width)
+        .attr('stroke-dasharray', style.dash || null).attr('opacity', e.active ? 0.6 : 0.15)
+        .style('pointer-events', 'none');
     }
-
-    g.addEventListener('mouseenter', (ev) => showEdgeTooltip(ev, e));
-    g.addEventListener('mouseleave', hideTooltip);
-    g.addEventListener('click', (ev) => { ev.stopPropagation(); openEdgeDetail(e); });
-    svg.appendChild(g);
+    g.on('mouseenter', (ev) => showEdgeTooltip(ev, e)).on('mouseleave', hideTooltip)
+     .on('click', (ev) => { ev.stopPropagation(); openEdgeDetail(e); });
   }
 
   // --- Nodes ---
   for (const n of topo.nodes) {
     const nm = nodeMap[n.id];
-    const g = document.createElementNS(ns, 'g');
-    g.classList.add('topo-node');
-    if (n.status !== 'running') g.classList.add('node-down');
-    g.setAttribute('data-node-id', n.id);
-
-    const x = nm.cx - NODE_W / 2;
-    const y = nm.cy - NODE_H / 2;
+    const x = nm.cx - NODE_W / 2, y = nm.cy - NODE_H / 2;
+    const g = svg.append('g').attr('class', `topo-node${n.status !== 'running' ? ' node-down' : ''}`)
+      .attr('data-node-id', n.id);
 
     // Background rect
-    const rect = document.createElementNS(ns, 'rect');
-    rect.setAttribute('x', x);
-    rect.setAttribute('y', y);
-    rect.setAttribute('width', NODE_W);
-    rect.setAttribute('height', NODE_H);
-    rect.setAttribute('rx', '6');
-    rect.setAttribute('fill', n.status === 'running' ? '#232735' : '#1a1d27');
-    rect.setAttribute('stroke', LAYER_COLORS[n.layer] || '#8b90a5');
-    rect.setAttribute('stroke-width', '1.5');
-    g.appendChild(rect);
+    g.append('rect').attr('x', x).attr('y', y).attr('width', NODE_W).attr('height', NODE_H).attr('rx', 6)
+      .attr('fill', n.status === 'running' ? '#21262d' : '#1a1d27')
+      .attr('stroke', LAYER_COLORS[n.layer] || '#8b90a5').attr('stroke-width', 1.5);
 
     // Status dot
-    const dot = document.createElementNS(ns, 'circle');
-    dot.setAttribute('cx', x + 10);
-    dot.setAttribute('cy', y + 10);
-    dot.setAttribute('r', '4');
-    dot.setAttribute('fill', n.health === 'healthy' ? '#4caf50' : '#ef5350');
-    dot.classList.add('status-dot');
-    g.appendChild(dot);
+    g.append('circle').attr('cx', x + 10).attr('cy', y + 10).attr('r', 4)
+      .attr('fill', n.health === 'healthy' ? '#4caf50' : '#ef5350').attr('class', 'status-dot');
 
     // Label
-    const label = document.createElementNS(ns, 'text');
-    label.setAttribute('x', nm.cx);
-    label.setAttribute('y', n.sublabel ? nm.cy - 1 : nm.cy + 4);
-    label.setAttribute('text-anchor', 'middle');
-    label.textContent = n.label;
-    g.appendChild(label);
+    g.append('text').attr('x', nm.cx).attr('y', n.sublabel ? nm.cy - 1 : nm.cy + 4)
+      .attr('text-anchor', 'middle').attr('fill', '#c9d1d9').attr('font-size', 11)
+      .text(n.label);
 
-    // Sublabel (e.g. "PSA" for UPF)
+    // Sublabel
     if (n.sublabel) {
-      const sub = document.createElementNS(ns, 'text');
-      sub.setAttribute('x', nm.cx);
-      sub.setAttribute('y', nm.cy + 12);
-      sub.setAttribute('text-anchor', 'middle');
-      sub.classList.add('sublabel');
-      sub.textContent = n.sublabel;
-      g.appendChild(sub);
+      g.append('text').attr('x', nm.cx).attr('y', nm.cy + 12)
+        .attr('text-anchor', 'middle').attr('class', 'sublabel').attr('fill', '#8b949e').attr('font-size', 9)
+        .text(n.sublabel);
     }
 
     // Metric badge
     const nodeMetrics = lastMetrics[n.id];
     if (nodeMetrics && nodeMetrics.badge) {
-      const badge = document.createElementNS(ns, 'text');
-      badge.setAttribute('x', nm.cx);
-      badge.setAttribute('y', y + NODE_H + 12);
-      badge.setAttribute('text-anchor', 'middle');
-      badge.classList.add('topo-badge');
-      badge.textContent = nodeMetrics.badge;
-      g.appendChild(badge);
+      g.append('text').attr('x', nm.cx).attr('y', y + NODE_H + 12)
+        .attr('text-anchor', 'middle').attr('class', 'topo-badge')
+        .text(nodeMetrics.badge);
     }
 
     // Interactivity
-    g.addEventListener('mouseenter', (ev) => showNodeTooltip(ev, n));
-    g.addEventListener('mouseleave', hideTooltip);
-    g.addEventListener('click', () => openNodeDetail(n.id));
-
-    svg.appendChild(g);
+    g.on('mouseenter', (ev) => showNodeTooltip(ev, n)).on('mouseleave', hideTooltip)
+     .on('click', () => openNodeDetail(n.id));
   }
 }
 

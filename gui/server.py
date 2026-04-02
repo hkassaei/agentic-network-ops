@@ -151,6 +151,10 @@ async def handle_index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(GUI_DIR / "index.html")
 
 
+async def handle_flows_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(GUI_DIR / "flows.html")
+
+
 async def handle_status(request: web.Request) -> web.Response:
     """Return the status of every relevant container."""
     tasks = {}
@@ -821,6 +825,63 @@ async def handle_investigate_v5(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+# -------------------------------------------------------------------------
+# Flow API
+# -------------------------------------------------------------------------
+
+async def handle_flows_list(request: web.Request) -> web.Response:
+    """Return all flow definitions from the ontology."""
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        flows = client.get_all_flows()
+        client.close()
+        return web.json_response(flows)
+    except ImportError:
+        return web.json_response(
+            {"error": "network_ontology not available"}, status=501)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flow_detail(request: web.Request) -> web.Response:
+    """Return a complete flow with all steps."""
+    flow_id = request.match_info["flow_id"]
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        flow = client.get_flow(flow_id)
+        client.close()
+        if not flow:
+            return web.json_response(
+                {"error": f"Flow '{flow_id}' not found"}, status=404)
+        return web.json_response(flow, dumps=lambda obj: __import__("json").dumps(obj, default=str))
+    except ImportError:
+        return web.json_response(
+            {"error": "network_ontology not available"}, status=501)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flows_for_component(request: web.Request) -> web.Response:
+    """Return all flows passing through a component."""
+    component = request.match_info["name"]
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        flows = client.get_flows_through_component(component)
+        client.close()
+        return web.json_response(flows)
+    except ImportError:
+        return web.json_response(
+            {"error": "network_ontology not available"}, status=501)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_active_faults(request: web.Request) -> web.Response:
     """Return active faults from the chaos monkey fault registry (data-ready for GUI)."""
     try:
@@ -896,6 +957,11 @@ def create_app() -> web.Application:
     app.router.add_get("/ws/investigate-v4", handle_investigate_v4)
     app.router.add_get("/ws/investigate-v5", handle_investigate_v5)
     app.router.add_get("/ws/logs/{container}", handle_logs_ws)
+    app.router.add_get("/flows", handle_flows_page)
+    app.router.add_static("/static", GUI_DIR / "static")
+    app.router.add_get("/api/flows", handle_flows_list)
+    app.router.add_get("/api/flows/{flow_id}", handle_flow_detail)
+    app.router.add_get("/api/flows/component/{name}", handle_flows_for_component)
     app.router.add_get("/api/chaos/faults", handle_active_faults)
     return app
 

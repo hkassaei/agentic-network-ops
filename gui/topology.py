@@ -11,9 +11,13 @@ AI troubleshooting agent for structural reasoning.
 """
 
 import asyncio
+import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
+
+log = logging.getLogger("vonr-topology")
 
 # -------------------------------------------------------------------------
 # Grid row constants
@@ -122,10 +126,11 @@ class NetworkTopology:
 # Maps container name → (label, layer, role, ip_env_key, protocols, (row, slot), sublabel)
 # -------------------------------------------------------------------------
 _KNOWN_NF_TYPES: dict[str, tuple[str, str, str, str, list[str], tuple[int, int], str]] = {
-    # Data stores (Row 0)
-    "mongo":     ("MongoDB",     "data", "document-store",     "MONGO_IP",     ["MongoDB"],             (ROW_DATA, 1), ""),
-    "mysql":     ("MySQL",       "data", "relational-store",   "MYSQL_IP",     ["SQL"],                 (ROW_DATA, 3), ""),
-    "dns":       ("DNS",         "data", "name-resolution",    "DNS_IP",       ["DNS"],                 (ROW_DATA, 5), ""),
+    # Infrastructure (Row 0)
+    "mongo":     ("MongoDB",     "infrastructure", "document-store",     "MONGO_IP",     ["MongoDB"],             (ROW_DATA, 1), ""),
+    "mysql":     ("MySQL",       "infrastructure", "relational-store",   "MYSQL_IP",     ["SQL"],                 (ROW_DATA, 3), ""),
+    "dns":       ("DNS",         "infrastructure", "name-resolution",    "DNS_IP",       ["DNS"],                 (ROW_DATA, 5), ""),
+    "webui":     ("WebUI",       "infrastructure", "web-management",     "WEBUI_IP",     ["HTTP"],                (ROW_DATA, 0), ""),
 
     # 5G Core (Row 1)
     "nrf":       ("NRF",         "core", "nf-discovery",       "NRF_IP",       ["SBI"],                 (ROW_CORE, 0), ""),
@@ -137,12 +142,15 @@ _KNOWN_NF_TYPES: dict[str, tuple[str, str, str, str, list[str], tuple[int, int],
     "smf":       ("SMF",         "core", "session-management", "SMF_IP",       ["SBI", "PFCP"],         (ROW_CORE, 6), ""),
     "upf":       ("UPF",         "core", "user-plane-anchor",  "UPF_IP",       ["PFCP", "GTP-U"],       (ROW_CORE, 7), "PSA"),
     "pcf":       ("PCF",         "core", "policy-control",     "PCF_IP",       ["SBI", "Diameter"],     (ROW_CORE, 8), ""),
+    "nssf":      ("NSSF",        "core", "slice-selection",    "NSSF_IP",      ["SBI"],                 (ROW_CORE, 9), ""),
+    "bsf":       ("BSF",         "core", "binding-support",    "BSF_IP",       ["SBI"],                 (ROW_CORE, 10), ""),
 
     # IMS (Row 2)
     "pcscf":     ("P-CSCF",      "ims",  "sip-edge-proxy",    "PCSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 2), ""),
     "rtpengine": ("RTPEngine",   "ims",  "media-relay",       "RTPENGINE_IP", ["RTP", "ng"],           (ROW_IMS, 3), ""),
     "icscf":     ("I-CSCF",      "ims",  "sip-interrogating", "ICSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 4), ""),
     "scscf":     ("S-CSCF",      "ims",  "sip-serving",       "SCSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 5), ""),
+    "smsc":      ("SMSC",        "ims",  "sms-center",        "SMSC_IP",      ["SIP"],                 (ROW_IMS, 6), ""),
     "pyhss":     ("HSS",         "ims",  "subscriber-db",     "PYHSS_IP",     ["Diameter"],            (ROW_IMS, 7), ""),
 
     # RAN (Row 3)
@@ -151,6 +159,10 @@ _KNOWN_NF_TYPES: dict[str, tuple[str, str, str, str, list[str], tuple[int, int],
     # UEs (Row 4)
     "e2e_ue1":   ("UE1",         "ue",   "subscriber",        "UE1_IP",       ["NAS", "SIP"],          (ROW_UE, 4), ""),
     "e2e_ue2":   ("UE2",         "ue",   "subscriber",        "UE2_IP",       ["NAS", "SIP"],          (ROW_UE, 6), ""),
+
+    # Observability (Row 0)
+    "metrics":   ("Prometheus",  "observability", "metrics-collection",  "METRICS_IP",   ["HTTP"],      (ROW_DATA, 7), ""),
+    "grafana":   ("Grafana",     "observability", "metrics-visualization", "GRAFANA_IP", ["HTTP"],      (ROW_DATA, 8), ""),
 }
 
 # -------------------------------------------------------------------------
@@ -217,10 +229,171 @@ _STATIC_EDGES: list[tuple[str, str, str, str, str, str, bool]] = [
     ("icscf",  "dns",        "DNS",      "",    "management", "DNS",                False),
     ("scscf",  "dns",        "DNS",      "",    "management", "DNS",                False),
     ("pcscf",  "dns",        "DNS",      "",    "management", "DNS",                False),
+
+    # NSSF/BSF SBI (4)
+    ("nssf",   "nrf",       "SBI",     "Nnrf", "control",    "SBI (NRF)",          False),
+    ("nssf",   "scp",       "SBI",     "",     "control",    "SBI (SCP)",          False),
+    ("bsf",    "nrf",       "SBI",     "Nnrf", "control",    "SBI (NRF)",          False),
+    ("bsf",    "scp",       "SBI",     "",     "control",    "SBI (SCP)",          False),
+
+    # NSSF/BSF MongoDB (2)
+    ("nssf",   "mongo",     "MongoDB",  "",    "management", "MongoDB",            False),
+    ("bsf",    "mongo",     "MongoDB",  "",    "management", "MongoDB",            False),
+
+    # WebUI MongoDB (1)
+    ("webui",  "mongo",     "MongoDB",  "",    "management", "MongoDB",            False),
+
+    # Metrics scrape targets (4)
+    ("metrics", "amf",      "HTTP",     "",    "management", "Metrics Scrape",     False),
+    ("metrics", "smf",      "HTTP",     "",    "management", "Metrics Scrape",     False),
+    ("metrics", "upf",      "HTTP",     "",    "management", "Metrics Scrape",     False),
+    ("metrics", "pcf",      "HTTP",     "",    "management", "Metrics Scrape",     False),
+
+    # Grafana → Prometheus (1)
+    ("grafana", "metrics",  "HTTP",     "",    "management", "Datasource",         False),
+
+    # SMSC (2)
+    ("smsc",   "mysql",     "SQL",      "",    "management", "MySQL",              False),
+    ("smsc",   "dns",       "DNS",      "",    "management", "DNS",                False),
 ]
 
 # SBI bus NFs — used by frontend to render the service bus visualization
-SBI_BUS_NFS = ["nrf", "scp", "ausf", "udm", "udr", "amf", "smf", "pcf"]
+SBI_BUS_NFS = ["nrf", "scp", "ausf", "udm", "udr", "amf", "smf", "pcf", "nssf", "bsf"]
+
+
+# -------------------------------------------------------------------------
+# Ontology-backed topology loading (single source of truth)
+# -------------------------------------------------------------------------
+# Three-tier fallback:
+#   1. Neo4j (ontology graph database)
+#   2. YAML files (direct load from network_ontology/data/)
+#   3. Hardcoded constants (_KNOWN_NF_TYPES, _STATIC_EDGES) above
+
+_NfTypes = dict[str, tuple[str, str, str, str, list[str], tuple[int, int], str]]
+_Edges = list[tuple[str, str, str, str, str, str, bool]]
+
+_cached_ontology: tuple[_NfTypes, _Edges] | None = None
+_cache_time: float = 0.0
+_CACHE_TTL = 300.0  # 5 minutes
+
+
+def _load_from_neo4j() -> tuple[_NfTypes, _Edges] | None:
+    """Try loading topology from Neo4j ontology."""
+    try:
+        from network_ontology.query import OntologyClient
+        client = OntologyClient()
+        data = client.get_topology_data()
+        client.close()
+
+        nf_types: _NfTypes = {}
+        for comp in data["components"]:
+            nf_types[comp["name"]] = (
+                comp.get("label", comp["name"]),
+                comp.get("layer", "core"),
+                comp.get("role", ""),
+                comp.get("ip_env_key", ""),
+                comp.get("protocols", []),
+                (comp.get("grid_row", 0), comp.get("grid_slot", 0)),
+                comp.get("sublabel", ""),
+            )
+
+        edges: _Edges = []
+        for iface in data["interfaces"]:
+            edges.append((
+                iface["source"],
+                iface["target"],
+                iface.get("protocol", ""),
+                iface.get("name", ""),
+                iface.get("plane", "control"),
+                iface.get("label", ""),
+                iface.get("logical", False),
+            ))
+
+        log.debug("Topology loaded from Neo4j: %d components, %d edges", len(nf_types), len(edges))
+        return nf_types, edges
+    except Exception:
+        return None
+
+
+def _load_from_yaml() -> tuple[_NfTypes, _Edges] | None:
+    """Try loading topology from YAML files directly (no Neo4j needed)."""
+    try:
+        import yaml
+
+        data_dir = Path(__file__).resolve().parents[1] / "network_ontology" / "data"
+        if not data_dir.exists():
+            return None
+
+        with open(data_dir / "components.yaml") as f:
+            comp_data = yaml.safe_load(f)
+
+        deploy_data: dict = {}
+        deploy_path = data_dir / "deployment.yaml"
+        if deploy_path.exists():
+            with open(deploy_path) as f:
+                raw = yaml.safe_load(f)
+                deploy_data = raw.get("deployment", {})
+
+        nf_types: _NfTypes = {}
+        for name, comp in comp_data["components"].items():
+            dep = deploy_data.get(name, {})
+            grid = dep.get("grid_position", [0, 0])
+            nf_types[name] = (
+                comp["label"],
+                comp["layer"],
+                comp["role"],
+                dep.get("ip_env_key", ""),
+                comp.get("protocols", []),
+                (grid[0], grid[1]) if len(grid) >= 2 else (0, 0),
+                dep.get("sublabel", ""),
+            )
+
+        with open(data_dir / "interfaces.yaml") as f:
+            iface_data = yaml.safe_load(f)
+
+        edges: _Edges = []
+        for iface in iface_data["interfaces"]:
+            edges.append((
+                iface["source"],
+                iface["target"],
+                iface["protocol"],
+                iface.get("name", ""),
+                iface["plane"],
+                iface["label"],
+                iface.get("logical", False),
+            ))
+
+        log.debug("Topology loaded from YAML: %d components, %d edges", len(nf_types), len(edges))
+        return nf_types, edges
+    except Exception:
+        return None
+
+
+def _get_topology_data() -> tuple[_NfTypes, _Edges]:
+    """Get NF types and edges from the best available source."""
+    global _cached_ontology, _cache_time
+
+    now = time.time()
+    if _cached_ontology and (now - _cache_time) < _CACHE_TTL:
+        return _cached_ontology
+
+    # Tier 1: Neo4j
+    result = _load_from_neo4j()
+    if result:
+        _cached_ontology = result
+        _cache_time = now
+        return result
+
+    # Tier 2: YAML files
+    result = _load_from_yaml()
+    if result:
+        _cached_ontology = result
+        _cache_time = now
+        return result
+
+    # Tier 3: Hardcoded fallback
+    log.debug("Topology using hardcoded fallback constants")
+    return _KNOWN_NF_TYPES, _STATIC_EDGES
 
 
 # -------------------------------------------------------------------------
@@ -273,12 +446,15 @@ async def build_topology(env: dict[str, str]) -> NetworkTopology:
     """
     containers = await _discover_containers()
 
+    # Load topology structure from ontology (falls back to hardcoded)
+    nf_types, static_edges = _get_topology_data()
+
     # Build nodes for containers that match known NF types
     nodes: list[NFNode] = []
     node_ids: set[str] = set()
     node_status: dict[str, str] = {}
 
-    for name, nf_def in _KNOWN_NF_TYPES.items():
+    for name, nf_def in nf_types.items():
         label, layer, role, ip_key, protocols, (row, slot), sublabel = nf_def
 
         # Check if this container exists (running or stopped)
@@ -315,7 +491,7 @@ async def build_topology(env: dict[str, str]) -> NetworkTopology:
 
     # Filter edges: only include edges where both endpoints exist
     edges: list[NFEdge] = []
-    for src, tgt, proto, iface, plane, lbl, logical in _STATIC_EDGES:
+    for src, tgt, proto, iface, plane, lbl, logical in static_edges:
         if src in node_ids and tgt in node_ids:
             active = (node_status.get(src) == "running"
                       and node_status.get(tgt) == "running")

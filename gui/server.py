@@ -719,6 +719,78 @@ async def handle_investigate_v4(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+async def handle_investigate_v5(request: web.Request) -> web.WebSocketResponse:
+    """WebSocket endpoint for the v5 deterministic backbone system."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    msg = await ws.receive_json()
+    question = msg.get("question", "").strip()
+    if not question:
+        await _ws_send(ws, {"type": "error", "message": "No question provided"})
+        await ws.close()
+        return ws
+
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from agentic_ops_v5.orchestrator import investigate
+
+        await _ws_send(ws, {"type": "status", "message": "Starting v5 deterministic backbone investigation..."})
+
+        async def on_event(evt: dict) -> None:
+            await _ws_send(ws, evt)
+
+        result = await investigate(question, on_event=on_event)
+
+        diagnosis = result.get("diagnosis")
+        if diagnosis and isinstance(diagnosis, str):
+            await _ws_send(ws, {
+                "type": "diagnosis",
+                "summary": diagnosis[:200] if len(diagnosis) > 200 else diagnosis,
+                "timeline": [],
+                "root_cause": diagnosis,
+                "affected_components": [],
+                "recommendation": "",
+                "confidence": "medium",
+                "explanation": diagnosis,
+            })
+        elif diagnosis and isinstance(diagnosis, dict):
+            await _ws_send(ws, {
+                "type": "diagnosis",
+                "summary": diagnosis.get("summary", ""),
+                "timeline": diagnosis.get("timeline", []),
+                "root_cause": diagnosis.get("root_cause", ""),
+                "affected_components": diagnosis.get("affected_components", []),
+                "recommendation": diagnosis.get("recommendation", ""),
+                "confidence": diagnosis.get("confidence", "medium"),
+                "explanation": diagnosis.get("explanation", ""),
+            })
+        else:
+            await _ws_send(ws, {
+                "type": "diagnosis",
+                "summary": "Investigation complete — see phase results above",
+                "timeline": [],
+                "root_cause": str(result.get("investigation", "")),
+                "affected_components": [],
+                "recommendation": "",
+                "confidence": "medium",
+                "explanation": "",
+            })
+
+        inv_trace = result.get("investigation_trace", {})
+        await _ws_send(ws, {"type": "investigation_trace", "trace": inv_trace})
+        await _ws_send(ws, {"type": "usage", "total_tokens": result.get("total_tokens", 0)})
+
+        _persist_multi_agent_run("v5", question, result)
+
+    except Exception as exc:
+        log.exception("v5 investigation failed")
+        await _ws_send(ws, {"type": "error", "message": str(exc)})
+
+    await ws.close()
+    return ws
+
+
 async def handle_active_faults(request: web.Request) -> web.Response:
     """Return active faults from the chaos monkey fault registry (data-ready for GUI)."""
     try:
@@ -792,6 +864,7 @@ def create_app() -> web.Application:
     app.router.add_get("/ws/investigate", handle_investigate)
     app.router.add_get("/ws/investigate-v3", handle_investigate_v3)
     app.router.add_get("/ws/investigate-v4", handle_investigate_v4)
+    app.router.add_get("/ws/investigate-v5", handle_investigate_v5)
     app.router.add_get("/ws/logs/{container}", handle_logs_ws)
     app.router.add_get("/api/chaos/faults", handle_active_faults)
     return app

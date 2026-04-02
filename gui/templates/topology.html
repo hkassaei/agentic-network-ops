@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Topology — VoNR Learning Tool</title>
+<link rel="stylesheet" href="/static/css/style.css?v=2">
+<script src="/static/lib/d3.v7.min.js"></script>
+<script src="/static/js/common.js?v=2"></script>
+<script src="/static/js/topology.js"></script>
+</head>
+<body>
+
+<nav>
+  <span class="title">VoNR Learning Tool</span>
+  <a href="/topology">Network</a>
+  <a href="/">UEs</a>
+  <a href="/flows">Protocol Flows</a>
+  <a href="/investigate">Investigate</a>
+
+  <a href="/stack">Stack</a>
+  <span class="nav-spacer"></span>
+  <span class="status-pill" id="status-pill">...</span>
+</nav>
+
+<main style="padding:12px 24px;height:calc(100vh - 49px);display:flex;flex-direction:column">
+  <div class="topology-panel" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--surface);border:1px solid var(--border);border-radius:8px">
+    <div class="topology-header">
+      <h2>Network Topology</h2>
+      <div class="topo-controls">
+        <div class="plane-filters">
+          <button class="plane-filter active" data-plane="control" onclick="togglePlane('control',this)">
+            <span class="pf-dot" style="background:#4f8ff7"></span>Control
+          </button>
+          <button class="plane-filter active" data-plane="data" onclick="togglePlane('data',this)">
+            <span class="pf-dot" style="background:#4caf50"></span>Data
+          </button>
+          <button class="plane-filter active" data-plane="signaling" onclick="togglePlane('signaling',this)">
+            <span class="pf-dot" style="background:#26c6da"></span>Signaling
+          </button>
+          <button class="plane-filter active" data-plane="management" onclick="togglePlane('management',this)">
+            <span class="pf-dot" style="background:#8b90a5"></span>Mgmt
+          </button>
+        </div>
+        <div class="topo-legend">
+          <span><span class="legend-dot" style="background:var(--green)"></span>Healthy</span>
+          <span><span class="legend-dot" style="background:var(--red)"></span>Down</span>
+        </div>
+      </div>
+    </div>
+    <div class="topology-main" style="display:flex;flex:1;min-height:0">
+      <div class="topology-body" id="topology-body" style="flex:1;min-height:0;position:relative">
+        <svg class="topology-svg" id="topology-svg" viewBox="0 0 1200 420" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%"></svg>
+        <div class="topo-tooltip" id="topo-tooltip"></div>
+      </div>
+      <div class="metrics-detail" id="metrics-detail"></div>
+    </div>
+  </div>
+
+</main>
+
+<!-- AI explanation modal -->
+<div class="modal-overlay ai-modal" id="ai-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="ai-title">AI Explanation</h3>
+      <button onclick="document.getElementById('ai-overlay').classList.remove('active')">Close</button>
+    </div>
+    <div class="ai-explanation" id="ai-body">Analyzing logs...</div>
+  </div>
+</div>
+
+<script>
+// Metric descriptions loaded from ontology (single source of truth)
+let METRIC_TIPS = {};
+
+async function loadMetricDescriptions() {
+  try {
+    const res = await fetch(`${API_BASE}/metric-descriptions`);
+    METRIC_TIPS = await res.json();
+    // Populate data-tip on any static HTML elements with data-metric
+    document.querySelectorAll('[data-metric]').forEach(el => {
+      const desc = METRIC_TIPS[el.dataset.metric];
+      if (desc) el.dataset.tip = desc;
+    });
+  } catch (e) { /* descriptions unavailable — tooltips will be empty */ }
+}
+
+// Tooltip helper — returns an info icon with hover tooltip
+function tip(key) {
+  const text = METRIC_TIPS[key] || '';
+  if (!text) return '';
+  return `<i class="info-tip" data-tip="${escapeHtml(text)}">i</i>`;
+}
+
+// Topology page state
+let detailLogWs = null;
+let detailNodeId = null;
+let lastGauges = {};
+
+// --- Polling ---
+async function topoPagePollTopology() {
+  try {
+    const res = await fetch(`${API_BASE}/topology`);
+    const data = await res.json();
+    lastTopology = data;
+    renderTopology('#topology-svg', data, {
+      metrics: true,
+      onNodeClick: openNodeDetail,
+      onEdgeClick: openEdgeDetail,
+      tooltipId: 'topo-tooltip',
+    });
+  } catch (e) { /* skip */ }
+}
+
+async function topoPagePollDataPlaneGauges() {
+  try {
+    const res = await fetch(`${API_BASE}/data-plane-gauges`);
+    const g = await res.json();
+    lastGauges = g;
+
+    // Update detail panel gauges if open
+    if (detailNodeId) updateDetailGauges(detailNodeId);
+  } catch (e) { /* ignore */ }
+}
+
+// --- Metrics detail panel ---
+function buildMetricsRows(metrics) {
+  const entries = Object.entries(metrics).filter(([k]) => !k.startsWith('_'));
+  if (!entries.length) return '<div style="font-size:12px;color:var(--text-dim);padding:4px 0">No metrics available</div>';
+  return entries.map(([k, v]) => {
+    const desc = METRIC_TIPS[k] || METRIC_TIPS[k.replace(/_/g, ' ')] || '';
+    const tipHtml = ` ${tip(k)}`;
+    return `<div class="metric-row">
+      <span class="metric-name">${escapeHtml(formatMetricName(k))}${tipHtml}</span>
+      <span class="metric-value">${formatMetricValue(v)}</span>
+      <span class="sparkline-container" id="spark-${CSS.escape(k)}"></span>
+    </div>`;
+  }).join('');
+}
+
+function buildGaugeRows(nodeId) {
+  const g = lastGauges;
+  if (!g || Object.keys(g).length === 0) return '';
+
+  if (nodeId === 'upf') {
+    const kb = g.upf_kbps || 0;
+    const sessions = g.upf_sessions || 0;
+    const bytesIn = g.upf_bytes_in || 0;
+    const bytesOut = g.upf_bytes_out || 0;
+    const kbClass = kb > 0 ? 'good' : sessions > 0 ? 'crit' : 'idle';
+    return `
+      <div class="detail-section">
+        <h4>Data Plane Gauges</h4>
+        <div class="metric-row"><span class="metric-name">Throughput ${tip('upf_kbps')}</span><span class="metric-value gauge-val ${kbClass}" style="font-size:16px">${kb.toFixed(1)} KB/s</span></div>
+        <div class="metric-row"><span class="metric-name">Active sessions ${tip('upf_sessions')}</span><span class="metric-value">${sessions}</span></div>
+        <div class="metric-row"><span class="metric-name">Bytes in (N3) ${tip('upf_bytes_in')}</span><span class="metric-value">${formatMetricValue(bytesIn)}</span></div>
+        <div class="metric-row"><span class="metric-name">Bytes out (N3) ${tip('upf_bytes_out')}</span><span class="metric-value">${formatMetricValue(bytesOut)}</span></div>
+      </div>`;
+  }
+
+  if (nodeId === 'rtpengine') {
+    const pps = g.rtpengine_pps || 0;
+    const mos = g.rtpengine_mos || 0;
+    const loss = g.rtpengine_loss_pct || 0;
+    const jitter = g.rtpengine_jitter || 0;
+    const lost = g.rtpengine_packets_lost || 0;
+    const active = g.rtpengine_active_sessions || 0;
+    const managed = g.rtpengine_total_managed || 0;
+    const ppsClass = pps > 0 ? 'good' : 'idle';
+    const mosClass = mos >= 4.0 ? 'good' : mos >= 3.5 ? 'warn' : mos > 0 ? 'crit' : 'idle';
+    const lostClass = lost > 0 ? 'crit' : 'good';
+    return `
+      <div class="detail-section">
+        <h4>Real-time</h4>
+        <div class="metric-row"><span class="metric-name">Packets/s ${tip('rtpengine_pps')}</span><span class="metric-value gauge-val ${ppsClass}" style="font-size:16px">${Math.round(pps)}</span></div>
+        <div class="metric-row"><span class="metric-name">Active sessions ${tip('rtpengine_active_sessions')}</span><span class="metric-value">${Math.round(active)}</span></div>
+        <div class="metric-row"><span class="metric-name">Packets lost ${tip('rtpengine_packets_lost')}</span><span class="metric-value gauge-val ${lostClass}">${Math.round(lost)}</span></div>
+      </div>
+      <div class="detail-section">
+        <h4>Cumulative Averages <span style="font-size:9px;text-transform:none;letter-spacing:0">(across ${Math.round(managed)} sessions)</span></h4>
+        <div class="metric-row"><span class="metric-name">MOS ${tip('rtpengine_mos')}</span><span class="metric-value gauge-val ${mosClass}" style="font-size:16px">${mos ? mos.toFixed(1) : '0'}</span></div>
+        <div class="metric-row"><span class="metric-name">Avg packet loss ${tip('rtpengine_loss_pct')}</span><span class="metric-value">${loss.toFixed(1)}%</span></div>
+        <div class="metric-row"><span class="metric-name">Avg jitter ${tip('rtpengine_jitter')}</span><span class="metric-value">${jitter.toFixed(1)} ms</span></div>
+      </div>`;
+  }
+
+  return '';
+}
+
+function updateDetailGauges(nodeId) {
+  const el = document.getElementById('detail-gauges-section');
+  if (!el) return;
+  const html = buildGaugeRows(nodeId);
+  if (html) {
+    el.innerHTML = html;
+    el.style.display = 'block';
+  }
+}
+
+function openNodeDetail(nodeId) {
+  const panel = document.getElementById('metrics-detail');
+  const node = lastTopology?.nodes?.find(n => n.id === nodeId);
+  if (!node) return;
+
+  detailNodeId = nodeId;
+  const m = lastMetrics[nodeId] || {};
+  const metrics = m.metrics || {};
+  const statusColor = node.health === 'healthy' ? 'var(--green)' : 'var(--red)';
+  const gaugeHtml = buildGaugeRows(nodeId);
+
+  panel.innerHTML = `
+    <div class="detail-header">
+      <h3>${escapeHtml(node.label)} <span style="font-size:12px;font-weight:400;color:var(--text-dim)">${escapeHtml(node.role)}</span></h3>
+      <button class="detail-close" onclick="closeDetail()">&times;</button>
+    </div>
+    <div class="detail-info">
+      <div class="info-row"><span>Status</span><span style="color:${statusColor}">${escapeHtml(node.status)}</span></div>
+      <div class="info-row"><span>IP</span><span>${escapeHtml(node.ip || 'N/A')}</span></div>
+      <div class="info-row"><span>Layer</span><span>${escapeHtml(node.layer)}</span></div>
+      <div class="info-row"><span>Protocols</span><span>${escapeHtml(node.protocols.join(', '))}</span></div>
+      ${m.source ? `<div class="info-row"><span>Metrics via</span><span>${escapeHtml(m.source)}</span></div>` : ''}
+    </div>
+    <div id="detail-gauges-section" style="${gaugeHtml ? '' : 'display:none'}">${gaugeHtml}</div>
+    <div class="detail-section" id="detail-metrics-section">
+      <h4>Metrics${m.badge ? ` — ${escapeHtml(m.badge)}` : ''}</h4>
+      ${buildMetricsRows(metrics)}
+    </div>
+    <div class="detail-logs">
+      <div class="detail-logs-header">
+        <h4>Live Logs</h4>
+        <button class="btn-ai btn-ai-sm" id="detail-ai-btn" onclick="explainDetailLogs()">AI Explain</button>
+      </div>
+      <div class="detail-log-area" id="detail-log-area"></div>
+    </div>
+  `;
+
+  panel.classList.add('open');
+  loadSparklines(nodeId, metrics);
+  connectDetailLogs(nodeId);
+}
+
+function openEdgeDetail(edge) {
+  const panel = document.getElementById('metrics-detail');
+  detailNodeId = null;
+  if (detailLogWs) { detailLogWs.close(); detailLogWs = null; }
+
+  const srcNode = lastTopology?.nodes?.find(n => n.id === edge.source);
+  const tgtNode = lastTopology?.nodes?.find(n => n.id === edge.target);
+  const srcM = lastMetrics[edge.source]?.metrics || {};
+  const tgtM = lastMetrics[edge.target]?.metrics || {};
+
+  panel.innerHTML = `
+    <div class="detail-header">
+      <h3>${escapeHtml(edge.label)}</h3>
+      <button class="detail-close" onclick="closeDetail()">&times;</button>
+    </div>
+    <div class="detail-info">
+      <div class="info-row"><span>Protocol</span><span>${escapeHtml(edge.protocol)}</span></div>
+      ${edge.interface ? `<div class="info-row"><span>Interface</span><span>${escapeHtml(edge.interface)}</span></div>` : ''}
+      <div class="info-row"><span>Plane</span><span>${escapeHtml(edge.plane)}</span></div>
+      <div class="info-row"><span>Status</span><span style="color:${edge.active ? 'var(--green)' : 'var(--red)'}">${edge.active ? 'Active' : 'Inactive'}</span></div>
+    </div>
+    <div class="detail-section">
+      <h4>${escapeHtml(srcNode?.label || edge.source)}${lastMetrics[edge.source]?.badge ? ` — ${escapeHtml(lastMetrics[edge.source].badge)}` : ''}</h4>
+      ${buildMetricsRows(srcM)}
+    </div>
+    <div class="detail-section">
+      <h4>${escapeHtml(tgtNode?.label || edge.target)}${lastMetrics[edge.target]?.badge ? ` — ${escapeHtml(lastMetrics[edge.target].badge)}` : ''}</h4>
+      ${buildMetricsRows(tgtM)}
+    </div>
+  `;
+
+  panel.classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('metrics-detail').classList.remove('open');
+  if (detailLogWs) { detailLogWs.close(); detailLogWs = null; }
+  detailNodeId = null;
+}
+
+function updateDetailMetrics(nodeId) {
+  const section = document.getElementById('detail-metrics-section');
+  if (!section) return;
+  const m = lastMetrics[nodeId] || {};
+  const metrics = m.metrics || {};
+  section.innerHTML = `
+    <h4>Metrics${m.badge ? ` — ${escapeHtml(m.badge)}` : ''}</h4>
+    ${buildMetricsRows(metrics)}
+  `;
+  loadSparklines(nodeId, metrics);
+}
+
+async function loadSparklines(nodeId, currentMetrics) {
+  try {
+    const res = await fetch(`${API_BASE}/metrics/history/${nodeId}`);
+    const history = await res.json();
+    for (const key of Object.keys(currentMetrics)) {
+      if (key.startsWith('_')) continue;
+      const el = document.getElementById(`spark-${CSS.escape(key)}`);
+      if (!el) continue;
+      const values = history.map(h => h[key]).filter(v => v !== undefined);
+      if (values.length >= 2) {
+        el.innerHTML = renderSparkline(values, 60, 20);
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function connectDetailLogs(containerId) {
+  if (detailLogWs) { detailLogWs.close(); detailLogWs = null; }
+  const logArea = document.getElementById('detail-log-area');
+  if (!logArea) return;
+
+  const ws = new WebSocket(`${WS_BASE}/ws/logs/${containerId}`);
+  detailLogWs = ws;
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'log') {
+      const div = document.createElement('div');
+      div.textContent = msg.line;
+      const cls = classifyLine(msg.line);
+      if (cls) div.style.color = cls === 'error' ? 'var(--red)' :
+                                  cls === 'highlight' ? 'var(--green)' :
+                                  cls === 'sip-method' ? 'var(--cyan)' :
+                                  cls === 'warn' ? 'var(--orange)' : '';
+      logArea.appendChild(div);
+      while (logArea.children.length > 500) logArea.removeChild(logArea.firstChild);
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+  };
+  ws.onclose = () => { detailLogWs = null; };
+}
+
+// classifyLine needed for detail logs — imported from logs.js patterns
+function classifyLine(line) {
+  if (/Call \d+ state changed to/.test(line)) return 'call-state';
+  if (/registration success|status=200.*OK/.test(line)) return 'highlight';
+  if (/error|fail/i.test(line) && !/Allow:/.test(line)) return 'error';
+  if (/warn|timeout/i.test(line)) return 'warn';
+  return '';
+}
+
+function explainDetailLogs() {
+  const btn = document.getElementById('detail-ai-btn');
+  const logArea = document.getElementById('detail-log-area');
+  if (!logArea || !detailNodeId) return;
+
+  const lines = [];
+  for (const el of logArea.children) { lines.push(el.textContent); }
+  if (lines.length === 0) { alert('No logs to explain.'); return; }
+
+  const node = lastTopology?.nodes?.find(n => n.id === detailNodeId);
+  const label = node?.label || detailNodeId;
+
+  const overlay = document.getElementById('ai-overlay');
+  const body = document.getElementById('ai-body');
+  document.getElementById('ai-title').textContent = `AI Explanation — ${label}`;
+  body.textContent = 'Analyzing logs...';
+  overlay.classList.add('active');
+
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  fetch(`${API_BASE}/explain`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ logs: lines.join('\n'), container: detailNodeId }),
+  })
+    .then(r => r.json())
+    .then(data => { body.textContent = data.ok ? data.explanation : `Error: ${data.error}`; })
+    .catch(e => { body.textContent = `Error: ${e.message}`; })
+    .finally(() => { btn.disabled = false; btn.textContent = 'AI Explain'; });
+}
+
+// --- Plane filter toggle ---
+function togglePlane(plane, btn) {
+  const body = document.getElementById('topology-body');
+  const className = `plane-hidden-${plane}`;
+  if (btn.classList.contains('active')) {
+    btn.classList.remove('active');
+    btn.classList.add('inactive');
+    body.classList.add(className);
+  } else {
+    btn.classList.remove('inactive');
+    btn.classList.add('active');
+    body.classList.remove(className);
+  }
+}
+
+// --- Init ---
+loadMetricDescriptions();
+topoPagePollTopology();
+pollMetrics();
+topoPagePollDataPlaneGauges();
+setInterval(topoPagePollTopology, 5000);
+setInterval(pollMetrics, 5000);
+setInterval(topoPagePollDataPlaneGauges, 5000);
+setInterval(() => {
+  if (detailNodeId && lastMetrics[detailNodeId]) updateDetailMetrics(detailNodeId);
+}, 5000);
+</script>
+</body>
+</html>

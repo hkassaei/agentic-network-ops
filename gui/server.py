@@ -134,6 +134,7 @@ REQUIRED_CONTAINERS = [
 ]
 UE_CONTAINERS = ["e2e_ue1", "e2e_ue2"]
 GNB_CONTAINER = "nr_gnb"
+OPS_CONTAINERS = ["ontology"]
 
 async def _container_status(name: str) -> str:
     """Return 'running', 'exited', or 'absent'."""
@@ -147,18 +148,33 @@ async def _container_status(name: str) -> str:
 # API handlers
 # ---------------------------------------------------------------------------
 
+TEMPLATES_DIR = GUI_DIR / "templates"
+
+
 async def handle_index(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(GUI_DIR / "index.html")
+    return web.FileResponse(TEMPLATES_DIR / "dashboard.html")
+
+
+async def handle_topology_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(TEMPLATES_DIR / "topology.html")
 
 
 async def handle_flows_page(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(GUI_DIR / "flows.html")
+    return web.FileResponse(TEMPLATES_DIR / "flows.html")
+
+
+async def handle_investigate_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(TEMPLATES_DIR / "investigate.html")
+
+
+async def handle_stack_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(TEMPLATES_DIR / "stack.html")
 
 
 async def handle_status(request: web.Request) -> web.Response:
     """Return the status of every relevant container."""
     tasks = {}
-    for name in REQUIRED_CONTAINERS + [GNB_CONTAINER] + UE_CONTAINERS:
+    for name in REQUIRED_CONTAINERS + [GNB_CONTAINER] + UE_CONTAINERS + OPS_CONTAINERS:
         tasks[name] = asyncio.create_task(_container_status(name))
     results = {name: await t for name, t in tasks.items()}
 
@@ -209,6 +225,12 @@ async def handle_deploy(request: web.Request) -> web.WebSocketResponse:
 
 async def handle_deploy_ues(request: web.Request) -> web.WebSocketResponse:
     return await _ws_run_script(request, "deploy-ues.sh", "deploy-ues", "Deploying UEs...")
+
+async def handle_deploy_ontology(request: web.Request) -> web.WebSocketResponse:
+    return await _ws_run_script(request, "deploy-ontology-db.sh", "deploy-ontology", "Deploying Ontology DB...")
+
+async def handle_reseed_ontology(request: web.Request) -> web.WebSocketResponse:
+    return await _ws_run_script(request, "reseed-ontology.sh", "reseed-ontology", "Re-seeding Ontology...")
 
 async def handle_teardown_ues(request: web.Request) -> web.WebSocketResponse:
     return await _ws_run_script(request, "teardown-ues.sh", "teardown-ues", "Tearing down UEs...")
@@ -272,6 +294,41 @@ async def handle_metrics_history(request: web.Request) -> web.Response:
     node_id = request.match_info["node_id"]
     collector: MetricsCollector = request.app["metrics"]
     return web.json_response(collector.history(node_id))
+
+
+async def handle_data_plane_gauges(request: web.Request) -> web.Response:
+    """Return data plane quality gauges (RTPEngine pps/MOS + UPF KB/s)."""
+    collector: MetricsCollector = request.app["metrics"]
+    await collector.collect()
+    return web.json_response(collector.data_plane_gauges())
+
+
+def _load_metric_descriptions() -> dict[str, str]:
+    """Load metric descriptions from ontology baselines.yaml.
+
+    Returns a flat dict mapping metric_key → description string.
+    Loaded once at import time (not per-request).
+    """
+    baselines_path = REPO_ROOT / "network_ontology" / "data" / "baselines.yaml"
+    descriptions: dict[str, str] = {}
+    try:
+        import yaml
+        with open(baselines_path) as f:
+            data = yaml.safe_load(f)
+        for component, cdata in (data.get("baselines") or {}).items():
+            for metric_key, mdata in (cdata.get("metrics") or {}).items():
+                if isinstance(mdata, dict) and mdata.get("description"):
+                    descriptions[metric_key] = mdata["description"]
+    except Exception as e:
+        log.warning("Failed to load metric descriptions: %s", e)
+    return descriptions
+
+_METRIC_DESCRIPTIONS = _load_metric_descriptions()
+
+
+async def handle_metric_descriptions(request: web.Request) -> web.Response:
+    """Return metric key → description mapping from the ontology."""
+    return web.json_response(_METRIC_DESCRIPTIONS)
 
 
 async def handle_explain(request: web.Request) -> web.Response:
@@ -941,23 +998,37 @@ async def handle_logs_ws(request: web.Request) -> web.WebSocketResponse:
 def create_app() -> web.Application:
     app = web.Application()
     app["metrics"] = MetricsCollector(_env)
+    # Page routes
     app.router.add_get("/", handle_index)
+    app.router.add_get("/topology", handle_topology_page)
+    app.router.add_get("/flows", handle_flows_page)
+    app.router.add_get("/investigate", handle_investigate_page)
+    app.router.add_get("/stack", handle_stack_page)
+
+    # API routes
     app.router.add_get("/api/status", handle_status)
     app.router.add_get("/api/topology", handle_topology)
     app.router.add_get("/api/metrics", handle_metrics)
     app.router.add_get("/api/metrics/history/{node_id}", handle_metrics_history)
-    app.router.add_get("/ws/deploy", handle_deploy)
-    app.router.add_get("/ws/deploy-ues", handle_deploy_ues)
-    app.router.add_get("/ws/teardown-ues", handle_teardown_ues)
-    app.router.add_get("/ws/teardown-stack", handle_teardown_stack)
+    app.router.add_get("/api/data-plane-gauges", handle_data_plane_gauges)
+    app.router.add_get("/api/metric-descriptions", handle_metric_descriptions)
     app.router.add_post("/api/ue/{ue}/{action}", handle_ue_action)
     app.router.add_post("/api/explain", handle_explain)
+
+    # WebSocket routes
+    app.router.add_get("/ws/deploy", handle_deploy)
+    app.router.add_get("/ws/deploy-ues", handle_deploy_ues)
+    app.router.add_get("/ws/deploy-ontology", handle_deploy_ontology)
+    app.router.add_get("/ws/reseed-ontology", handle_reseed_ontology)
+    app.router.add_get("/ws/teardown-ues", handle_teardown_ues)
+    app.router.add_get("/ws/teardown-stack", handle_teardown_stack)
     app.router.add_get("/ws/investigate", handle_investigate)
     app.router.add_get("/ws/investigate-v3", handle_investigate_v3)
     app.router.add_get("/ws/investigate-v4", handle_investigate_v4)
     app.router.add_get("/ws/investigate-v5", handle_investigate_v5)
     app.router.add_get("/ws/logs/{container}", handle_logs_ws)
-    app.router.add_get("/flows", handle_flows_page)
+
+    # Static files
     app.router.add_static("/static", GUI_DIR / "static")
     app.router.add_get("/api/flows", handle_flows_list)
     app.router.add_get("/api/flows/{flow_id}", handle_flow_detail)

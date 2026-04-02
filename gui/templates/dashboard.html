@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VoNR Learning Tool</title>
+<link rel="stylesheet" href="/static/css/style.css?v=2">
+<script src="/static/lib/d3.v7.min.js"></script>
+<script src="/static/js/common.js?v=2"></script>
+<script src="/static/js/controls.js"></script>
+<script src="/static/js/logs.js"></script>
+<script src="/static/js/investigate.js"></script>
+</head>
+<body>
+
+<nav>
+  <span class="title">VoNR Learning Tool</span>
+  <a href="/topology">Network</a>
+  <a href="/">UEs</a>
+  <a href="/flows">Protocol Flows</a>
+  <a href="/investigate">Investigate</a>
+
+  <a href="/stack">Stack</a>
+  <span class="nav-spacer"></span>
+  <span class="status-pill" id="status-pill">...</span>
+</nav>
+
+<main style="padding:0 24px;height:calc(100vh - 49px);display:flex;flex-direction:column">
+  <!-- UE panels -->
+  <div style="display:flex;gap:16px;flex:1;min-height:0">
+
+  <!-- UE1 panel -->
+  <div class="ue-panel">
+    <div class="ue-header">
+      <h3>UE1</h3>
+      <span id="ue1-status" class="ue-status pill-down">--</span>
+    </div>
+    <div class="ue-actions">
+      <button onclick="ueAction('ue1','call')" id="btn-ue1-call" disabled>Call UE2</button>
+      <button onclick="ueAction('ue1','hangup')" id="btn-ue1-hangup" disabled>Hang Up</button>
+      <button onclick="ueAction('ue1','answer')" id="btn-ue1-answer" disabled>Answer</button>
+      <button onclick="ueAction('ue1','hold')" id="btn-ue1-hold" disabled>Hold</button>
+      <button onclick="ueAction('ue1','unhold')" id="btn-ue1-unhold" disabled>Unhold</button>
+    </div>
+    <div class="log-controls">
+      <label>Logs:</label>
+      <button class="toggle active" id="btn-ue1-filtered" onclick="toggleLogFilter('ue1', false)">Key events</button>
+      <button class="toggle" id="btn-ue1-all" onclick="toggleLogFilter('ue1', true)">All</button>
+      <button class="toggle" onclick="clearLogs('ue1')">Clear</button>
+    </div>
+    <div class="log-container">
+      <div class="timeline-wrapper">
+        <div class="event-timeline" id="ue1-events"></div>
+        <div class="timeline-footer">
+          <button class="btn-ai" onclick="explainLogs('ue1')" id="btn-ue1-ai">AI Explain</button>
+        </div>
+      </div>
+      <div class="log-area" id="ue1-logs"></div>
+    </div>
+  </div>
+
+  <!-- UE2 panel -->
+  <div class="ue-panel">
+    <div class="ue-header">
+      <h3>UE2</h3>
+      <span id="ue2-status" class="ue-status pill-down">--</span>
+    </div>
+    <div class="ue-actions">
+      <button onclick="ueAction('ue2','call')" id="btn-ue2-call" disabled>Call UE1</button>
+      <button onclick="ueAction('ue2','hangup')" id="btn-ue2-hangup" disabled>Hang Up</button>
+      <button onclick="ueAction('ue2','answer')" id="btn-ue2-answer" disabled>Answer</button>
+      <button onclick="ueAction('ue2','hold')" id="btn-ue2-hold" disabled>Hold</button>
+      <button onclick="ueAction('ue2','unhold')" id="btn-ue2-unhold" disabled>Unhold</button>
+    </div>
+    <div class="log-controls">
+      <label>Logs:</label>
+      <button class="toggle active" id="btn-ue2-filtered" onclick="toggleLogFilter('ue2', false)">Key events</button>
+      <button class="toggle" id="btn-ue2-all" onclick="toggleLogFilter('ue2', true)">All</button>
+      <button class="toggle" onclick="clearLogs('ue2')">Clear</button>
+    </div>
+    <div class="log-container">
+      <div class="timeline-wrapper">
+        <div class="event-timeline" id="ue2-events"></div>
+        <div class="timeline-footer">
+          <button class="btn-ai" onclick="explainLogs('ue2')" id="btn-ue2-ai">AI Explain</button>
+        </div>
+      </div>
+      <div class="log-area" id="ue2-logs"></div>
+    </div>
+  </div>
+
+  </div><!-- /ue panels -->
+</main>
+
+<!-- AI explanation modal -->
+<div class="modal-overlay ai-modal" id="ai-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="ai-title">AI Explanation</h3>
+      <button onclick="closeAiModal()">Close</button>
+    </div>
+    <div class="ai-explanation" id="ai-body">Analyzing logs...</div>
+  </div>
+</div>
+
+<!-- Investigation modal (v1.5) -->
+<div class="modal-overlay" id="inv-overlay">
+  <div class="modal" style="width:800px;max-height:85vh">
+    <div class="modal-header">
+      <h3>AI Investigation</h3>
+      <button onclick="closeInvestigation()" id="inv-close-btn">Close</button>
+    </div>
+    <div id="inv-input" style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;gap:8px">
+      <input type="text" id="inv-question" placeholder="e.g. Why can't UE2 register with IMS?" style="flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+      <button class="primary" id="inv-send-btn" onclick="sendInvestigation()">Investigate</button>
+    </div>
+    <div id="inv-progress" style="padding:12px 20px;max-height:200px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:12px;color:var(--text-dim);border-bottom:1px solid var(--border);display:none"></div>
+    <div id="inv-result" style="flex:1;overflow-y:auto;padding:16px 20px;font-size:14px;line-height:1.7;display:none"></div>
+    <div class="modal-footer" id="inv-footer" style="display:none">
+      <span id="inv-status" style="font-size:12px;color:var(--text-dim)"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Investigation V3 modal -->
+<div class="modal-overlay" id="inv3-overlay">
+  <div class="modal" style="width:800px;max-height:85vh">
+    <div class="modal-header">
+      <h3>AI Investigation V3 <span style="font-size:12px;font-weight:400;color:var(--green)">(context-isolated)</span></h3>
+      <button onclick="closeInvestigationV3()" id="inv3-close-btn">Close</button>
+    </div>
+    <div id="inv3-input" style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;gap:8px">
+      <input type="text" id="inv3-question" placeholder="e.g. Why can't UE1 call UE2?" style="flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+      <button class="primary" id="inv3-send-btn" onclick="sendInvestigationV3()" style="background:linear-gradient(135deg,#059669,#10b981)">Investigate</button>
+    </div>
+    <div id="inv3-progress" style="padding:12px 20px;max-height:250px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:12px;color:var(--text-dim);border-bottom:1px solid var(--border);display:none"></div>
+    <div id="inv3-result" style="flex:1;overflow-y:auto;padding:16px 20px;font-size:14px;line-height:1.7;display:none"></div>
+    <div id="inv3-trace" style="display:none;padding:0 20px 12px;font-family:'SF Mono',monospace;font-size:12px"></div>
+    <div class="modal-footer" id="inv3-footer" style="display:none">
+      <span id="inv3-status" style="font-size:12px;color:var(--text-dim)"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Investigation V4 modal -->
+<div class="modal-overlay" id="inv4-overlay">
+  <div class="modal" style="width:800px;max-height:85vh">
+    <div class="modal-header">
+      <h3>AI Investigation V4 <span style="font-size:12px;font-weight:400;color:var(--orange)">(topology-aware)</span></h3>
+      <button onclick="closeInvestigationV4()" id="inv4-close-btn">Close</button>
+    </div>
+    <div id="inv4-input" style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;gap:8px">
+      <input type="text" id="inv4-question" placeholder="e.g. Why can't UE1 call UE2?" style="flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+      <button class="primary" id="inv4-send-btn" onclick="sendInvestigationV4()" style="background:linear-gradient(135deg,#d97706,#f59e0b)">Investigate</button>
+    </div>
+    <div id="inv4-progress" style="padding:12px 20px;max-height:250px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:12px;color:var(--text-dim);border-bottom:1px solid var(--border);display:none"></div>
+    <div id="inv4-result" style="flex:1;overflow-y:auto;padding:16px 20px;font-size:14px;line-height:1.7;display:none"></div>
+    <div id="inv4-trace" style="display:none;padding:0 20px 12px;font-family:'SF Mono',monospace;font-size:12px"></div>
+    <div class="modal-footer" id="inv4-footer" style="display:none">
+      <span id="inv4-status" style="font-size:12px;color:var(--text-dim)"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// Dashboard-specific status polling with UE state management
+async function dashboardPollStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/status`);
+    const data = await res.json();
+
+    // UE statuses + button states
+    let uesUp = false;
+    for (const ue of ['ue1', 'ue2']) {
+      const status = data.containers[`e2e_${ue}`] || 'absent';
+      const el = document.getElementById(`${ue}-status`);
+      el.textContent = status;
+      el.className = `ue-status ${status === 'running' ? 'pill-ready' : 'pill-down'}`;
+
+      const running = status === 'running';
+      if (running) uesUp = true;
+      for (const act of ['call', 'hangup', 'answer', 'hold', 'unhold']) {
+        document.getElementById(`btn-${ue}-${act}`).disabled = !running;
+      }
+
+      // Connect log websocket if running
+      if (running && !logSockets[ue]) {
+        connectLogWS(ue);
+      } else if (!running && logSockets[ue]) {
+        logSockets[ue].close();
+        logSockets[ue] = null;
+      }
+    }
+
+  } catch (e) { /* ignore */ }
+}
+
+dashboardPollStatus();
+setInterval(dashboardPollStatus, 5000);
+
+// Enter key to submit investigation
+document.getElementById('inv-question').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendInvestigation();
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Protocol Flows — VoNR Learning Tool</title>
+<link rel="stylesheet" href="/static/css/style.css?v=2">
+<script src="/static/lib/d3.v7.min.js"></script>
+<script src="/static/js/common.js?v=2"></script>
+<script src="/static/js/topology.js"></script>
+<script src="/static/js/flow-viewer.js"></script>
+<style>
+  /* Flow-page specific styles */
+  .container { display: flex; height: calc(100vh - 49px); }
+  .sidebar { width: 320px; background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; padding: 16px; flex-shrink: 0; }
+  .flow-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  .flow-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 8px; cursor: pointer; }
+  .flow-card:hover { border-color: var(--accent); }
+  .flow-card.active { border-color: var(--accent); background: #1f2937; }
+  .flow-card h3 { font-size: 14px; color: var(--text); margin-bottom: 4px; }
+  .flow-card p { font-size: 12px; color: var(--text-dim); }
+  .flow-card .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #1f6feb30; color: var(--accent); margin-top: 4px; }
+
+  .step-list { margin-top: 16px; }
+  .step-list h4 { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .step-item { display: flex; gap: 8px; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 13px; align-items: flex-start; }
+  .step-item:hover { background: var(--surface2); }
+  .step-item.active { background: #1f2937; border-left: 3px solid var(--accent); }
+  .step-item.completed { opacity: 0.6; }
+  .step-item.future { opacity: 0.4; }
+  .step-num { width: 24px; height: 24px; border-radius: 50%; background: var(--border); color: var(--text-dim); display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+  .step-item.active .step-num { background: #1f6feb; color: #fff; }
+  .step-item.completed .step-num { background: #238636; color: #fff; }
+  .step-info { flex: 1; }
+  .step-label { color: var(--text); font-weight: 500; }
+  .step-proto { color: var(--text-dim); font-size: 11px; }
+
+  .topo-container { flex: 1; position: relative; }
+  .topo-container svg { width: 100%; height: 100%; }
+
+  .detail-panel { height: 280px; background: var(--surface); border-top: 1px solid var(--border); padding: 16px 24px; overflow-y: auto; flex-shrink: 0; }
+  .detail-panel h3 { font-size: 15px; color: var(--text); margin-bottom: 8px; }
+  .detail-panel .detail-desc { color: var(--text-dim); font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
+  .detail-panel .detail-section { margin-bottom: 12px; }
+  .detail-panel .detail-section h4 { font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .detail-panel .detail-section ul { list-style: none; padding-left: 0; }
+  .detail-panel .detail-section li { font-size: 12px; color: var(--text); padding: 2px 0; }
+  .detail-panel .detail-section li::before { content: "\2022"; color: var(--red); margin-right: 6px; }
+  .detail-panel .detail-section li.metric::before { content: "\1F4CA"; margin-right: 6px; }
+
+  .controls { display: flex; gap: 8px; padding: 8px 24px; background: var(--surface); border-top: 1px solid var(--border); align-items: center; }
+  .controls button { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .controls button:hover { background: var(--border); }
+  .controls button.primary { background: #238636; border-color: #238636; color: #fff; }
+  .controls button.primary:hover { background: #2ea043; }
+  .controls .spacer { flex: 1; }
+  .controls .step-counter { color: var(--text-dim); font-size: 13px; }
+
+  .node rect { rx: 6; ry: 6; stroke-width: 2; }
+  .node text { font-size: 11px; fill: var(--text); text-anchor: middle; pointer-events: none; }
+  .flow-dot { fill: var(--accent); }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="title">VoNR Learning Tool</span>
+  <a href="/topology">Network</a>
+  <a href="/">UEs</a>
+  <a href="/flows">Protocol Flows</a>
+  <a href="/investigate">Investigate</a>
+
+  <a href="/stack">Stack</a>
+  <span class="nav-spacer"></span>
+  <span class="status-pill" id="status-pill">...</span>
+</nav>
+
+<div class="container">
+  <!-- Sidebar: flow selector + step list -->
+  <div class="sidebar">
+    <div id="flow-list">
+      <p style="color:var(--text-dim);font-size:13px;">Loading flows...</p>
+    </div>
+    <div class="step-list" id="step-list" style="display:none;">
+      <h4>Steps</h4>
+      <div id="step-items"></div>
+    </div>
+  </div>
+
+  <!-- Main area: topology + detail -->
+  <div class="flow-main">
+    <div class="topo-container" id="topo-container">
+      <svg id="topo-svg"></svg>
+    </div>
+
+    <div class="controls" id="controls" style="display:none;">
+      <button class="primary" id="btn-play" onclick="togglePlay()">&#9654; Play</button>
+      <button id="btn-prev" onclick="stepPrev()">&#9664; Prev</button>
+      <button id="btn-next" onclick="stepNext()">Next &#9654;</button>
+      <span class="spacer"></span>
+      <span class="step-counter" id="step-counter">Step 0 / 0</span>
+    </div>
+
+    <div class="detail-panel" id="detail-panel">
+      <h3 id="detail-title">Select a flow to begin</h3>
+      <div class="detail-desc" id="detail-desc">
+        Choose a protocol flow from the sidebar to visualize how messages traverse the 5G SA + IMS network step by step.
+      </div>
+      <div id="detail-sections"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', initFlowViewer);
+</script>
+</body>
+</html>

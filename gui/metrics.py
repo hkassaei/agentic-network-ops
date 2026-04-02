@@ -30,9 +30,12 @@ class MetricsCollector:
         self._env = env
         self._prom = f"http://{env.get('METRICS_IP', '172.22.0.36')}:9090"
         self._pyhss = f"http://{env.get('PYHSS_IP', '172.22.0.18')}:8080"
+        self._rtpengine_ip = env.get("RTPENGINE_IP", "172.22.0.16")
         self._cache: dict[str, dict] = {}
         self._cache_ts: float = 0.0
         self._history: dict[str, list[dict]] = {}
+        # UPF rate computation state
+        self._prev_upf_bytes: tuple[float, float] | None = None  # (total, ts)
 
     # -----------------------------------------------------------------
     # Public API
@@ -93,6 +96,27 @@ class MetricsCollector:
         """Return metrics history for a node (for sparklines)."""
         return self._history.get(node_id, [])
 
+    def data_plane_gauges(self) -> dict:
+        """Return current data plane quality gauges (for agent/GUI consumption)."""
+        rtp = self._cache.get("rtpengine", {}).get("metrics", {})
+        upf = self._cache.get("upf", {}).get("metrics", {})
+        return {
+            "rtpengine_pps": rtp.get("packets_per_second_(total)", 0),
+            "rtpengine_mos": rtp.get("average_mos", 0),
+            "rtpengine_loss_pct": rtp.get("average_packet_loss", 0),
+            "rtpengine_jitter": rtp.get("average_jitter_(reported)", 0),
+            "rtpengine_packets_lost": rtp.get("packets_lost", 0),
+            "rtpengine_active_sessions": rtp.get("total_sessions", 0),
+            "rtpengine_total_managed": rtp.get("total_managed_sessions", 0),
+            "upf_kbps": upf.get("_gauge_upf_kbps", 0),
+            "upf_bytes_in": upf.get(
+                "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf", 0),
+            "upf_bytes_out": upf.get(
+                "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf", 0),
+            "upf_sessions": upf.get(
+                "fivegs_upffunction_upf_sessionnbr", 0),
+        }
+
     # -----------------------------------------------------------------
     # Prometheus
     # -----------------------------------------------------------------
@@ -127,6 +151,9 @@ class MetricsCollector:
             "fivegs_upffunction_upf_sessionnbr",
             "fivegs_ep_n3_gtp_indatapktn3upf",
             "fivegs_ep_n3_gtp_outdatapktn3upf",
+            # UPF byte-volume (for KB/s rate gauge)
+            'fivegs_ep_n3_gtp_indatavolumeqosleveln3upf{qfi="1"}',
+            'fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf{qfi="1"}',
             # PCF
             "fivegs_pcffunction_pa_sessionnbr",
             "fivegs_pcffunction_pa_policyamassoreq",
@@ -176,13 +203,41 @@ class MetricsCollector:
                 ]
                 upf_m = {k: v for k in upf_keys
                          if (v := r[k]) is not None}
+
+                # Byte-volume counters (query keys contain braces)
+                vol_in_key = 'fivegs_ep_n3_gtp_indatavolumeqosleveln3upf{qfi="1"}'
+                vol_out_key = 'fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf{qfi="1"}'
+                vol_in = r.get(vol_in_key)
+                vol_out = r.get(vol_out_key)
+                if vol_in is not None:
+                    upf_m["fivegs_ep_n3_gtp_indatavolumeqosleveln3upf"] = vol_in
+                if vol_out is not None:
+                    upf_m["fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf"] = vol_out
+
+                # Compute KB/s rate from consecutive byte-volume snapshots
+                total_bytes = (vol_in or 0) + (vol_out or 0)
+                now = time.time()
+                if self._prev_upf_bytes is not None:
+                    prev_bytes, prev_ts = self._prev_upf_bytes
+                    dt = now - prev_ts
+                    if dt > 0:
+                        upf_m["_gauge_upf_kbps"] = round(
+                            (total_bytes - prev_bytes) / dt / 1024, 2)
+                else:
+                    upf_m["_gauge_upf_kbps"] = 0
+                self._prev_upf_bytes = (total_bytes, now)
+
                 if upf_m:
                     sess = upf_m.get("fivegs_upffunction_upf_sessionnbr", 0)
-                    pkts = (upf_m.get("fivegs_ep_n3_gtp_indatapktn3upf", 0)
-                            + upf_m.get("fivegs_ep_n3_gtp_outdatapktn3upf", 0))
-                    badge = f"{int(sess)} sess" if sess else ""
-                    if not badge and pkts:
-                        badge = f"{int(pkts)} pkt"
+                    kbps = upf_m.get("_gauge_upf_kbps", 0)
+                    if kbps and kbps > 0:
+                        badge = f"{kbps:.1f} KB/s"
+                    elif sess:
+                        badge = f"{int(sess)} sess"
+                    else:
+                        pkts = (upf_m.get("fivegs_ep_n3_gtp_indatapktn3upf", 0)
+                                + upf_m.get("fivegs_ep_n3_gtp_outdatapktn3upf", 0))
+                        badge = f"{int(pkts)} pkt" if pkts else ""
                     out["upf"] = {
                         "metrics": upf_m,
                         "badge": badge,
@@ -295,13 +350,16 @@ class MetricsCollector:
     # -----------------------------------------------------------------
 
     async def _collect_rtpengine(self) -> dict:
-        """Collect RTPEngine session stats."""
+        """Collect RTPEngine session and VoIP quality stats."""
         m: dict[str, float] = {}
         badge = ""
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "exec", "rtpengine",
-                "rtpengine-ctl", "list", "totals",
+                "rtpengine-ctl",
+                "-ip", self._rtpengine_ip,
+                "-port", "9901",
+                "list", "totals",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -313,14 +371,26 @@ class MetricsCollector:
                 key, _, val = line.rpartition(":")
                 key = key.strip().lower().replace(" ", "_").replace("-", "_")
                 try:
-                    m[key] = float(val.strip())
+                    v = float(val.strip())
                 except ValueError:
-                    pass
+                    continue
+                # RTPEngine `list totals` repeats VoIP metrics for each
+                # interface.  The second interface section is typically all
+                # zeros and would overwrite real data.  Keep the max to
+                # preserve the non-zero values from the active interface.
+                m[key] = max(m.get(key, v), v)
 
             calls = m.get("current_sessions_own",
                           m.get("current_sessions_total", 0))
-            if calls:
+            pps = m.get("packets_per_second_(total)", 0)
+            mos = m.get("average_mos", 0)
+            if calls and mos:
+                badge = (f"{int(calls)} call{'s' if calls != 1 else ''}"
+                         f" MOS:{mos:.1f}")
+            elif calls:
                 badge = f"{int(calls)} call{'s' if calls != 1 else ''}"
+            elif pps:
+                badge = f"{int(pps)} pps"
 
         except asyncio.TimeoutError:
             log.debug("rtpengine-ctl timeout")

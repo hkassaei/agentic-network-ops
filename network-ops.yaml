@@ -7,10 +7,10 @@
 #   - Ontology Loader (one-shot init: seeds Neo4j from YAML)
 #
 # The GUI runs as a Python process on the host (not containerized).
-# See scripts/start-ops.sh for the full startup sequence.
+# See scripts/deploy-ontology-db.sh for the full startup sequence.
 #
 # Usage:
-#   ./scripts/start-ops.sh
+#   ./scripts/deploy-ontology-db.sh
 #
 # Requires:
 #   - ops.env (copy from ops.env.example and fill in values)

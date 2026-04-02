@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Investigate — VoNR Learning Tool</title>
+<link rel="stylesheet" href="/static/css/style.css?v=2">
+<script src="/static/js/common.js?v=2"></script>
+<script src="/static/js/investigate.js" defer></script>
+<style>
+  .inv-page { padding: 24px; max-width: 1200px; margin: 0 auto; }
+  .inv-page h2 { font-size: 20px; margin-bottom: 16px; }
+  .inv-tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+  .inv-tab { padding: 10px 20px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; font-size: 14px; font-weight: 500; }
+  .inv-tab:hover { background: var(--surface2); }
+  .inv-tab.active { border-color: var(--accent); background: var(--surface2); }
+
+  .inv-section { display: none; }
+  .inv-section.active { display: block; }
+
+  .inv-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+  .inv-card h3 { font-size: 16px; margin-bottom: 8px; }
+  .inv-card p { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.6; }
+  .inv-input-row { display: flex; gap: 8px; }
+  .inv-input-row input { flex: 1; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; }
+  .inv-input-row input:focus { outline: none; border-color: var(--accent); }
+
+  .inv-output { margin-top: 16px; }
+  .inv-progress-area { max-height: 300px; overflow-y: auto; font-family: 'SF Mono', monospace; font-size: 12px; color: var(--text-dim); background: var(--bg); border-radius: 6px; padding: 12px; margin-bottom: 12px; display: none; }
+  .inv-result-area { display: none; font-size: 14px; line-height: 1.7; }
+  .inv-trace-area { display: none; font-family: 'SF Mono', monospace; font-size: 12px; margin-top: 12px; }
+  .inv-status { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="title">VoNR Learning Tool</span>
+  <a href="/topology">Network</a>
+  <a href="/">UEs</a>
+  <a href="/flows">Protocol Flows</a>
+  <a href="/investigate">Investigate</a>
+
+  <a href="/stack">Stack</a>
+  <span class="nav-spacer"></span>
+  <span class="status-pill" id="status-pill">...</span>
+</nav>
+
+<div class="inv-page">
+  <h2>AI Investigation</h2>
+
+  <div class="inv-tabs">
+    <button class="inv-tab active" onclick="switchInvTab('v15')">V1.5</button>
+    <button class="inv-tab" onclick="switchInvTab('v3')">V3 <span style="font-size:11px;color:var(--green)">(context-isolated)</span></button>
+    <button class="inv-tab" onclick="switchInvTab('v4')">V4 <span style="font-size:11px;color:var(--orange)">(topology-aware)</span></button>
+    <button class="inv-tab" onclick="switchInvTab('v5')">V5 <span style="font-size:11px;color:var(--purple)">(6-phase)</span></button>
+  </div>
+
+  <!-- V1.5 -->
+  <div class="inv-section active" id="inv-section-v15">
+    <div class="inv-card">
+      <h3>Investigation V1.5</h3>
+      <p>Single-agent investigation with tool access. Good for quick checks.</p>
+      <div class="inv-input-row">
+        <input type="text" id="inv-question" placeholder="e.g. Why can't UE2 register with IMS?">
+        <button class="primary" id="inv-send-btn" onclick="sendInvestigation()">Investigate</button>
+      </div>
+      <div class="inv-output">
+        <div class="inv-progress-area" id="inv-progress"></div>
+        <div class="inv-result-area" id="inv-result"></div>
+        <div class="inv-status" id="inv-footer" style="display:none"><span id="inv-status"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- V3 -->
+  <div class="inv-section" id="inv-section-v3">
+    <div class="inv-card">
+      <h3>Investigation V3 <span style="font-size:12px;font-weight:400;color:var(--green)">(context-isolated)</span></h3>
+      <p>Multi-agent pipeline with context isolation between phases. More thorough than V1.5.</p>
+      <div class="inv-input-row">
+        <input type="text" id="inv3-question" placeholder="e.g. Why can't UE1 call UE2?">
+        <button class="primary" id="inv3-send-btn" onclick="sendInvestigationV3()" style="background:linear-gradient(135deg,#059669,#10b981)">Investigate</button>
+      </div>
+      <div class="inv-output">
+        <div class="inv-progress-area" id="inv3-progress"></div>
+        <div class="inv-result-area" id="inv3-result"></div>
+        <div class="inv-trace-area" id="inv3-trace"></div>
+        <div class="inv-status" id="inv3-footer" style="display:none"><span id="inv3-status"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- V4 -->
+  <div class="inv-section" id="inv-section-v4">
+    <div class="inv-card">
+      <h3>Investigation V4 <span style="font-size:12px;font-weight:400;color:var(--orange)">(topology-aware)</span></h3>
+      <p>Topology-aware multi-agent investigation with network structure understanding.</p>
+      <div class="inv-input-row">
+        <input type="text" id="inv4-question" placeholder="e.g. Why can't UE1 call UE2?">
+        <button class="primary" id="inv4-send-btn" onclick="sendInvestigationV4()" style="background:linear-gradient(135deg,#d97706,#f59e0b)">Investigate</button>
+      </div>
+      <div class="inv-output">
+        <div class="inv-progress-area" id="inv4-progress"></div>
+        <div class="inv-result-area" id="inv4-result"></div>
+        <div class="inv-trace-area" id="inv4-trace"></div>
+        <div class="inv-status" id="inv4-footer" style="display:none"><span id="inv4-status"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- V5 -->
+  <div class="inv-section" id="inv-section-v5">
+    <div class="inv-card">
+      <h3>Investigation V5 <span style="font-size:12px;font-weight:400;color:var(--purple)">(6-phase pipeline)</span></h3>
+      <p>Full 6-phase pipeline: Triage, Pattern Matching, Anomaly Detection, Instruction Generation, Investigation, Synthesis. Ontology-powered.</p>
+      <div class="inv-input-row">
+        <input type="text" id="inv5-question" placeholder="e.g. The 5G SA + IMS stack is experiencing issues.">
+        <button class="primary" id="inv5-send-btn" onclick="sendInvestigationV5()" style="background:linear-gradient(135deg,#7c3aed,#a855f7)">Investigate</button>
+      </div>
+      <div class="inv-output">
+        <div class="inv-progress-area" id="inv5-progress"></div>
+        <div class="inv-result-area" id="inv5-result"></div>
+        <div class="inv-trace-area" id="inv5-trace"></div>
+        <div class="inv-status" id="inv5-footer" style="display:none"><span id="inv5-status"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchInvTab(version) {
+  document.querySelectorAll('.inv-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.inv-section').forEach(s => s.classList.remove('active'));
+  event.target.closest('.inv-tab').classList.add('active');
+  document.getElementById(`inv-section-${version}`).classList.add('active');
+}
+
+// V5 investigation (uses same pattern as v4 but different WS endpoint)
+let inv5Ws = null;
+
+function sendInvestigationV5() {
+  const input = document.getElementById('inv5-question');
+  const question = input.value.trim();
+  if (!question) return;
+
+  const sendBtn = document.getElementById('inv5-send-btn');
+  const progress = document.getElementById('inv5-progress');
+  const result = document.getElementById('inv5-result');
+  const footer = document.getElementById('inv5-footer');
+  const status = document.getElementById('inv5-status');
+
+  sendBtn.disabled = true;
+  sendBtn.textContent = 'Working...';
+  progress.style.display = 'block';
+  progress.innerHTML = '';
+  result.style.display = 'none';
+  result.innerHTML = '';
+  footer.style.display = 'block';
+  status.textContent = 'Connecting to v5 pipeline...';
+
+  inv5Ws = new WebSocket(`${WS_BASE}/ws/investigate-v5`);
+
+  inv5Ws.onopen = () => {
+    status.textContent = '6-phase investigation in progress...';
+    inv5Ws.send(JSON.stringify({ question }));
+  };
+
+  inv5Ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'status') {
+      _addProgress('inv5-progress', 'status', msg.message);
+    } else if (msg.type === 'phase_start') {
+      _addProgress('inv5-progress', 'phase', `▶ ${msg.agent}`);
+      status.textContent = `Running: ${msg.agent}`;
+    } else if (msg.type === 'phase_skip') {
+      _addProgress('inv5-progress', 'status', `⏭ ${msg.agent} skipped: ${msg.reason}`);
+    } else if (msg.type === 'tool_call') {
+      const agent = msg.agent ? `[${msg.agent}] ` : '';
+      _addProgress('inv5-progress', 'tool', `  ${agent}🔧 ${msg.name}(${truncate(msg.args || '', 100)})`);
+    } else if (msg.type === 'tool_result') {
+      _addProgress('inv5-progress', 'result', `    ↳ ${msg.name}: ${truncate(msg.preview || '', 150)}`);
+    } else if (msg.type === 'text') {
+      const agent = msg.agent ? `[${msg.agent}] ` : '';
+      _addProgress('inv5-progress', 'text', `  ${agent}${truncate(msg.content || '', 200)}`);
+    } else if (msg.type === 'diagnosis') {
+      _renderDiagnosis('inv5-result', msg);
+      status.textContent = 'Investigation complete';
+      status.style.color = 'var(--green)';
+    } else if (msg.type === 'investigation_trace') {
+      _renderTrace('inv5-trace', 'v5', msg.trace);
+    } else if (msg.type === 'usage') {
+      const existing = status.textContent;
+      status.textContent = `${existing} · ${msg.total_tokens.toLocaleString()} tokens`;
+    } else if (msg.type === 'error') {
+      result.style.display = 'block';
+      result.innerHTML = `<div style="color:var(--red)">Error: ${escapeHtml(msg.message)}</div>`;
+      status.textContent = 'Failed';
+      status.style.color = 'var(--red)';
+    }
+  };
+
+  inv5Ws.onerror = () => {
+    status.textContent = 'WebSocket error';
+    status.style.color = 'var(--red)';
+    sendBtn.disabled = false;
+    sendBtn.textContent = 'Investigate';
+  };
+
+  inv5Ws.onclose = () => {
+    sendBtn.disabled = false;
+    sendBtn.textContent = 'Investigate';
+    inv5Ws = null;
+  };
+}
+
+// Enter key handlers
+['inv-question', 'inv3-question', 'inv4-question', 'inv5-question'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        el.closest('.inv-card').querySelector('button.primary').click();
+      }
+    });
+  }
+});
+</script>
+</body>
+</html>

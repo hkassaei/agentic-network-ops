@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack Management — VoNR Learning Tool</title>
+<link rel="stylesheet" href="/static/css/style.css?v=2">
+<script src="/static/js/common.js?v=2"></script>
+<script src="/static/js/controls.js"></script>
+</head>
+<body>
+
+<nav>
+  <span class="title">VoNR Learning Tool</span>
+  <a href="/topology">Network</a>
+  <a href="/">UEs</a>
+  <a href="/flows">Protocol Flows</a>
+  <a href="/investigate">Investigate</a>
+
+  <a href="/stack">Stack</a>
+  <span class="nav-spacer"></span>
+  <span class="status-pill" id="status-pill">...</span>
+</nav>
+
+<main style="padding:24px;height:calc(100vh - 49px);display:flex;flex-direction:column;gap:24px">
+
+  <div style="display:flex;gap:16px;flex-shrink:0;flex-wrap:wrap">
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+      <h3 style="margin:0 0 8px;font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">Deploy</h3>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button id="btn-deploy-ontology" class="primary" onclick="deployOntologyDB()" style="font-size:12px;padding:6px 12px">Ontology DB</button>
+        <span style="color:var(--text-dim);font-size:11px">or</span>
+        <button id="btn-deploy" class="primary" onclick="deployStack()" style="font-size:12px;padding:6px 12px">Build & Deploy Stack</button>
+        <span style="color:var(--text-dim);font-size:11px">&rarr;</span>
+        <button id="btn-deploy-ues" class="primary" onclick="deployUEs()" style="font-size:12px;padding:6px 12px">Deploy UEs</button>
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+      <h3 style="margin:0 0 8px;font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">Teardown</h3>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button id="btn-teardown-ues" class="warn" onclick="teardownUEs()" style="font-size:12px;padding:6px 12px">Tear Down UEs</button>
+        <span style="color:var(--text-dim);font-size:11px">&rarr;</span>
+        <button id="btn-teardown-stack" class="danger" onclick="teardownStack()" style="font-size:12px;padding:6px 12px">Tear Down Stack</button>
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+      <h3 style="margin:0 0 8px;font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">Maintenance</h3>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button id="btn-reseed-ontology" onclick="reseedOntology()" style="font-size:12px;padding:6px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;cursor:pointer">Re-seed Ontology</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="flex:1;overflow-y:auto">
+    <div id="container-status-groups"></div>
+  </div>
+
+</main>
+
+<!-- Deploy/Teardown output modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title">Deploying...</h3>
+      <button onclick="closeModal()" id="modal-close-btn" disabled>Close</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <span id="modal-status" style="font-size:13px;color:var(--text-dim);">Running...</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// Container → layer classification (matches topology.py _KNOWN_NF_TYPES)
+const CONTAINER_GROUPS = {
+  '5G Core':        ['nrf','scp','ausf','udm','udr','amf','smf','upf','pcf','nssf','bsf'],
+  'IMS':            ['pcscf','icscf','scscf','pyhss','rtpengine','smsc'],
+  'RAN':            ['nr_gnb'],
+  'UEs':            ['e2e_ue1','e2e_ue2'],
+  'Infrastructure': ['mongo','mysql','dns','webui'],
+  'Observability':  ['metrics','grafana'],
+  'Operations':     ['ontology'],
+};
+
+const GROUP_ORDER = ['5G Core','IMS','RAN','UEs','Infrastructure','Observability','Operations'];
+const GROUP_COLORS = {
+  '5G Core': '#3b82f6', 'IMS': '#8b5cf6', 'RAN': '#f59e0b',
+  'UEs': '#10b981', 'Infrastructure': '#6b7280', 'Observability': '#06b6d4',
+  'Operations': '#ec4899',
+};
+
+// Build reverse lookup: container name → group
+const containerToGroup = {};
+for (const [group, containers] of Object.entries(CONTAINER_GROUPS)) {
+  for (const c of containers) containerToGroup[c] = group;
+}
+
+async function stackPollStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/status`);
+    const data = await res.json();
+
+    // Update button states
+    const uesUp = data.containers.e2e_ue1 === 'running' || data.containers.e2e_ue2 === 'running';
+    const ontologyUp = data.containers.ontology === 'running';
+    document.getElementById('btn-deploy').disabled = data.phase === 'ready';
+    document.getElementById('btn-deploy-ues').disabled = data.phase === 'down' || uesUp;
+    document.getElementById('btn-deploy-ontology').disabled = ontologyUp;
+    document.getElementById('btn-teardown-ues').disabled = !uesUp;
+    document.getElementById('btn-teardown-stack').disabled = data.phase === 'down';
+
+    // Group containers
+    const groups = {};
+    for (const g of GROUP_ORDER) groups[g] = [];
+    const ungrouped = [];
+
+    for (const [name, status] of Object.entries(data.containers)) {
+      const group = containerToGroup[name];
+      if (group) {
+        groups[group].push({ name, status });
+      } else {
+        ungrouped.push({ name, status });
+      }
+    }
+    if (ungrouped.length) groups['Other'] = ungrouped;
+
+    // Render grouped panels
+    const root = document.getElementById('container-status-groups');
+    root.innerHTML = '';
+
+    for (const group of [...GROUP_ORDER, 'Other']) {
+      const items = groups[group];
+      if (!items || !items.length) continue;
+
+      const running = items.filter(i => i.status === 'running').length;
+      const total = items.length;
+      const color = GROUP_COLORS[group] || '#6b7280';
+
+      const section = document.createElement('div');
+      section.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px';
+      section.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <span style="width:12px;height:12px;border-radius:3px;background:${color};flex-shrink:0"></span>
+          <h3 style="margin:0;font-size:14px">${group}</h3>
+          <span style="font-size:12px;color:var(--text-dim)">${running}/${total} running</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px" id="group-${group.replace(/\s/g,'')}"></div>
+      `;
+      root.appendChild(section);
+
+      const grid = section.querySelector('div[id]');
+      for (const { name, status } of items) {
+        const dot = status === 'running' ? '#4caf50' : status === 'exited' ? '#f44336' : '#666';
+        const el = document.createElement('div');
+        el.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg);border-radius:6px;font-size:13px';
+        el.innerHTML = `<span style="width:8px;height:8px;border-radius:50%;background:${dot};flex-shrink:0"></span><span style="font-family:'SF Mono',monospace">${name}</span><span style="margin-left:auto;color:var(--text-dim);font-size:11px">${status}</span>`;
+        grid.appendChild(el);
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+stackPollStatus();
+setInterval(stackPollStatus, 5000);
+</script>
+</body>
+</html>

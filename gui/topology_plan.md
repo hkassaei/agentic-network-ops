@@ -1,5 +1,7 @@
 # Live Network Topology View — Implementation Plan
 
+> **Note (2026-04-02):** This plan has been implemented. The topology is now rendered by `gui/static/js/topology.js` (D3.js, single source of truth) backed by `gui/topology.py` (3-tier data source: Neo4j → YAML → hardcoded fallback). The monolithic `index.html` has been split into multi-page templates — see `docs/ADR/gui-rearchitecture.md`.
+
 ## Overview
 
 Add a live, interactive network topology view to the VoNR Learning Tool GUI.

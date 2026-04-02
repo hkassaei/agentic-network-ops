@@ -459,6 +459,109 @@ def load_healthchecks(tx):
     log.info("Loaded %d health checks.", count)
 
 
+def load_flows(tx):
+    """Load Flow and FlowStep nodes from flows.yaml."""
+    path = _DATA_DIR / "flows.yaml"
+    if not path.exists():
+        log.info("No flows.yaml found, skipping flow loading.")
+        return
+
+    data = _load_yaml("flows.yaml")
+    import json
+
+    for flow_id, flow in data.get("flows", {}).items():
+        # Create Flow node
+        tx.run("""
+            MERGE (f:Flow {id: $id})
+            SET f.name = $name,
+                f.description = $description,
+                f.use_case = $use_case,
+                f.trigger = $trigger,
+                f.preconditions = $preconditions,
+                f.outcome_success = $outcome_success,
+                f.outcome_metrics = $outcome_metrics
+        """,
+            id=flow_id,
+            name=flow["name"],
+            description=flow.get("description", ""),
+            use_case=flow.get("use_case", ""),
+            trigger=flow.get("trigger", ""),
+            preconditions=flow.get("preconditions", []),
+            outcome_success=flow.get("outcome", {}).get("success", ""),
+            outcome_metrics=flow.get("outcome", {}).get("observable_metrics", []),
+        )
+
+        # Create FlowStep nodes
+        for step in flow.get("steps", []):
+            step_id = f"{flow_id}_step_{step['order']}"
+            via = step.get("via", [])
+            failure_modes = step.get("failure_modes", [])
+            metrics_to_watch = step.get("metrics_to_watch", [])
+
+            tx.run("""
+                MERGE (fs:FlowStep {id: $id})
+                SET fs.flow_id = $flow_id,
+                    fs.step_order = $order,
+                    fs.from_component = $from_comp,
+                    fs.to_component = $to_comp,
+                    fs.via = $via,
+                    fs.protocol = $protocol,
+                    fs.interface = $interface,
+                    fs.label = $label,
+                    fs.description = $description,
+                    fs.detail = $detail,
+                    fs.failure_modes = $failure_modes,
+                    fs.metrics_to_watch = $metrics_to_watch
+            """,
+                id=step_id,
+                flow_id=flow_id,
+                order=step["order"],
+                from_comp=step["from"],
+                to_comp=step["to"],
+                via=via,
+                protocol=step.get("protocol", ""),
+                interface=step.get("interface", ""),
+                label=step.get("label", ""),
+                description=step.get("description", ""),
+                detail=step.get("detail", ""),
+                failure_modes=failure_modes,
+                metrics_to_watch=metrics_to_watch,
+            )
+
+            # HAS_STEP: Flow → FlowStep
+            tx.run("""
+                MATCH (f:Flow {id: $flow_id})
+                MATCH (fs:FlowStep {id: $step_id})
+                MERGE (f)-[:HAS_STEP {order: $order}]->(fs)
+            """, flow_id=flow_id, step_id=step_id, order=step["order"])
+
+            # FROM: FlowStep → Component
+            tx.run("""
+                MATCH (fs:FlowStep {id: $step_id})
+                MATCH (c:Component {name: $comp})
+                MERGE (fs)-[:FROM]->(c)
+            """, step_id=step_id, comp=step["from"])
+
+            # TO: FlowStep → Component
+            tx.run("""
+                MATCH (fs:FlowStep {id: $step_id})
+                MATCH (c:Component {name: $comp})
+                MERGE (fs)-[:TO]->(c)
+            """, step_id=step_id, comp=step["to"])
+
+            # VIA: FlowStep → Component (intermediate hops)
+            for via_comp in via:
+                tx.run("""
+                    MATCH (fs:FlowStep {id: $step_id})
+                    MATCH (c:Component {name: $comp})
+                    MERGE (fs)-[:VIA]->(c)
+                """, step_id=step_id, comp=via_comp)
+
+    flow_count = len(data.get("flows", {}))
+    step_count = sum(len(f.get("steps", [])) for f in data.get("flows", {}).values())
+    log.info("Loaded %d flows with %d steps.", flow_count, step_count)
+
+
 def load_baselines(tx):
     """Load baseline metric values from baselines.yaml as properties on Component/Metric nodes."""
     data = _load_yaml("baselines.yaml")
@@ -524,6 +627,7 @@ def load_all(uri: str = "bolt://localhost:7687", auth: tuple = ("neo4j", "ontolo
         session.execute_write(load_stack_rules)
         session.execute_write(load_healthchecks)
         session.execute_write(load_baselines)
+        session.execute_write(load_flows)
 
     driver.close()
     log.info("Ontology loading complete.")

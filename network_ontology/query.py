@@ -473,6 +473,59 @@ class OntologyClient:
             "subsystems": subsystems,
         }
 
+    # -----------------------------------------------------------------
+    # Flow Queries
+    # -----------------------------------------------------------------
+
+    def get_all_flows(self) -> list[dict]:
+        """Return all flow definitions (id, name, use_case, step count)."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (f:Flow)
+                OPTIONAL MATCH (f)-[:HAS_STEP]->(fs:FlowStep)
+                RETURN f, count(fs) AS step_count
+                ORDER BY f.name
+            """)
+            return [
+                {**dict(record["f"]), "step_count": record["step_count"]}
+                for record in result
+            ]
+
+    def get_flow(self, flow_id: str) -> dict | None:
+        """Return a complete flow with all steps ordered by step_order."""
+        with self._driver.session() as session:
+            # Get the flow node
+            flow_result = session.run(
+                "MATCH (f:Flow {id: $id}) RETURN f", id=flow_id
+            )
+            flow_record = flow_result.single()
+            if not flow_record:
+                return None
+            flow = dict(flow_record["f"])
+
+            # Get all steps ordered
+            steps_result = session.run("""
+                MATCH (f:Flow {id: $id})-[hs:HAS_STEP]->(fs:FlowStep)
+                RETURN fs
+                ORDER BY fs.step_order
+            """, id=flow_id)
+
+            flow["steps"] = [dict(record["fs"]) for record in steps_result]
+            return flow
+
+    def get_flows_through_component(self, component: str) -> list[dict]:
+        """Return all flows that pass through a given component (as FROM, TO, or VIA)."""
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (c:Component {name: $name})
+                MATCH (fs:FlowStep)-[:FROM|TO|VIA]->(c)
+                MATCH (f:Flow)-[:HAS_STEP]->(fs)
+                RETURN DISTINCT f.id AS flow_id, f.name AS flow_name,
+                       fs.step_order AS step_order, fs.label AS step_label
+                ORDER BY f.name, fs.step_order
+            """, name=component)
+            return [dict(record) for record in result]
+
     def get_component(self, name: str) -> dict | None:
         """Get a component with its interfaces and connected peers."""
         with self._driver.session() as session:

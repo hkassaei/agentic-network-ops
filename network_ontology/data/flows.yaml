@@ -1,0 +1,441 @@
+# =============================================================================
+# Network Ontology — Protocol Flows
+# =============================================================================
+# Structured definitions of how procedures flow through the network.
+# Each flow is a sequence of steps showing which components are involved,
+# what protocol is used at each hop, and what can go wrong.
+#
+# Used by:
+#   - GUI flow visualization (animated step-through)
+#   - RCA agents (mapping failures to specific steps in a procedure)
+#   - Learning tool (understanding how the network works)
+
+flows:
+
+  # =========================================================================
+  # IMS Registration
+  # =========================================================================
+
+  ims_registration:
+    name: "IMS Registration"
+    description: "UE registers with the IMS network for voice services. Establishes SIP identity, authenticates via HSS, and sets up QoS policy."
+    use_case: vonr
+    trigger: "UE powers on, or re-registration timer fires"
+    preconditions:
+      - "UE attached to 5G (NAS registration complete)"
+      - "Internet and IMS PDU sessions established"
+      - "gNB connected to AMF (N2 active)"
+
+    steps:
+      - order: 1
+        from: e2e_ue1
+        to: amf
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "5G NAS Registration"
+        description: "UE attaches to 5G core via gNB. AMF handles authentication via AUSF/UDM."
+        detail: |
+          The UE sends a Registration Request over the NR-Uu air interface.
+          The gNB forwards it to the AMF via NGAP (N2). The AMF triggers
+          5G-AKA authentication through AUSF → UDM → UDR → MongoDB.
+          On success, the UE is assigned a 5G-GUTI and can establish
+          PDU sessions.
+        failure_modes:
+          - "N2 link down → AMF logs 'SCTP connection refused'"
+          - "Auth failure → amf_authfail counter increments"
+          - "gNB unreachable → ran_ue stays at 0"
+        metrics_to_watch: [ran_ue, gnb, amf_session, fivegs_amffunction_amf_authfail]
+
+      - order: 2
+        from: e2e_ue1
+        to: pcscf
+        via: [nr_gnb, upf]
+        protocol: SIP
+        interface: Gm
+        label: "SIP REGISTER via GTP-U"
+        description: "UE sends SIP REGISTER through the IMS APN tunnel to P-CSCF."
+        detail: |
+          After the IMS PDU session is established (with the IMS APN),
+          the UE sends a SIP REGISTER message over the IMS TUN interface.
+          The message traverses the GTP-U tunnel: UE → gNB → UPF → P-CSCF.
+          The P-CSCF is the first SIP hop — the UE's proxy for all IMS
+          signaling. pjsua binds to the IMS TUN IP (192.168.101.x).
+        failure_modes:
+          - "GTP-U tunnel down → REGISTER never reaches P-CSCF"
+          - "UPF packet loss → SIP retransmissions, eventual timeout"
+          - "TCP/UDP mismatch → large SIP messages silently dropped"
+        metrics_to_watch:
+          - "fivegs_ep_n3_gtp_indatapktn3upf"
+          - "ims_usrloc_pcscf:registered_contacts"
+
+      - order: 3
+        from: pcscf
+        to: nrf
+        via: [scp]
+        protocol: SBI
+        interface: Nnrf
+        label: "Discover PCF for Rx policy"
+        description: "P-CSCF queries NRF via SCP to find the PCF instance for QoS policy."
+        detail: |
+          The P-CSCF needs to establish an Rx session with the PCF for
+          QoS policy decisions (dedicated bearers for voice). It discovers
+          the PCF by querying the NRF through the SCP using HTTP/2 SBI.
+          The SCP acts as the central message router for all SBI traffic.
+        failure_modes:
+          - "SCP latency → httpclient:connfail spikes at P-CSCF"
+          - "NRF down → P-CSCF cannot discover PCF"
+          - "SCP_BIND_IP placeholder not resolved → connection to invalid address"
+        metrics_to_watch:
+          - "httpclient:connfail"
+          - "httpclient:connok"
+
+      - order: 4
+        from: pcscf
+        to: icscf
+        protocol: SIP
+        interface: Mw
+        label: "Forward REGISTER to I-CSCF"
+        description: "P-CSCF forwards the SIP REGISTER to the I-CSCF for routing into the IMS core."
+        detail: |
+          The P-CSCF identifies the home network from the user's IMPU
+          (IMS Public User Identity) and forwards the REGISTER to the
+          I-CSCF, the entry point to the IMS core. The I-CSCF's address
+          is resolved via DNS NAPTR/SRV records.
+        failure_modes:
+          - "I-CSCF unreachable → SIP transaction timeout (408)"
+          - "DNS failure → P-CSCF cannot resolve I-CSCF address"
+          - "Network partition → Mw SIP path severed"
+
+      - order: 5
+        from: icscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "UAR — Find assigned S-CSCF"
+        description: "I-CSCF sends Diameter UAR to HSS to find which S-CSCF serves this user."
+        detail: |
+          The I-CSCF sends a User-Authorization-Request (UAR) to the HSS
+          over the Cx Diameter interface. The HSS checks if the user exists
+          and returns the assigned S-CSCF address (or assigns one if this
+          is the first registration). The UAR/UAA exchange is the first
+          Diameter operation in the registration flow.
+        failure_modes:
+          - "HSS unreachable → ims_icscf:uar_timeouts increments"
+          - "HSS overloaded/slow → cdp:timeout increments"
+          - "Diameter I_Open display artifact (benign — ignore if traffic flows)"
+        metrics_to_watch:
+          - "ims_icscf:uar_timeouts"
+          - "ims_icscf:uar_avg_response_time"
+          - "cdp:timeout"
+
+      - order: 6
+        from: icscf
+        to: scscf
+        protocol: SIP
+        interface: Mw
+        label: "Forward REGISTER to S-CSCF"
+        description: "I-CSCF forwards the REGISTER to the assigned S-CSCF."
+        detail: |
+          Using the S-CSCF address returned by the HSS, the I-CSCF
+          forwards the SIP REGISTER to the S-CSCF. The S-CSCF is the
+          core registrar and call controller for this user.
+
+      - order: 7
+        from: scscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "MAR — Authenticate user"
+        description: "S-CSCF sends Diameter MAR to HSS to get authentication vectors."
+        detail: |
+          The S-CSCF sends a Multimedia-Authentication-Request (MAR) to
+          the HSS. The HSS returns authentication vectors. In this
+          deployment, MD5 Digest auth is used (not IMS-AKA) because
+          pjsua doesn't support IPsec. The S-CSCF challenges the UE
+          with a 401 Unauthorized and verifies the digest response.
+        failure_modes:
+          - "HSS unreachable → ims_auth:mar_timeouts increments"
+          - "Auth algorithm mismatch (AKA vs MD5) → 401 loop"
+          - "Wrong credentials → ims_registrar_scscf:rejected_regs increments"
+        metrics_to_watch:
+          - "ims_auth:mar_timeouts"
+          - "ims_auth:mar_avg_response_time"
+          - "ims_registrar_scscf:rejected_regs"
+
+      - order: 8
+        from: scscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "SAR — Register serving CSCF"
+        description: "S-CSCF sends Diameter SAR to HSS to register itself as the serving CSCF."
+        detail: |
+          After successful authentication, the S-CSCF sends a
+          Server-Assignment-Request (SAR) to the HSS. This binds the
+          user to this S-CSCF instance. The HSS downloads the user's
+          service profile including the Initial Filter Criteria (iFC)
+          which tells the S-CSCF how to process the user's SIP messages.
+        failure_modes:
+          - "SAR timeout → ims_registrar_scscf:sar_timeouts increments"
+          - "Missing iFC → S-CSCF logs 'No REGISTER match found in filter criteria'"
+        metrics_to_watch:
+          - "ims_registrar_scscf:sar_timeouts"
+          - "ims_registrar_scscf:sar_avg_response_time"
+
+      - order: 9
+        from: scscf
+        to: e2e_ue1
+        via: [icscf, pcscf]
+        protocol: SIP
+        interface: Mw
+        label: "200 OK — Registration complete"
+        description: "S-CSCF sends SIP 200 OK back through the signaling chain to the UE."
+        detail: |
+          The 200 OK propagates back: S-CSCF → I-CSCF → P-CSCF → UE.
+          At this point, the P-CSCF stores the UE's contact
+          (ims_usrloc_pcscf:registered_contacts increments) and the
+          S-CSCF stores the serving assignment
+          (ims_usrloc_scscf:active_contacts increments). The UE is
+          now IMS-registered and can make/receive VoNR calls.
+        metrics_to_watch:
+          - "ims_usrloc_pcscf:registered_contacts"
+          - "ims_usrloc_scscf:active_contacts"
+          - "ims_registrar_scscf:accepted_regs"
+          - "script:register_success"
+
+      - order: 10
+        from: pcscf
+        to: pcf
+        via: [scp]
+        protocol: Diameter
+        interface: Rx
+        label: "Request dedicated QoS bearer"
+        description: "P-CSCF sends Rx AAR to PCF via SCP to set up dedicated QoS for IMS signaling."
+        detail: |
+          After registration, the P-CSCF requests a dedicated QoS flow
+          for the IMS signaling via the Rx interface to the PCF. The PCF
+          creates a policy authorization and pushes it to the SMF via
+          N7, which installs the QoS flow on the UPF via PFCP (N4).
+          This creates the extra bearer visible as bearers_active
+          increasing from 4 to 6 during an active call.
+        failure_modes:
+          - "PCF unreachable → no QoS for voice calls"
+          - "SCP latency → Rx AAR timeout"
+        metrics_to_watch:
+          - "fivegs_pcffunction_pa_sessionnbr"
+          - "bearers_active"
+
+    outcome:
+      success: "UE is IMS-registered. P-CSCF has contact, S-CSCF has assignment, QoS policy active."
+      observable_metrics:
+        - "ims_usrloc_pcscf:registered_contacts increases by 1"
+        - "ims_usrloc_scscf:active_contacts increases by 1"
+        - "ims_registrar_scscf:accepted_regs increases by 1"
+        - "script:register_success increases by 1"
+
+  # =========================================================================
+  # VoNR Call Setup (INVITE)
+  # =========================================================================
+
+  vonr_call_setup:
+    name: "VoNR Call Setup"
+    description: "UE1 initiates a voice call to UE2 over the IMS network. Establishes SIP dialog, allocates RTP media path, and sets up dedicated QoS bearers."
+    use_case: vonr
+    trigger: "User initiates a voice call (pjsua 'm' command)"
+    preconditions:
+      - "Both UE1 and UE2 IMS-registered (registered_contacts = 2)"
+      - "IMS PDU sessions active for both UEs"
+      - "RTPEngine running for media relay"
+
+    steps:
+      - order: 1
+        from: e2e_ue1
+        to: pcscf
+        via: [nr_gnb, upf]
+        protocol: SIP
+        interface: Gm
+        label: "INVITE from UE1"
+        description: "UE1 sends SIP INVITE with SDP offer through the data plane to P-CSCF."
+        detail: |
+          The caller (UE1) sends a SIP INVITE to the callee's SIP URI
+          (sip:IMSI@ims.domain). The INVITE includes an SDP offer with
+          the caller's RTP media capabilities. The message traverses
+          the GTP-U data plane: UE1 → gNB → UPF → P-CSCF.
+          Note: The INVITE with SDP is typically >1300 bytes. If
+          udp_mtu_try_proto=TCP, the P-CSCF may switch to TCP for
+          forwarding.
+        failure_modes:
+          - "GTP-U data plane down → INVITE never reaches P-CSCF"
+          - "TCP/UDP mismatch → large INVITE silently dropped"
+        metrics_to_watch:
+          - "core:rcv_requests_invite"
+          - "sl:1xx_replies"
+
+      - order: 2
+        from: pcscf
+        to: rtpengine
+        protocol: ng
+        interface: ng
+        label: "RTPEngine: allocate media relay"
+        description: "P-CSCF instructs RTPEngine to allocate a media relay for this call."
+        detail: |
+          The P-CSCF sends an 'offer' command to RTPEngine via the ng
+          protocol. RTPEngine allocates RTP/RTCP port pairs for the
+          media relay and rewrites the SDP to point media through itself.
+          This ensures RTP flows: UE1 → UPF → RTPEngine → UPF → UE2.
+        failure_modes:
+          - "RTPEngine down → no media relay, call may fail or have no audio"
+        metrics_to_watch:
+          - "rtpengine:current_sessions"
+
+      - order: 3
+        from: pcscf
+        to: scscf
+        protocol: SIP
+        interface: Mw
+        label: "Forward INVITE to originating S-CSCF"
+        description: "P-CSCF forwards the INVITE to the S-CSCF serving UE1 (originating leg)."
+        detail: |
+          The P-CSCF looks up the serving S-CSCF for UE1 from its
+          registration data and forwards the INVITE. The S-CSCF
+          evaluates the Initial Filter Criteria (iFC) for the
+          originating user.
+
+      - order: 4
+        from: scscf
+        to: icscf
+        protocol: SIP
+        interface: Mw
+        label: "Route to terminating I-CSCF"
+        description: "Originating S-CSCF routes the INVITE to the I-CSCF for the terminating user."
+        detail: |
+          The S-CSCF determines that the callee is in the same network
+          and sends the INVITE to the I-CSCF, which will look up the
+          terminating S-CSCF for UE2.
+
+      - order: 5
+        from: icscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "LIR — Find terminating S-CSCF"
+        description: "I-CSCF sends Diameter LIR to HSS to find which S-CSCF serves UE2."
+        detail: |
+          The I-CSCF sends a Location-Info-Request (LIR) to the HSS
+          for the callee's IMPU. The HSS returns the S-CSCF address
+          where UE2 is registered. If UE2 is not registered, the HSS
+          returns an error.
+        failure_modes:
+          - "HSS unreachable → ims_icscf:lir_timeouts increments"
+          - "UE2 not registered → 500 'Server error on LIR select next S-CSCF'"
+        metrics_to_watch:
+          - "ims_icscf:lir_timeouts"
+          - "ims_icscf:lir_avg_response_time"
+
+      - order: 6
+        from: icscf
+        to: scscf
+        protocol: SIP
+        interface: Mw
+        label: "Forward INVITE to terminating S-CSCF"
+        description: "I-CSCF forwards the INVITE to the S-CSCF serving UE2."
+
+      - order: 7
+        from: scscf
+        to: pcscf
+        protocol: SIP
+        interface: Mw
+        label: "Forward INVITE to terminating P-CSCF"
+        description: "Terminating S-CSCF forwards the INVITE toward UE2 via the P-CSCF."
+        detail: |
+          The S-CSCF looks up UE2's registered contact from usrloc
+          and forwards the INVITE to the P-CSCF, which will deliver
+          it to UE2 via the GTP-U data plane.
+
+      - order: 8
+        from: pcscf
+        to: e2e_ue2
+        via: [upf, nr_gnb]
+        protocol: SIP
+        interface: Gm
+        label: "INVITE to UE2"
+        description: "P-CSCF delivers the INVITE to UE2 through the data plane."
+        detail: |
+          The P-CSCF sends the INVITE to UE2's registered contact
+          address (192.168.101.x:5060) via the GTP-U tunnel. UE2's
+          pjsua receives the INVITE and auto-answers (200 OK).
+        failure_modes:
+          - "TCP/UDP mismatch → INVITE dropped (UE only listens on UDP)"
+          - "GTP-U data plane issue → INVITE never reaches UE2"
+          - "UE2 not listening → SIP timeout (408)"
+
+      - order: 9
+        from: e2e_ue2
+        to: e2e_ue1
+        via: [nr_gnb, upf, pcscf, scscf, icscf, scscf, pcscf, upf, nr_gnb]
+        protocol: SIP
+        interface: Mw
+        label: "200 OK + ACK — Call established"
+        description: "UE2 answers (200 OK), the response propagates back, UE1 sends ACK."
+        detail: |
+          UE2's 200 OK travels back through the signaling chain to UE1.
+          UE1 sends ACK to confirm. At this point the SIP dialog is
+          established: dialog_ng:active increments at P-CSCF and S-CSCF.
+          The call state changes to CONFIRMED.
+        metrics_to_watch:
+          - "dialog_ng:active"
+          - "dialog_ng:processed"
+
+      - order: 10
+        from: pcscf
+        to: pcf
+        via: [scp]
+        protocol: Diameter
+        interface: Rx
+        label: "Rx AAR — Dedicated QoS for voice"
+        description: "P-CSCF requests dedicated QoS bearers from PCF for the voice media."
+        detail: |
+          The P-CSCF sends an Rx AA-Request to the PCF for both the
+          originating and terminating legs. The PCF creates policy
+          decisions and pushes them to the SMF, which installs
+          dedicated QoS flows (5QI=1 for conversational voice) on
+          the UPF via PFCP. This is why bearers_active rises from
+          4 to 6 during an active call.
+        failure_modes:
+          - "PCF unreachable → no dedicated QoS, voice uses default bearer"
+          - "SMF/UPF PFCP failure → QoS flow not installed"
+        metrics_to_watch:
+          - "bearers_active"
+          - "fivegs_pcffunction_pa_sessionnbr"
+
+      - order: 11
+        from: e2e_ue1
+        to: e2e_ue2
+        via: [nr_gnb, upf, rtpengine, upf, nr_gnb]
+        protocol: RTP
+        interface: N3
+        label: "RTP media — voice call active"
+        description: "Bidirectional RTP voice media flows through the data plane via RTPEngine."
+        detail: |
+          Voice packets (RTP) flow: UE1 → gNB → UPF → RTPEngine → UPF → gNB → UE2
+          (and reverse). RTPEngine acts as a media relay, enabling
+          call recording, codec transcoding, and NAT traversal.
+          Both UEs' jitter buffers are active. The GTP-U packet
+          counters at the UPF reflect the media traffic.
+        failure_modes:
+          - "UPF packet loss → RTP degradation, jitter buffer resets"
+          - "RTPEngine down → no audio (one-way or no-way)"
+          - "Data plane latency → voice delay, echo"
+        metrics_to_watch:
+          - "fivegs_ep_n3_gtp_indatapktn3upf"
+          - "fivegs_ep_n3_gtp_outdatapktn3upf"
+          - "rtpengine:current_sessions"
+
+    outcome:
+      success: "Voice call is active between UE1 and UE2 with dedicated QoS bearers."
+      observable_metrics:
+        - "dialog_ng:active increases by 2 (one per direction)"
+        - "bearers_active increases from 4 to 6"
+        - "rtpengine:current_sessions increases by 1"
+        - "GTP-U packet counters actively incrementing"

@@ -48,6 +48,14 @@ CREATE CONSTRAINT healthcheck_id IF NOT EXISTS
 CREATE CONSTRAINT subsystem_name IF NOT EXISTS
   FOR (sub:Subsystem) REQUIRE sub.name IS UNIQUE;
 
+// Flows: protocol procedure definitions
+CREATE CONSTRAINT flow_id IF NOT EXISTS
+  FOR (f:Flow) REQUIRE f.id IS UNIQUE;
+
+// Flow steps
+CREATE CONSTRAINT flow_step_id IF NOT EXISTS
+  FOR (fs:FlowStep) REQUIRE fs.id IS UNIQUE;
+
 // Protocols
 CREATE CONSTRAINT protocol_name IF NOT EXISTS
   FOR (p:Protocol) REQUIRE p.name IS UNIQUE;

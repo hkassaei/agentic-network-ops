@@ -32,13 +32,19 @@ Edit `ops.env` with your values:
 
 `ops.env` is listed in `.gitignore` and is never committed.
 
-### 2. Start the operations layer
+### 2. Set up and start the operations layer
 
 ```bash
+# Create GUI venv and install deps (one-time)
+python3 -m venv gui/.venv
+source gui/.venv/bin/activate
+pip install -r gui/requirements.txt
+
+# Start the ops layer (Neo4j + GUI)
 ./scripts/start-ops.sh
 ```
 
-This brings up the GUI, Neo4j ontology database, and ontology loader — without starting the network stack. You can then deploy the network and UEs from the GUI.
+This brings up the GUI (Python process), Neo4j ontology database, and ontology loader — without starting the network stack. You can then deploy the network and UEs from the GUI.
 
 | Service | URL | Credentials |
 |---|---|---|

@@ -269,19 +269,12 @@ Everything on top of the upstream `docker_open5gs` network stack is managed by a
 
 The operations layer is split into two compose files:
 
-| File | Contains | Depends on network? |
-|------|----------|---------------------|
-| `network-ops.yaml` | GUI, Neo4j ontology, ontology loader | No — starts independently |
-| `grafana-dashboards.yaml` | Custom Grafana dashboard mounts | Yes — overrides Grafana from `sa-vonr-deploy.yaml` |
-
-### Services
-
-| Service | Container | Port | Compose file |
-|---------|-----------|------|-------------|
-| `gui` | `ops_gui` | 8073 | `network-ops.yaml` |
-| `ontology` | `ontology` | 7474, 7687 | `network-ops.yaml` |
-| `ontology-loader` | `ontology_loader` | — | `network-ops.yaml` |
-| `grafana` (override) | `grafana` | 3000 | `grafana-dashboards.yaml` |
+| Component | Type | Port | How to start |
+|-----------|------|------|-------------|
+| GUI | Python process (host) | 8073 | `./scripts/start-ops.sh` or `python3 gui/server.py` |
+| Neo4j ontology | Docker (`network-ops.yaml`) | 7474, 7687 | `./scripts/start-ops.sh` |
+| Ontology loader | Docker (one-shot) | — | Runs automatically with Neo4j |
+| Grafana overrides | Docker (`grafana-dashboards.yaml`) | 3000 | Paired with network stack |
 
 ### Custom Grafana Dashboards
 

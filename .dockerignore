@@ -1,12 +1,7 @@
-# Keep the build context small — only include what the Dockerfiles need
+# Keep Docker build context small (used by ontology-loader Dockerfile)
 .git
 .venv
 __pycache__
 *.pyc
-network/
-!network/.env
 .adk/
-agentic_chaos/
-docs/
-*.md
 .pytest_cache/

@@ -319,24 +319,54 @@ async def handle_explain(request: web.Request) -> web.Response:
     )
 
     # Use claude CLI with --print for non-interactive single-shot output.
-    # Unset CLAUDECODE to allow running from within a Claude Code session.
+    # The server may run as root, so we must resolve the binary and HOME
+    # from the repo owner rather than the current effective user.
+    import shutil
+    try:
+        import pwd
+        repo_owner_home = pwd.getpwnam(REPO_ROOT.owner()).pw_dir
+    except (KeyError, ImportError):
+        repo_owner_home = str(Path.home())
+
     env = {**os.environ}
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRY_POINT", None)
     env.pop("ANTHROPIC_API_KEY", None)
+    # Set HOME so claude finds its OAuth credentials
+    env["HOME"] = repo_owner_home
 
-    # Resolve full path to claude binary since venv may not inherit PATH
-    import shutil
-    claude_bin = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
-
-    proc = await asyncio.create_subprocess_exec(
-        claude_bin, "--print",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
+    # Resolve claude binary: check PATH, then repo owner's local bin
+    claude_bin = shutil.which("claude") or str(
+        Path(repo_owner_home) / ".local" / "bin" / "claude"
     )
-    stdout, stderr = await proc.communicate(prompt.encode())
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            claude_bin, "--print",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(prompt.encode()), timeout=120,
+        )
+    except FileNotFoundError:
+        return web.json_response(
+            {"ok": False, "error": f"claude binary not found at {claude_bin}"},
+            status=500,
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        return web.json_response(
+            {"ok": False, "error": "claude CLI timed out (120s)"},
+            status=500,
+        )
+    except Exception as exc:
+        return web.json_response(
+            {"ok": False, "error": f"Failed to run claude: {exc}"},
+            status=500,
+        )
 
     out = stdout.decode(errors="replace").strip()
     err = stderr.decode(errors="replace").strip()

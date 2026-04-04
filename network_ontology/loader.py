@@ -646,6 +646,9 @@ def main():
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(name)s: %(message)s",
     )
+    # Suppress noisy neo4j driver logs unless verbose
+    if not args.verbose:
+        logging.getLogger("neo4j").setLevel(logging.ERROR)
 
     load_all(uri=args.uri, auth=(args.user, args.password), reset=args.reset)
 

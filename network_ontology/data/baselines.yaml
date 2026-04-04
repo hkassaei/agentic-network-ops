@@ -7,6 +7,8 @@
 # 2 UEs registered and 0-1 active VoNR calls.
 #
 # Used to distinguish pre-existing conditions from injected faults.
+# The `description` field is the single source of truth for metric tooltips
+# displayed in the GUI.
 
 baselines:
 
@@ -14,67 +16,100 @@ baselines:
   amf:
     metrics:
       ran_ue:
+        description: "Number of UEs attached to the 5G RAN via this AMF."
         expected: 2
         condition: "2 UEs attached"
         alarm_if: "= 0 (RAN failure) or < expected (partial failure)"
       gnb:
+        description: "Number of gNBs connected to the AMF via N2 (NGAP)."
         expected: 1
         condition: "1 gNB connected"
         alarm_if: "= 0 (gNB down)"
       amf_session:
+        description: "Active NAS sessions on the AMF. Each UE has 2 (internet + IMS APN)."
         expected: 4
         note: "2 UEs x 2 sessions (internet + IMS APN)"
       fivegs_amffunction_rm_reginitreq:
+        description: "Registration initial requests received (counter). Delta indicates new registrations."
         type: counter
         note: "Monotonically increasing. Delta matters, not absolute value."
       fivegs_amffunction_rm_reginitsucc:
+        description: "Successful registrations (counter). Gap from reginitreq = failed registrations."
         type: counter
         note: "Should track reginitreq closely. Gap = failed registrations."
       fivegs_amffunction_amf_authreq:
+        description: "Authentication requests sent to AUSF (counter)."
         type: counter
       fivegs_amffunction_amf_authfail:
+        description: "Authentication failures (counter). Non-zero delta indicates auth problems."
         type: counter
         alarm_if: "delta > 0 (auth failures occurring)"
       fivegs_amffunction_amf_authreject:
+        description: "Authentication rejections (counter). Non-zero delta indicates rejected credentials."
         type: counter
         alarm_if: "delta > 0"
 
   smf:
     metrics:
       fivegs_smffunction_sm_sessionnbr:
+        description: "Active PDU sessions managed by the SMF. Each UE establishes 2 (internet + IMS APN)."
         expected: 4
         condition: "2 UEs x 2 PDU sessions each"
       ues_active:
+        description: "Number of UEs with active PDU sessions on this SMF."
         expected: 2
       bearers_active:
+        description: "Active QoS bearers. 4 at rest (default bearers), rises to 6 during VoNR call (2 dedicated voice QoS flows)."
         expected: 4
         note: "Rises to 6 during active VoNR call (2 dedicated QoS flows for voice)"
         during_call: 6
       pfcp_sessions_active:
+        description: "Active PFCP sessions between SMF and UPF. Should track PDU session count."
         expected: 4
       fivegs_smffunction_sm_pdusessioncreationreq:
+        description: "PDU session creation requests (counter)."
         type: counter
       fivegs_smffunction_sm_pdusessioncreationsucc:
+        description: "Successful PDU session creations (counter). Gap from creation requests = failures."
         type: counter
 
   upf:
     metrics:
       fivegs_upffunction_upf_sessionnbr:
+        description: "Active PFCP sessions on the UPF. Should match SMF session count."
         expected: 4
       fivegs_ep_n3_gtp_indatapktn3upf:
+        description: "Cumulative GTP-U packets received on N3 (gNB to UPF) since UPF started. Must be incrementing for healthy data plane."
         type: counter
         note: "Must be > 0 and incrementing for healthy data plane. Zero = data plane dead."
         alarm_if: "= 0 or stopped incrementing"
       fivegs_ep_n3_gtp_outdatapktn3upf:
+        description: "Cumulative GTP-U packets sent on N3 (UPF to gNB) since UPF started. Must be incrementing."
         type: counter
         note: "Must be > 0 and incrementing. Zero = data plane dead."
         alarm_if: "= 0 or stopped incrementing"
+      fivegs_ep_n3_gtp_indatavolumeqosleveln3upf:
+        description: "Cumulative bytes received on N3 interface since UPF started. Used to compute throughput rate."
+        type: counter
+      fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf:
+        description: "Cumulative bytes sent on N3 interface since UPF started. Used to compute throughput rate."
+        type: counter
       upf_kbps:
+        description: "GTP-U throughput (in + out) through the UPF, computed as rate between consecutive 5-second Prometheus polls. Includes all PDU session traffic (SIP signaling + RTP media). ~16 KB/s during healthy G.711 call."
         type: gauge
         source: "get_dp_quality_gauges"
         note: "GTP-U throughput on voice bearer (QFI=1), computed from consecutive byte-volume snapshots. ~16 KB/s during healthy G.711 bidirectional call."
         during_call: 16
         alarm_if: "= 0 with active sessions (data plane dead) or < 10 during call (degraded)"
+      upf_sessions:
+        description: "Number of active PDU sessions on the UPF. Each UE establishes 2 (internet + IMS APN), so 2 UEs = 4 sessions."
+        type: gauge
+      upf_bytes_in:
+        description: "Cumulative bytes received on N3 (gNB to UPF) since UPF started. Counter from Prometheus."
+        type: counter
+      upf_bytes_out:
+        description: "Cumulative bytes sent on N3 (UPF to gNB) since UPF started. Counter from Prometheus."
+        type: counter
 
   # --- Data Plane Quality (RTPEngine) ---
   # These metrics are only meaningful during active VoNR calls.
@@ -82,6 +117,7 @@ baselines:
   rtpengine:
     metrics:
       rtpengine_mos:
+        description: "Mean Opinion Score (1-5, ITU-T G.107 E-model). Cumulative average across all RTP sessions since RTPEngine container started. 4.0+ good, 3.5-4.0 acceptable, <3.5 degraded."
         type: gauge
         source: "get_dp_quality_gauges"
         note: "Mean Opinion Score — ITU-T G.107 E-model computed from RTCP reports (packet loss, jitter, latency). THE key indicator for voice quality."
@@ -95,127 +131,199 @@ baselines:
           unusable: "< 3.0 (severe degradation, call effectively broken)"
         alarm_if: "< 3.5 during active call (data plane degradation)"
       rtpengine_pps:
+        description: "Real-time RTP packets per second through RTPEngine (both directions). 0 when no call is active. ~100 pps typical for G.711 voice at 20ms packetization."
         type: gauge
         source: "get_dp_quality_gauges"
         note: "Live media packet rate across all active streams. ~100 pps per bidirectional G.711 stream (50 pps per direction at 20ms packetization)."
         during_call: 100
         alarm_if: "= 0 with active sessions (media relay dead) or drop > 20% from expected (packet loss on data path)"
       rtpengine_loss_pct:
+        description: "Average packet loss % across all sessions since RTPEngine container started. Not a sliding window — includes all past sessions. Check 'Packets lost' for current state."
         type: gauge
         source: "get_dp_quality_gauges"
         note: "Average packet loss from RTCP reports. Directly degrades MOS."
         expected: 0
         alarm_if: "> 5 (noticeable quality impact) or > 20 (severe degradation)"
       rtpengine_jitter:
+        description: "Average reported jitter (ms) across all sessions since RTPEngine container started. Based on RTCP reports. <5ms excellent, 5-20ms acceptable, >20ms noticeable."
         type: gauge
         source: "get_dp_quality_gauges"
         note: "Average inter-packet arrival jitter from RTCP reports (ms). High jitter causes audio artifacts."
         expected: 1
         alarm_if: "> 30 (quality impact) or > 50 (severe)"
+      rtpengine_packets_lost:
+        description: "Absolute count of RTP packets currently reported as lost by RTPEngine. Resets when sessions end. Non-zero indicates active packet loss."
+        type: gauge
+      rtpengine_active_sessions:
+        description: "Number of RTP sessions currently being relayed by RTPEngine. Each call creates one session with two media streams (one per direction)."
+        type: gauge
+      rtpengine_total_managed:
+        description: "Total RTP sessions managed since RTPEngine container started, including terminated ones. Provides context for cumulative averages."
+        type: gauge
 
   pcf:
     metrics:
       fivegs_pcffunction_pa_sessionnbr:
+        description: "Active policy association sessions on the PCF."
         expected: 4
+      fivegs_pcffunction_pa_policyamassocnbr:
+        description: "Active AM (Access and Mobility) policy associations."
+        type: gauge
+      fivegs_pcffunction_pa_policysmassocrelnbr:
+        description: "Active SM (Session Management) policy associations."
+        type: gauge
       fivegs_pcffunction_pa_policyamassoreq:
+        description: "AM policy association requests (counter)."
         type: counter
       fivegs_pcffunction_pa_policyamassosucc:
+        description: "Successful AM policy associations (counter)."
         type: counter
       fivegs_pcffunction_pa_policysmassoreq:
+        description: "SM policy association requests (counter)."
         type: counter
       fivegs_pcffunction_pa_policysmassosucc:
+        description: "Successful SM policy associations (counter)."
         type: counter
 
   # --- IMS (Kamailio kamcmd) ---
   pcscf:
     metrics:
       "ims_usrloc_pcscf:registered_contacts":
+        description: "UE contacts currently registered at the P-CSCF. Expected 2 (one per UE)."
         expected: 2
         condition: "2 UEs registered"
         alarm_if: "< 2 (UE deregistered) or = 0 (all UEs lost)"
       "dialog_ng:active":
+        description: "Active SIP dialogs at P-CSCF. 0 at rest, 2 during active call (one per direction)."
         expected: 0
         during_call: 2
         note: "2 dialogs during active call (one per direction)"
       "core:rcv_requests_register":
+        description: "SIP REGISTER requests received (counter)."
         type: counter
       "core:rcv_requests_invite":
+        description: "SIP INVITE requests received (counter)."
+        type: counter
+      "core:rcv_requests_bye":
+        description: "SIP BYE requests received (counter)."
+        type: counter
+      "core:rcv_requests_options":
+        description: "SIP OPTIONS requests received (counter). Used for keepalive/ping."
         type: counter
       "httpclient:connfail":
+        description: "HTTP client connection failures (counter). Baseline 1300-1500 is pre-existing due to SCP_BIND_IP placeholder. Only alert if delta > 100."
         typical_range: [1300, 1500]
         is_pre_existing: true
         note: "PRE-EXISTING: SCP_BIND_IP placeholder in P-CSCF config causes persistent connection failures. Ignore unless delta > 100."
       "httpclient:connok":
+        description: "Successful HTTP client connections (counter)."
         type: counter
       "tmx:active_transactions":
+        description: "Active SIP transactions. Expected 0. Growing value indicates transactions accumulating without responses."
         expected: 0
         alarm_if: "> 0 and growing (transactions accumulating without responses)"
       "sl:1xx_replies":
+        description: "1xx provisional SIP responses sent (counter). E.g., 100 Trying, 180 Ringing."
         type: counter
       "sl:200_replies":
+        description: "200 OK SIP responses sent (counter)."
         type: counter
       "sl:4xx_replies":
+        description: "4xx client error SIP responses (counter). Non-zero delta indicates client errors."
         type: counter
         alarm_if: "delta > 0"
       "sl:5xx_replies":
+        description: "5xx server error SIP responses (counter). Non-zero delta indicates server failures."
         type: counter
         alarm_if: "delta > 0"
 
   icscf:
     metrics:
       "core:rcv_requests_register":
+        description: "SIP REGISTER requests received at I-CSCF (counter)."
         type: counter
       "core:rcv_requests_invite":
+        description: "SIP INVITE requests received at I-CSCF (counter)."
         type: counter
       "cdp:timeout":
+        description: "Diameter Cx query timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity issues."
         expected: 0
         alarm_if: "> 0 (Diameter queries timing out — HSS issue)"
       "cdp:replies_received":
+        description: "Diameter Cx replies received from HSS (counter)."
         type: counter
       "cdp:average_response_time":
+        description: "Average Diameter Cx response time (ms). Typical 50-150ms. >500ms indicates HSS overload or network latency."
         typical_range: [50, 150]
         unit: ms
         alarm_if: "> 500 (HSS overloaded or network latency)"
+      "cdp:queuelength":
+        description: "Diameter messages waiting in the outgoing queue. Should be 0. Non-zero indicates HSS backpressure."
+      "cdp:replies_response_time":
+        description: "Sum of all Diameter response times (ms) since container start. Used to compute average."
+        type: counter
       "ims_icscf:uar_timeouts":
+        description: "User-Agent-Route (UAR) query timeouts to HSS. Expected 0."
         expected: 0
         alarm_if: "> 0"
       "ims_icscf:lir_timeouts":
+        description: "Location-Info-Request (LIR) query timeouts to HSS. Expected 0."
         expected: 0
         alarm_if: "> 0"
       "tmx:active_transactions":
+        description: "Active SIP transactions at I-CSCF. Expected 0."
         expected: 0
 
   scscf:
     metrics:
       "ims_usrloc_scscf:active_contacts":
+        description: "Active IMS contacts registered at the S-CSCF. Expected 2 (one per UE)."
         expected: 2
         condition: "2 UEs registered"
       "ims_registrar_scscf:accepted_regs":
+        description: "Accepted IMS registrations (counter)."
         type: counter
       "ims_registrar_scscf:rejected_regs":
+        description: "Rejected IMS registrations (counter). Non-zero delta indicates auth or config issues."
         type: counter
         alarm_if: "delta > 0"
       "dialog_ng:active":
+        description: "Active SIP dialogs at S-CSCF. 0 at rest, 2 during active call."
         expected: 0
         during_call: 2
       "cdp:timeout":
+        description: "Diameter Cx timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity issues."
         expected: 0
         alarm_if: "> 0 (HSS Diameter timeout)"
+      "cdp:average_response_time":
+        description: "Average Diameter Cx response time to HSS (ms). Cumulative since container start."
+      "cdp:queuelength":
+        description: "Diameter messages waiting in the outgoing queue to HSS."
+      "cdp:replies_received":
+        description: "Diameter Cx replies received from HSS (counter)."
+        type: counter
+      "cdp:replies_response_time":
+        description: "Sum of all Diameter response times (ms) since container start."
+        type: counter
       "ims_auth:mar_timeouts":
+        description: "Multimedia-Auth-Request (MAR) timeouts to HSS. Expected 0."
         expected: 0
         alarm_if: "> 0"
       "tmx:active_transactions":
+        description: "Active SIP transactions at S-CSCF. Expected 0."
         expected: 0
 
   # --- Other ---
   pyhss:
     metrics:
       ims_subscribers:
+        description: "Number of IMS subscribers provisioned in PyHSS (queried via REST API)."
         expected: 2
         source: api
 
   mongo:
     metrics:
       subscribers:
+        description: "Number of 5G subscribers provisioned in MongoDB (queried via mongosh)."
         expected: 2
         source: mongosh

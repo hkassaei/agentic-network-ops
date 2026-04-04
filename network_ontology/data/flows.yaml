@@ -439,3 +439,498 @@ flows:
         - "bearers_active increases from 4 to 6"
         - "rtpengine:current_sessions increases by 1"
         - "GTP-U packet counters actively incrementing"
+
+  # =========================================================================
+  # VoNR Call Teardown (BYE)
+  # =========================================================================
+
+  vonr_call_teardown:
+    name: "VoNR Call Teardown"
+    description: "One party hangs up, terminating the VoNR voice call. Releases SIP dialog, RTP media, and dedicated QoS bearers."
+    use_case: vonr
+    trigger: "User hangs up (pjsua 'h' command or BYE from remote)"
+    preconditions:
+      - "Active VoNR call between UE1 and UE2"
+      - "dialog_ng:active = 2, bearers_active = 6"
+
+    steps:
+      - order: 1
+        from: e2e_ue1
+        to: pcscf
+        via: [nr_gnb, upf]
+        protocol: SIP
+        interface: Gm
+        label: "BYE from UE1"
+        description: "UE1 sends SIP BYE through the data plane to P-CSCF to end the call."
+        detail: |
+          The hanging-up party (UE1) sends a SIP BYE within the existing
+          dialog. The BYE traverses the GTP-U tunnel: UE1 → gNB → UPF → P-CSCF.
+          The P-CSCF matches the BYE to the active dialog using Call-ID and tags.
+        failure_modes:
+          - "GTP-U data plane down → BYE never reaches P-CSCF, call hangs"
+          - "Dialog mismatch → 481 Call/Transaction Does Not Exist"
+        metrics_to_watch:
+          - "core:rcv_requests_bye"
+
+      - order: 2
+        from: pcscf
+        to: rtpengine
+        protocol: ng
+        interface: ng
+        label: "RTPEngine: release media relay"
+        description: "P-CSCF instructs RTPEngine to tear down the media relay for this call."
+        detail: |
+          The P-CSCF sends a 'delete' command to RTPEngine via the ng protocol.
+          RTPEngine releases the allocated RTP/RTCP port pairs and stops relaying
+          media packets. rtpengine_pps drops to 0 and the session count decrements.
+        metrics_to_watch:
+          - "rtpengine_pps"
+          - "rtpengine_active_sessions"
+
+      - order: 3
+        from: pcscf
+        to: scscf
+        via: [icscf]
+        protocol: SIP
+        interface: Mw
+        label: "Forward BYE through IMS core"
+        description: "P-CSCF forwards the BYE through I-CSCF to the S-CSCF."
+        detail: |
+          The BYE follows the recorded route through the IMS signaling chain.
+          The S-CSCF processes the BYE, decrements its dialog count, and
+          forwards it toward the terminating side.
+
+      - order: 4
+        from: scscf
+        to: e2e_ue2
+        via: [pcscf, upf, nr_gnb]
+        protocol: SIP
+        interface: Mw
+        label: "BYE delivered to UE2"
+        description: "S-CSCF forwards the BYE to UE2 via P-CSCF and the data plane."
+        detail: |
+          The BYE reaches UE2 through the terminating P-CSCF and the GTP-U
+          tunnel. UE2's pjsua receives the BYE and responds with 200 OK.
+          The call state changes to DISCONNECTED on both sides.
+        failure_modes:
+          - "UE2 unreachable → BYE timeout, call resources not released cleanly"
+
+      - order: 5
+        from: e2e_ue2
+        to: e2e_ue1
+        via: [nr_gnb, upf, pcscf, scscf, icscf, pcscf, upf, nr_gnb]
+        protocol: SIP
+        interface: Mw
+        label: "200 OK — Call terminated"
+        description: "UE2 confirms the BYE with 200 OK, propagated back to UE1."
+        detail: |
+          The 200 OK to BYE traverses the full signaling chain back to UE1.
+          At this point dialog_ng:active decrements at P-CSCF and S-CSCF.
+          Both UEs' call state is now DISCONNECTED.
+        metrics_to_watch:
+          - "dialog_ng:active"
+
+      - order: 6
+        from: pcscf
+        to: pcf
+        via: [scp]
+        protocol: Diameter
+        interface: Rx
+        label: "Rx STR — Release dedicated QoS"
+        description: "P-CSCF sends Rx Session-Termination to PCF to release the voice QoS bearers."
+        detail: |
+          The P-CSCF sends an Rx Session-Termination-Request (STR) to the PCF
+          for both the originating and terminating legs. The PCF removes the
+          policy authorizations and notifies the SMF, which tears down the
+          dedicated QoS flows (5QI=1) via PFCP to the UPF. bearers_active
+          drops from 6 back to 4.
+        failure_modes:
+          - "PCF unreachable → dedicated QoS lingers (resource leak)"
+          - "PFCP failure → QoS flow not removed from UPF"
+        metrics_to_watch:
+          - "bearers_active"
+          - "fivegs_pcffunction_pa_sessionnbr"
+
+    outcome:
+      success: "Call terminated. SIP dialog closed, media relay released, QoS bearers removed."
+      observable_metrics:
+        - "dialog_ng:active decreases by 2"
+        - "bearers_active decreases from 6 to 4"
+        - "rtpengine_active_sessions decreases by 1"
+        - "rtpengine_pps drops to 0"
+
+  # =========================================================================
+  # PDU Session Establishment
+  # =========================================================================
+
+  pdu_session_establishment:
+    name: "PDU Session Establishment"
+    description: "UE requests a PDU session (data connection) from the 5G core. AMF orchestrates session creation through SMF and UPF, establishing the GTP-U tunnel for user data."
+    use_case: 5g_core
+    trigger: "UE sends PDU Session Establishment Request (after NAS registration)"
+    preconditions:
+      - "UE registered with AMF (NAS registration complete)"
+      - "gNB connected to AMF via N2"
+      - "SMF and UPF running"
+
+    steps:
+      - order: 1
+        from: e2e_ue1
+        to: amf
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "PDU Session Establishment Request"
+        description: "UE sends NAS PDU Session Establishment Request to AMF via gNB."
+        detail: |
+          The UE initiates a PDU session by sending a NAS PDU Session
+          Establishment Request. It specifies the requested DNN (Data Network
+          Name) — either 'internet' for general data or the IMS APN for
+          VoLTE/VoNR signaling. The gNB forwards the NAS message to the AMF
+          over NGAP (N2 interface).
+        failure_modes:
+          - "N2 link down → request never reaches AMF"
+          - "AMF overloaded → NAS timeout at UE"
+        metrics_to_watch:
+          - "fivegs_smffunction_sm_pdusessioncreationreq"
+
+      - order: 2
+        from: amf
+        to: smf
+        protocol: SBI
+        interface: Nsmf
+        label: "SMF Session Create (Nsmf)"
+        description: "AMF selects an SMF and sends a session create request via SBI."
+        detail: |
+          The AMF selects an SMF based on the requested DNN and S-NSSAI
+          (network slice). It sends an Nsmf_PDUSession_CreateSMContext request
+          via the SBI (HTTP/2 through SCP). The SMF is responsible for managing
+          the PDU session lifecycle, including UPF selection and QoS.
+        failure_modes:
+          - "SMF selection failure → no SMF for requested DNN"
+          - "SBI/SCP timeout → session creation stalls"
+        metrics_to_watch:
+          - "fivegs_smffunction_sm_sessionnbr"
+
+      - order: 3
+        from: smf
+        to: pcf
+        protocol: SBI
+        interface: Npcf
+        label: "Policy authorization from PCF"
+        description: "SMF requests session policy and QoS rules from the PCF."
+        detail: |
+          The SMF sends an Npcf_SMPolicyControl_Create request to the PCF.
+          The PCF returns the authorized QoS rules (default 5QI, AMBR limits,
+          etc.) and any PCC rules. The SMF uses these to configure the session's
+          QoS parameters.
+        failure_modes:
+          - "PCF unreachable → SMF uses local default policy"
+        metrics_to_watch:
+          - "fivegs_pcffunction_pa_sessionnbr"
+
+      - order: 4
+        from: smf
+        to: upf
+        protocol: PFCP
+        interface: N4
+        label: "PFCP Session Establishment"
+        description: "SMF creates a PFCP session on the UPF to set up the user plane tunnel."
+        detail: |
+          The SMF sends a PFCP Session Establishment Request to the UPF over
+          the N4 interface. This installs Packet Detection Rules (PDRs) and
+          Forwarding Action Rules (FARs) that tell the UPF how to handle
+          packets for this session — which GTP-U tunnel to use, which QFI
+          to apply, and where to forward uplink/downlink traffic.
+        failure_modes:
+          - "UPF unreachable → PFCP timeout, session creation fails"
+          - "PFCP association lost → all sessions on that UPF fail"
+        metrics_to_watch:
+          - "fivegs_upffunction_upf_sessionnbr"
+          - "pfcp_sessions_active"
+
+      - order: 5
+        from: amf
+        to: nr_gnb
+        protocol: NGAP
+        interface: N2
+        label: "N2 PDU Session Resource Setup"
+        description: "AMF sends N2 PDU Session Resource Setup Request to gNB with tunnel info."
+        detail: |
+          The AMF sends the gNB the GTP-U tunnel endpoint information
+          (UPF's TEID and IP) so the gNB can establish the N3 GTP-U tunnel
+          to the UPF. The gNB allocates radio resources (DRBs) for the
+          PDU session and responds with its own GTP-U endpoint.
+        failure_modes:
+          - "gNB resource exhaustion → session setup rejected"
+          - "N2 link flap → NGAP transaction timeout"
+        metrics_to_watch:
+          - "ran_ue"
+          - "gnb"
+
+      - order: 6
+        from: smf
+        to: upf
+        protocol: PFCP
+        interface: N4
+        label: "PFCP Session Modification (gNB tunnel)"
+        description: "SMF updates the UPF with the gNB's GTP-U endpoint to complete the N3 tunnel."
+        detail: |
+          After receiving the gNB's GTP-U endpoint from the AMF, the SMF
+          sends a PFCP Session Modification Request to the UPF. This updates
+          the FARs with the gNB's tunnel info, completing the bidirectional
+          N3 GTP-U tunnel: gNB ←→ UPF. Data can now flow.
+        metrics_to_watch:
+          - "fivegs_ep_n3_gtp_indatapktn3upf"
+          - "fivegs_ep_n3_gtp_outdatapktn3upf"
+
+      - order: 7
+        from: amf
+        to: e2e_ue1
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "PDU Session Establishment Accept"
+        description: "AMF sends NAS PDU Session Establishment Accept to the UE."
+        detail: |
+          The AMF sends the acceptance back to the UE, including the assigned
+          IP address (e.g., 10.45.0.x for internet, 192.168.101.x for IMS APN),
+          QoS parameters, and the DNN. The UE creates a TUN interface bound
+          to this IP address. For the IMS APN, pjsua will later bind to this
+          IP for SIP registration.
+        metrics_to_watch:
+          - "fivegs_smffunction_sm_pdusessioncreationsucc"
+          - "amf_session"
+
+    outcome:
+      success: "PDU session established. GTP-U tunnel active between gNB and UPF. UE has IP connectivity."
+      observable_metrics:
+        - "fivegs_smffunction_sm_sessionnbr increases by 1"
+        - "fivegs_upffunction_upf_sessionnbr increases by 1"
+        - "pfcp_sessions_active increases by 1"
+        - "amf_session increases by 1"
+
+  # =========================================================================
+  # UE Deregistration
+  # =========================================================================
+
+  ue_deregistration:
+    name: "UE Deregistration"
+    description: "UE deregisters from the 5G network, releasing all resources: NAS registration, PDU sessions, IMS registration, and associated bearers."
+    use_case: 5g_core
+    trigger: "UE powers off, or network-initiated deregistration"
+    preconditions:
+      - "UE registered with AMF"
+      - "One or more PDU sessions active"
+      - "Optionally IMS-registered"
+
+    steps:
+      - order: 1
+        from: e2e_ue1
+        to: amf
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "Deregistration Request"
+        description: "UE sends NAS Deregistration Request to AMF."
+        detail: |
+          The UE sends a Deregistration Request (type: switch off or normal)
+          to the AMF via the gNB. This triggers the release of all resources
+          associated with this UE. If the UE is IMS-registered, the IMS
+          registration will also be lost (P-CSCF detects the contact
+          becoming unreachable).
+        failure_modes:
+          - "N2 link down → deregistration fails, AMF times out and force-deregisters"
+        metrics_to_watch:
+          - "ran_ue"
+          - "amf_session"
+
+      - order: 2
+        from: amf
+        to: smf
+        protocol: SBI
+        interface: Nsmf
+        label: "Release all PDU sessions"
+        description: "AMF instructs SMF to release all PDU sessions for this UE."
+        detail: |
+          The AMF sends Nsmf_PDUSession_ReleaseSMContext for each of the UE's
+          active PDU sessions. The SMF initiates teardown of the user plane
+          tunnels and QoS resources. For 2 PDU sessions (internet + IMS APN),
+          this is called twice.
+        metrics_to_watch:
+          - "fivegs_smffunction_sm_sessionnbr"
+
+      - order: 3
+        from: smf
+        to: upf
+        protocol: PFCP
+        interface: N4
+        label: "PFCP Session Deletion"
+        description: "SMF sends PFCP Session Deletion to UPF for each PDU session."
+        detail: |
+          The SMF sends PFCP Session Deletion Requests to the UPF for each
+          session. The UPF removes all PDRs, FARs, and GTP-U tunnel state.
+          The N3 GTP-U tunnel is torn down. GTP-U packet counters stop
+          incrementing for this UE.
+        metrics_to_watch:
+          - "fivegs_upffunction_upf_sessionnbr"
+          - "pfcp_sessions_active"
+
+      - order: 4
+        from: amf
+        to: e2e_ue1
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "Deregistration Accept"
+        description: "AMF confirms deregistration. UE is now detached from the network."
+        detail: |
+          The AMF sends a Deregistration Accept to the UE. The UE's NAS
+          state transitions to DEREGISTERED. The gNB releases the RRC
+          connection and radio resources. ran_ue decrements. If IMS was
+          active, P-CSCF will detect the contact loss when the next
+          re-REGISTER timer fires and fails.
+        metrics_to_watch:
+          - "ran_ue"
+          - "ims_usrloc_pcscf:registered_contacts"
+
+      - order: 5
+        from: amf
+        to: udm
+        protocol: SBI
+        interface: Nudm
+        label: "UDM context release"
+        description: "AMF notifies UDM that the UE context is released."
+        detail: |
+          The AMF sends an Nudm_UECM_Deregistration to the UDM, which
+          updates the UE's context in the UDR. The UDM clears the serving
+          AMF assignment. If the UE registers again, it will go through
+          the full registration procedure from scratch.
+
+    outcome:
+      success: "UE fully deregistered. All PDU sessions released, NAS context cleared."
+      observable_metrics:
+        - "ran_ue decreases by 1"
+        - "amf_session decreases by 2 (internet + IMS PDU sessions)"
+        - "fivegs_smffunction_sm_sessionnbr decreases by 2"
+        - "fivegs_upffunction_upf_sessionnbr decreases by 2"
+        - "ims_usrloc_pcscf:registered_contacts eventually decreases by 1"
+
+  # =========================================================================
+  # Diameter Authentication (Cx Detail)
+  # =========================================================================
+
+  diameter_cx_authentication:
+    name: "Diameter Cx Authentication"
+    description: "Detailed view of the Diameter Cx exchanges between I-CSCF/S-CSCF and HSS during IMS registration. Shows UAR, MAR, and SAR message flows."
+    use_case: ims
+    trigger: "IMS REGISTER arrives at I-CSCF (part of IMS Registration flow)"
+    preconditions:
+      - "I-CSCF and S-CSCF have Diameter Cx connections to HSS"
+      - "HSS has the subscriber provisioned"
+
+    steps:
+      - order: 1
+        from: icscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "UAR — User-Authorization-Request"
+        description: "I-CSCF asks HSS if the user exists and which S-CSCF is assigned."
+        detail: |
+          The I-CSCF sends a User-Authorization-Request (UAR) with the user's
+          IMPU (Public User Identity, e.g., sip:001010123456789@ims.domain)
+          and the visited network identity. The HSS checks:
+          1. Does this user exist?
+          2. Is the user already registered? If so, which S-CSCF?
+          3. If not registered, should the I-CSCF select an S-CSCF?
+
+          The HSS returns a UAA (User-Authorization-Answer) with the result
+          code and optionally the S-CSCF address.
+        failure_modes:
+          - "HSS unreachable → ims_icscf:uar_timeouts increments"
+          - "Unknown user → Diameter RESULT_CODE 5001 (DIAMETER_ERROR_USER_UNKNOWN)"
+          - "Diameter connection lost → cdp:timeout increments"
+        metrics_to_watch:
+          - "ims_icscf:uar_timeouts"
+          - "cdp:timeout"
+          - "cdp:average_response_time"
+
+      - order: 2
+        from: scscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "MAR — Multimedia-Auth-Request"
+        description: "S-CSCF requests authentication vectors from HSS to challenge the UE."
+        detail: |
+          The S-CSCF sends a Multimedia-Auth-Request (MAR) with the user's
+          IMPI (Private User Identity) and the requested authentication scheme.
+          In this deployment, SIP Digest (MD5) is used instead of IMS-AKA
+          because pjsua doesn't support IPsec.
+
+          The HSS returns a MAA with the authentication vectors (realm, nonce,
+          expected response). The S-CSCF challenges the UE with a SIP 401
+          Unauthorized containing these vectors. The UE computes the digest
+          response and sends a new REGISTER.
+        failure_modes:
+          - "HSS unreachable → ims_auth:mar_timeouts increments"
+          - "Auth scheme mismatch (AKA vs Digest) → 401 loop, registration never completes"
+          - "Wrong password in HSS → digest verification fails, ims_registrar_scscf:rejected_regs increments"
+        metrics_to_watch:
+          - "ims_auth:mar_timeouts"
+          - "ims_registrar_scscf:rejected_regs"
+          - "cdp:average_response_time"
+
+      - order: 3
+        from: scscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "SAR — Server-Assignment-Request"
+        description: "S-CSCF registers itself as the serving CSCF for this user in the HSS."
+        detail: |
+          After the UE passes authentication, the S-CSCF sends a
+          Server-Assignment-Request (SAR) with assignment type REGISTRATION.
+          The HSS:
+          1. Stores this S-CSCF as the serving node for this user
+          2. Downloads the user's service profile (Initial Filter Criteria)
+          3. Returns the SAA with the complete iFC set
+
+          The iFC tells the S-CSCF how to process the user's future SIP
+          messages (e.g., which application servers to invoke for INVITE).
+        failure_modes:
+          - "HSS unreachable → SAR timeout, registration fails at final step"
+          - "Missing service profile → S-CSCF has no iFC, calls may not route correctly"
+        metrics_to_watch:
+          - "ims_registrar_scscf:accepted_regs"
+          - "cdp:average_response_time"
+
+      - order: 4
+        from: scscf
+        to: icscf
+        protocol: SIP
+        interface: Mw
+        label: "200 OK — Authentication complete"
+        description: "S-CSCF sends 200 OK back to I-CSCF, confirming successful registration."
+        detail: |
+          With the SAR complete, the S-CSCF generates the SIP 200 OK
+          for the REGISTER. The response includes the registered contact,
+          the expiry time, and any associated URIs. The 200 OK propagates
+          back: S-CSCF → I-CSCF → P-CSCF → UE.
+
+          At this point:
+          - ims_usrloc_scscf:active_contacts increments
+          - ims_registrar_scscf:accepted_regs increments
+          - cdp:replies_received increments (3 Diameter round-trips total)
+        metrics_to_watch:
+          - "ims_usrloc_scscf:active_contacts"
+          - "ims_registrar_scscf:accepted_regs"
+          - "cdp:replies_received"
+
+    outcome:
+      success: "User authenticated and registered in IMS. S-CSCF has service profile, HSS has serving assignment."
+      observable_metrics:
+        - "ims_usrloc_scscf:active_contacts increases by 1"
+        - "ims_registrar_scscf:accepted_regs increases by 1"
+        - "cdp:replies_received increases by 3 (UAA + MAA + SAA)"

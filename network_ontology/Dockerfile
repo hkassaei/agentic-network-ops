@@ -9,4 +9,4 @@ COPY network_ontology/ /app/network_ontology/
 
 # The loader runs once, seeds Neo4j, then exits.
 # Docker Compose restart: "no" means it won't restart after success.
-CMD ["python3", "-m", "network_ontology", "--uri", "bolt://ontology:7687", "--reset", "-v"]
+CMD ["python3", "-m", "network_ontology", "--uri", "bolt://ontology:7687", "--reset"]

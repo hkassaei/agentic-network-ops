@@ -52,9 +52,12 @@ services:
       context: .
       dockerfile: network_ontology/Dockerfile
     container_name: ontology_loader
+    command: ["python3", "-m", "network_ontology", "--uri", "bolt://ontology:7687", "--reset"]
     depends_on:
       ontology:
         condition: service_healthy
+    volumes:
+      - ./network_ontology:/app/network_ontology
     restart: "no"
     networks:
       default:

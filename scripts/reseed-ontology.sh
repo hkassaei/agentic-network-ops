@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Re-seed the Neo4j ontology database from YAML files.
-# Rebuilds the loader image (picks up YAML changes) and re-runs it.
+# The ontology-loader container mounts ./network_ontology as a volume,
+# so it always reads the latest YAML files — no image rebuild needed.
 #
 # Usage: ./scripts/reseed-ontology.sh
 
@@ -13,12 +14,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 echo "Re-seeding ontology database..."
-
-echo "  Rebuilding ontology loader (picks up YAML changes)..."
-docker compose -f network-ops.yaml build ontology-loader
-
-echo "  Running ontology loader..."
-docker compose -f network-ops.yaml up --force-recreate ontology-loader
-
+docker compose -f network-ops.yaml run --rm -T ontology-loader
 echo ""
 echo "Ontology re-seeded from network_ontology/data/*.yaml"

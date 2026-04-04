@@ -235,32 +235,35 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     challenge = episode.get("challenge_result", {})
 
     pattern_match = challenge.get("pattern_match", "")
+    lines.append("## Pattern Match (Phase 2)")
+    lines.append("")
     if pattern_match:
-        lines.append("## Pattern Match (Phase 2)")
-        lines.append("")
         lines.append(f"```")
         lines.append(str(pattern_match)[:500])
         lines.append(f"```")
-        lines.append("")
+    else:
+        lines.append("*No output produced.*")
+    lines.append("")
 
-    anomaly_analysis = challenge.get("anomaly_analysis", "")
+    anomaly_analysis = challenge.get("anomaly_analysis")
+    lines.append("## Anomaly Analysis (Phase 3)")
+    lines.append("")
     if anomaly_analysis and "Skipped" not in str(anomaly_analysis):
-        lines.append("## Anomaly Analysis (Phase 3)")
-        lines.append("")
         lines.append(f"> {str(anomaly_analysis)[:500]}")
-        lines.append("")
     elif anomaly_analysis:
-        lines.append(f"## Anomaly Analysis (Phase 3)")
-        lines.append("")
         lines.append(f"*{anomaly_analysis}*")
-        lines.append("")
+    else:
+        lines.append("*No output produced.*")
+    lines.append("")
 
     investigation_instruction = challenge.get("investigation_instruction", "")
+    lines.append("## Investigation Instruction (Phase 4)")
+    lines.append("")
     if investigation_instruction:
-        lines.append("## Investigation Instruction (Phase 4)")
-        lines.append("")
         lines.append(f"> {str(investigation_instruction)[:500]}")
-        lines.append("")
+    else:
+        lines.append("*No output produced.*")
+    lines.append("")
 
     # Legacy support: ontology_diagnosis from older v5 runs
     ontology_diag = challenge.get("ontology_diagnosis", "")

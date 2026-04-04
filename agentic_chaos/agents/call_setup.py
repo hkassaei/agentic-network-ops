@@ -63,7 +63,16 @@ class CallSetupAgent(BaseAgent):
         result = await establish_vonr_call(ims_domain, callee_imsi)
 
         if result["success"]:
-            msg = f"Call setup: VoNR call established ({result['call_uri']})"
+            # Wait for call to stabilize before fault injection.
+            # RTCP reports (MOS, jitter, loss) are sent every ~5 seconds.
+            # Prometheus scrapes every 5 seconds. A 20-second delay ensures
+            # at least 3-4 RTCP samples are in Prometheus so rate() queries
+            # return meaningful data when the triage agent calls
+            # get_dp_quality_gauges after fault injection.
+            import asyncio
+            log.info("Call established, waiting 20s for media to stabilize...")
+            await asyncio.sleep(20)
+            msg = f"Call setup: VoNR call established and stabilized ({result['call_uri']})"
             log.info(msg)
         else:
             msg = f"Call setup: FAILED — {result['detail']}"

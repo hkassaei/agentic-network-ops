@@ -581,6 +581,13 @@
     z-index: 20;
     box-shadow: 0 4px 12px rgba(0,0,0,0.4);
   }
+  /* Inside the metrics detail panel, anchor tooltips to the left so they don't overflow */
+  .metrics-detail .info-tip::after {
+    left: -8px;
+    right: auto;
+    transform: none;
+    max-width: 230px;
+  }
   .info-tip:hover::after { opacity: 1; }
   /* Flip tooltip below when near top of panel */
   .info-tip.tip-below::after {

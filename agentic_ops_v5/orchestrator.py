@@ -30,9 +30,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from .subagents.triage import create_triage_agent
+from .subagents.network_analyst import create_network_analyst
 from .subagents.pattern_matcher import create_pattern_matcher
-from .subagents.anomaly_detector import create_anomaly_detector
 from .subagents.instruction_generator import create_instruction_generator
 from .subagents.investigator import create_investigator_agent
 from .subagents.synthesis import create_synthesis_agent
@@ -146,8 +145,9 @@ async def _run_phase(
                             pass
 
                 if part.text and phase:
-                    if not phase.output_summary:
-                        phase.output_summary = part.text[:500]
+                    # Always keep the latest text — the last chunk is
+                    # most likely the final answer.
+                    phase.output_summary = part.text[:500]
                     if on_event:
                         try:
                             await on_event({
@@ -170,6 +170,30 @@ async def _run_phase(
     )
     updated_state = {**state, **final_session.state}
 
+    # ADK output_key bug workaround: ADK filters out part.thought when
+    # storing output_key (LlmAgent line 655).  If Gemini responds entirely
+    # in thinking mode, the key is silently left as None.  Recover from
+    # the text we captured in the event stream, or set a fallback so
+    # downstream prompt templates ({key}) don't crash.
+    output_key = getattr(agent, "output_key", None)
+    if output_key and not updated_state.get(output_key):
+        last_text = ""
+        for phase in phase_map.values():
+            if phase.output_summary:
+                last_text = phase.output_summary
+        if last_text:
+            log.warning(
+                "output_key %r was null — recovered from event stream", output_key)
+            updated_state[output_key] = last_text
+        else:
+            log.error(
+                "output_key %r was null and no text captured — "
+                "agent %s produced no usable output", output_key, agent.name)
+            updated_state[output_key] = (
+                f"[{agent.name} produced no output — "
+                f"possible ADK thinking-mode issue]"
+            )
+
     now = time.time()
     traces = list(phase_map.values())
     for t in traces:
@@ -183,18 +207,36 @@ async def _run_phase(
 # Public API
 # -------------------------------------------------------------------------
 
-async def investigate(question: str, on_event=None) -> dict:
-    """Run the v5 6-phase investigation pipeline.
+async def investigate(
+    question: str,
+    on_event=None,
+    anomaly_window_hint_seconds: int = 300,
+) -> dict:
+    """Run the v5 5-phase investigation pipeline.
 
-    Phase 1: TriageAgent — collect metrics, topology, health
+    Phase 1: NetworkAnalystAgent — collect data + ontology-guided layer assessment
     Phase 2: PatternMatcherAgent — deterministic signature matching
-    Phase 3: AnomalyDetectorAgent — ontology-guided analysis (optional)
-    Phase 4: InstructionGeneratorAgent — synthesize investigator instruction
-    Phase 5: InvestigatorAgent — verify hypothesis with tools
-    Phase 6: SynthesisAgent — NOC-ready diagnosis
+    Phase 3: InstructionGeneratorAgent — synthesize investigator instruction
+    Phase 4: InvestigatorAgent — verify hypothesis with tools
+    Phase 5: SynthesisAgent — NOC-ready diagnosis
+
+    Args:
+        question: The user's investigation question.
+        on_event: Optional async callback for streaming events to the caller.
+        anomaly_window_hint_seconds: Rough lookback hint for the agent's
+            temporal reasoning (see docs/ADR/dealing_with_temporality_2.md).
+            Default 300 (5 minutes). This is an imprecise starting point
+            that tells the agent "the problem started in roughly the last
+            N seconds." The agent starts narrower (60s) and widens only
+            if needed, capped at this hint. Do not pass precise fault
+            injection times here — the agent must work in production
+            contexts where that information is unavailable.
     """
     session_service = InMemorySessionService()
-    state: dict[str, Any] = {"user_question": question}
+    state: dict[str, Any] = {
+        "user_question": question,
+        "anomaly_window_hint_seconds": anomaly_window_hint_seconds,
+    }
     all_phases: list[PhaseTrace] = []
     invocation_order: list[str] = []
     run_start = time.time()
@@ -202,12 +244,16 @@ async def investigate(question: str, on_event=None) -> dict:
     log.info("Starting v5 investigation: %s", question[:100])
 
     # =================================================================
-    # Phase 1: Triage (LLM)
+    # Phase 1: Network Analyst (LLM, merged triage + anomaly analysis)
     # =================================================================
-    state, traces = await _run_phase(
-        create_triage_agent(), state, question, session_service, on_event)
-    all_phases.extend(traces)
-    invocation_order.extend(t.agent_name for t in traces)
+    try:
+        state, traces = await _run_phase(
+            create_network_analyst(), state, question, session_service, on_event)
+        all_phases.extend(traces)
+        invocation_order.extend(t.agent_name for t in traces)
+    except Exception as e:
+        log.error("NetworkAnalystAgent failed: %s", e)
+        state["network_analysis"] = f"Network analysis failed: {e}"
 
     # =================================================================
     # Phase 2: Pattern Matcher (deterministic BaseAgent)
@@ -218,43 +264,7 @@ async def investigate(question: str, on_event=None) -> dict:
     invocation_order.extend(t.agent_name for t in traces)
 
     # =================================================================
-    # Phase 3: Anomaly Detector (LLM, optional)
-    # Skip if Pattern Matcher found a high-confidence match
-    # =================================================================
-    pattern_match_raw = state.get("pattern_match", "{}")
-    try:
-        pattern_match = json.loads(pattern_match_raw) if isinstance(pattern_match_raw, str) else pattern_match_raw
-    except (json.JSONDecodeError, TypeError):
-        pattern_match = {}
-
-    confidence = pattern_match.get("confidence", "low")
-
-    if confidence in ("very_high", "high"):
-        log.info("  Phase 3 skipped — high-confidence pattern match (%s)", confidence)
-        state["anomaly_analysis"] = (
-            f"Skipped — Pattern Matcher found high-confidence match: "
-            f"{pattern_match.get('top_diagnosis', '?')} ({confidence})"
-        )
-        if on_event:
-            try:
-                await on_event({
-                    "type": "phase_skip", "agent": "AnomalyDetectorAgent",
-                    "reason": f"High-confidence pattern match ({confidence})",
-                })
-            except Exception:
-                pass
-    else:
-        try:
-            state, traces = await _run_phase(
-                create_anomaly_detector(), state, question, session_service, on_event)
-            all_phases.extend(traces)
-            invocation_order.extend(t.agent_name for t in traces)
-        except Exception as e:
-            log.error("AnomalyDetectorAgent failed: %s", e)
-            state["anomaly_analysis"] = f"Anomaly detection failed: {e}"
-
-    # =================================================================
-    # Phase 4: Instruction Generator (LLM)
+    # Phase 3: Instruction Generator (LLM)
     # =================================================================
     try:
         state, traces = await _run_phase(
@@ -269,7 +279,7 @@ async def investigate(question: str, on_event=None) -> dict:
         )
 
     # =================================================================
-    # Phase 5: Investigator (LLM)
+    # Phase 4: Investigator (LLM)
     # =================================================================
     try:
         state, traces = await _run_phase(
@@ -281,7 +291,7 @@ async def investigate(question: str, on_event=None) -> dict:
         state["investigation"] = f"Investigation failed: {e}"
 
     # =================================================================
-    # Phase 6: Synthesis (LLM)
+    # Phase 5: Synthesis (LLM)
     # =================================================================
     try:
         state, traces = await _run_phase(
@@ -324,9 +334,8 @@ async def investigate(question: str, on_event=None) -> dict:
     # Assemble result
     # =================================================================
     result = {
-        "triage": state.get("triage"),
+        "network_analysis": state.get("network_analysis"),
         "pattern_match": state.get("pattern_match"),
-        "anomaly_analysis": state.get("anomaly_analysis"),
         "investigation_instruction": state.get("investigation_instruction"),
         "investigation": state.get("investigation"),
         "diagnosis": state.get("diagnosis"),

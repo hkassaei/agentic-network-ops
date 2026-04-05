@@ -35,6 +35,7 @@ def create_investigator_agent() -> LlmAgent:
             # Core layer
             tools.query_prometheus,
             tools.get_nf_metrics,
+            tools.get_dp_quality_gauges,
             tools.get_network_status,
             # Application layer (IMS)
             tools.run_kamcmd,

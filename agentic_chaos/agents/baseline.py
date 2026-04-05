@@ -69,7 +69,12 @@ class BaselineCollector(BaseAgent):
                     f"{metric_count} NFs with metrics"
                 ))],
             ),
-            actions=EventActions(state_delta={"baseline": baseline}),
+            # Store metrics both nested (for episode record) and flat
+            # (for FaultPropagationVerifier convenience).
+            actions=EventActions(state_delta={
+                "baseline": baseline,
+                "baseline_metrics": metrics,
+            }),
         )
 
     async def _run_live_impl(self, ctx):

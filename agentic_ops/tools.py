@@ -70,14 +70,21 @@ async def read_container_logs(
     container: str,
     tail: int = 200,
     grep: str | None = None,
+    since_seconds: int | None = None,
 ) -> str:
     """Read recent logs from a Docker container.
 
     Args:
         deps: Agent dependencies.
         container: Container name (e.g. 'pcscf', 'scscf', 'amf', 'upf').
-        tail: Number of recent lines to return (default 200).
+        tail: Number of recent lines to return (default 200). Ignored if
+            since_seconds is set AND grep is not set (in which case all
+            matching lines in the time window are returned).
         grep: Optional pattern to filter log lines (case-insensitive).
+        since_seconds: Only return log lines written in the last N seconds.
+            Translates to `docker logs --since Ns`. When set, this supersedes
+            tail as the primary filter — use it to avoid stale historical
+            lines. Prefer this for time-bounded investigations.
 
     Returns:
         The log output as a string. Error message if container not found.
@@ -85,7 +92,13 @@ async def read_container_logs(
     if container not in deps.all_containers:
         return f"Unknown container '{container}'. Known containers: {', '.join(deps.all_containers)}"
 
-    cmd = f"docker logs --tail {tail} {container} 2>&1"
+    # Build docker logs command. --since and --tail can coexist: --since
+    # filters by time first, then --tail limits the tail of that window.
+    if since_seconds is not None and since_seconds > 0:
+        cmd = f"docker logs --since {int(since_seconds)}s --tail {tail} {container} 2>&1"
+    else:
+        cmd = f"docker logs --tail {tail} {container} 2>&1"
+
     if grep:
         cmd += f" | grep -i -- {_shell_quote(grep)}"
 
@@ -360,6 +373,7 @@ async def search_logs(
 async def query_prometheus(
     deps: AgentDeps,
     query: str,
+    window_seconds: int | None = None,
 ) -> str:
     """Query Prometheus for 5G core NF metrics using PromQL.
 
@@ -371,6 +385,13 @@ async def query_prometheus(
 
     Args:
         deps: Agent dependencies.
+        window_seconds: Optional lookback window in seconds for rate/range
+            queries. When set, the tool substitutes the placeholder token
+            `{window}` in your query with `{window_seconds}s`. Example:
+            `rate(rtpengine_packets_total[{window}])` with window_seconds=120
+            becomes `rate(rtpengine_packets_total[120s])`. If the query
+            already contains an explicit range selector (e.g. `[60s]`) the
+            window_seconds value is ignored.
         query: A PromQL query string. Common queries:
 
             Data plane health (check FIRST for call/connectivity issues):
@@ -405,6 +426,10 @@ async def query_prometheus(
     """
     prom_ip = deps.env.get("METRICS_IP", "172.22.0.36")
     prom_url = f"http://{prom_ip}:9090"
+
+    # Substitute {window} placeholder in query with the window_seconds value
+    if window_seconds is not None and "{window}" in query:
+        query = query.replace("{window}", f"{int(window_seconds)}s")
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

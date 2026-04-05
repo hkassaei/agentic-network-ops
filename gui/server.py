@@ -817,6 +817,9 @@ async def handle_investigate_v5(request: web.Request) -> web.WebSocketResponse:
 
     msg = await ws.receive_json()
     question = msg.get("question", "").strip()
+    # Bootstrap temporal hint — defaults to 300s (5 minutes) unless the
+    # caller explicitly overrides. See docs/ADR/dealing_with_temporality_2.md.
+    anomaly_window_hint_seconds = int(msg.get("anomaly_window_hint_seconds", 300))
     if not question:
         await _ws_send(ws, {"type": "error", "message": "No question provided"})
         await ws.close()
@@ -831,7 +834,11 @@ async def handle_investigate_v5(request: web.Request) -> web.WebSocketResponse:
         async def on_event(evt: dict) -> None:
             await _ws_send(ws, evt)
 
-        result = await investigate(question, on_event=on_event)
+        result = await investigate(
+            question,
+            on_event=on_event,
+            anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+        )
 
         diagnosis = result.get("diagnosis")
         if diagnosis and isinstance(diagnosis, str):

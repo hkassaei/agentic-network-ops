@@ -79,7 +79,11 @@ async def cmd_run(args: argparse.Namespace) -> int:
     print(f"  Description: {scenario.description}")
     print()
 
-    episode = await run_scenario(scenario, agent_version=agent_version)
+    episode = await run_scenario(
+        scenario,
+        agent_version=agent_version,
+        abort_on_unpropagated=getattr(args, "abort_on_unpropagated", False),
+    )
 
     print()
     print("=" * 60)
@@ -247,6 +251,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--agent", required=True, choices=["v1.5", "v3", "v4", "v5"],
         help="Agent version to evaluate (v1.5, v3, v4, or v5)",
+    )
+    p_run.add_argument(
+        "--abort-on-unpropagated", action="store_true",
+        help=(
+            "Skip the RCA agent invocation when the FaultPropagationVerifier "
+            "reports verdict='not_observed' (no metric deltas detected "
+            "after the propagation wait). Useful for batch regression runs "
+            "where you want to skip wasted agent calls on faults that "
+            "clearly did not take effect."
+        ),
     )
 
     # list-scenarios

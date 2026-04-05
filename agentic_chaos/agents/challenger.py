@@ -79,6 +79,23 @@ class ChallengeAgent(BaseAgent):
             )
             return
 
+        # Skip if --abort-on-unpropagated was set and the verifier
+        # reported the fault didn't manifest. The Healer and Recorder
+        # still run after this; only the expensive agent call is skipped.
+        if ctx.session.state.get("episode_aborted", False):
+            verification = ctx.session.state.get("fault_verification", {})
+            yield Event(
+                author=self.name,
+                content=types.Content(
+                    parts=[types.Part(text=(
+                        f"Challenge Mode: skipped — fault verification "
+                        f"verdict={verification.get('verdict', '?')}, "
+                        f"--abort-on-unpropagated is set"
+                    ))],
+                ),
+            )
+            return
+
         # Check if the RCA agent is available
         if not self._rca_agent_available(agent_version):
             yield Event(
@@ -95,12 +112,18 @@ class ChallengeAgent(BaseAgent):
         log.info("Challenge Mode: invoking %s agent...", agent_version)
 
         faults_injected = ctx.session.state.get("faults_injected", [])
+        anomaly_window_hint_seconds = int(
+            ctx.session.state.get("anomaly_window_hint_seconds", 300)
+        )
 
         question = self._build_question()
 
         start_time = time.time()
         try:
-            diagnosis_dict = await self._run_rca_agent(question, agent_version)
+            diagnosis_dict = await self._run_rca_agent(
+                question, agent_version,
+                anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+            )
         except Exception as e:
             log.error("RCA agent failed: %s", e)
             yield Event(
@@ -140,8 +163,8 @@ class ChallengeAgent(BaseAgent):
             "score": score,
             "time_to_diagnosis_seconds": round(elapsed, 1),
             "token_usage": token_usage,
+            "network_analysis": diagnosis_dict.get("_network_analysis", ""),
             "pattern_match": diagnosis_dict.get("_pattern_match", ""),
-            "anomaly_analysis": diagnosis_dict.get("_anomaly_analysis", ""),
             "investigation_instruction": diagnosis_dict.get("_investigation_instruction", ""),
         }
 
@@ -214,14 +237,20 @@ class ChallengeAgent(BaseAgent):
             "Investigate and diagnose the root cause."
         )
 
-    async def _run_rca_agent(self, question: str, agent_version: str = "v1.5") -> dict:
+    async def _run_rca_agent(
+        self, question: str, agent_version: str = "v1.5",
+        anomaly_window_hint_seconds: int = 300,
+    ) -> dict:
         """Run the specified troubleshooting agent and return its diagnosis."""
         ops_path = str(_REPO_ROOT)
         if ops_path not in sys.path:
             sys.path.insert(0, ops_path)
 
         if agent_version in ("v3", "v4", "v5"):
-            return await self._run_adk_agent(question, agent_version)
+            return await self._run_adk_agent(
+                question, agent_version,
+                anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+            )
         return await self._run_v15_agent(question)
 
     async def _run_v15_agent(self, question: str) -> dict:
@@ -254,16 +283,23 @@ class ChallengeAgent(BaseAgent):
 
         return {"_raw_diagnosis": "Agent produced no output"}
 
-    async def _run_adk_agent(self, question: str, version: str = "v3") -> dict:
+    async def _run_adk_agent(
+        self, question: str, version: str = "v3",
+        anomaly_window_hint_seconds: int = 300,
+    ) -> dict:
         """Run an ADK multi-phase troubleshooting agent (v3, v4, or v5)."""
         if version == "v5":
             from agentic_ops_v5.orchestrator import investigate
+            result = await investigate(
+                question,
+                anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+            )
         elif version == "v4":
             from agentic_ops_v4.orchestrator import investigate
+            result = await investigate(question)
         else:
             from agentic_ops_v3.orchestrator import investigate
-
-        result = await investigate(question)
+            result = await investigate(question)
 
         # The raw diagnosis text — passed directly to the LLM scorer
         diagnosis_raw = str(result.get("diagnosis", ""))
@@ -293,8 +329,8 @@ class ChallengeAgent(BaseAgent):
         return {
             "_raw_diagnosis": diagnosis_raw,
             "_token_usage": token_usage,
+            "_network_analysis": result.get("network_analysis", ""),
             "_pattern_match": result.get("pattern_match", ""),
-            "_anomaly_analysis": result.get("anomaly_analysis", ""),
             "_investigation_instruction": result.get("investigation_instruction", ""),
         }
 

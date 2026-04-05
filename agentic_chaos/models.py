@@ -211,6 +211,10 @@ class Scenario(BaseModel):
     Required for data plane scenarios where traffic must be flowing."""
 
     observation_window_seconds: int = 30
+    """DEPRECATED — the FaultPropagationVerifier now waits a single
+    framework-wide value (see agents/fault_propagation_verifier.py).
+    Retained for backward compatibility with existing scenarios."""
+
     ttl_seconds: int = 120
 
 

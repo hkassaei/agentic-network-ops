@@ -2,11 +2,14 @@
 ChaosDirector — the top-level orchestrator for chaos episodes.
 
 Wires together all Phase agents into a SequentialAgent:
-  1. BaselineCollector → captures pre-fault state
-  2. FaultInjector     → injects faults per scenario
-  3. SymptomObserver   → polls for symptoms (LoopAgent)
-  4. Healer            → reverses all faults
-  5. EpisodeRecorder   → writes episode JSON
+  1. BaselineCollector           → captures pre-fault state
+  2. CallSetupAgent              → establishes VoNR call (if scenario needs it)
+  3. FaultInjector               → injects faults per scenario
+  4. FaultPropagationVerifier    → waits N seconds, verifies fault manifested
+  5. ChallengeAgent              → invokes the RCA agent (v1.5/v3/v4/v5)
+  6. Healer                      → reverses all faults
+  7. CallTeardownAgent           → hangs up the VoNR call
+  8. EpisodeRecorder             → writes episode JSON
 
 Usage:
     from agentic_chaos.orchestrator import run_scenario
@@ -39,8 +42,8 @@ from .agents.baseline import BaselineCollector
 from .agents.call_setup import CallSetupAgent, CallTeardownAgent
 from .agents.challenger import ChallengeAgent
 from .agents.fault_injector import FaultInjector
+from .agents.fault_propagation_verifier import create_fault_propagation_verifier
 from .agents.healer import Healer
-from .agents.symptom_observer import create_symptom_observer
 from .fault_registry import FaultRegistry
 from .models import Scenario
 from .recorder import EpisodeRecorder
@@ -61,15 +64,11 @@ def get_registry() -> FaultRegistry:
 
 def create_chaos_director(
     registry: FaultRegistry | None = None,
-    observation_max_iterations: int = 6,
-    observation_poll_interval: float = 5.0,
 ) -> SequentialAgent:
     """Factory: create the ChaosDirector SequentialAgent.
 
     Args:
         registry: FaultRegistry instance. Uses singleton if None.
-        observation_max_iterations: Max symptom poll cycles.
-        observation_poll_interval: Seconds between polls.
 
     Returns:
         A SequentialAgent ready to run a chaos episode.
@@ -79,28 +78,24 @@ def create_chaos_director(
     baseline_collector = BaselineCollector()
     call_setup = CallSetupAgent()
     fault_injector = FaultInjector(registry=reg)
-    symptom_observer = create_symptom_observer(
-        max_iterations=observation_max_iterations,
-        poll_interval_seconds=observation_poll_interval,
-        registry=reg,  # Enables adaptive escalation
-    )
+    fault_verifier = create_fault_propagation_verifier()
     challenge_agent = ChallengeAgent()
     healer = Healer(registry=reg)
     call_teardown = CallTeardownAgent()
     episode_recorder = EpisodeRecorder()
 
-    # Pipeline: baseline → [call_setup] → inject → observe → [challenge] → heal → [call_teardown] → record
+    # Pipeline: baseline → [call_setup] → inject → verify → [challenge] → heal → [call_teardown] → record
     return SequentialAgent(
         name="ChaosDirector",
         description=(
             "Orchestrates a complete chaos episode: "
-            "baseline → [call_setup] → inject → observe → [challenge] → heal → [call_teardown] → record."
+            "baseline → [call_setup] → inject → verify → [challenge] → heal → [call_teardown] → record."
         ),
         sub_agents=[
             baseline_collector,
             call_setup,
             fault_injector,
-            symptom_observer,
+            fault_verifier,
             challenge_agent,
             healer,
             call_teardown,
@@ -270,6 +265,7 @@ async def run_scenario(
     scenario: Scenario,
     registry: FaultRegistry | None = None,
     agent_version: str = "v1.5",
+    abort_on_unpropagated: bool = False,
 ) -> dict:
     """Run a complete chaos episode for the given scenario.
 
@@ -279,6 +275,8 @@ async def run_scenario(
         scenario: The Scenario to execute.
         registry: Optional FaultRegistry. Uses singleton if None.
         agent_version: Which troubleshooting agent to evaluate ("v1.5" or "v3").
+        abort_on_unpropagated: If True, skip the RCA agent invocation when
+            the FaultPropagationVerifier reports verdict='not_observed'.
 
     Returns:
         The complete episode dict.
@@ -310,14 +308,15 @@ async def run_scenario(
     # Force challenge mode on — the whole point is agent evaluation
     scenario = scenario.model_copy(update={"challenge_mode": True})
 
-    log.info("Starting chaos episode: %s — %s (agent=%s)", episode_id, scenario.name, agent_version)
+    from .agents.fault_propagation_verifier import FAULT_PROPAGATION_TIME_SECONDS
+    log.info(
+        "Starting chaos episode: %s — %s (agent=%s, fault_propagation=%ds)",
+        episode_id, scenario.name, agent_version,
+        FAULT_PROPAGATION_TIME_SECONDS,
+    )
 
     # Create the orchestrator
-    director = create_chaos_director(
-        registry=reg,
-        observation_max_iterations=max(1, scenario.observation_window_seconds // 5),
-        observation_poll_interval=5.0,
-    )
+    director = create_chaos_director(registry=reg)
 
     # Set up ADK session with initial state
     session_service = InMemorySessionService()
@@ -337,6 +336,13 @@ async def run_scenario(
             "observations": [],
             "escalation_level": 0,
             "symptoms_detected": False,
+            "abort_on_unpropagated": abort_on_unpropagated,
+            # Temporal reasoning bootstrap: deliberately imprecise hint to
+            # the RCA agent about how far back to look. Fixed at 300s
+            # regardless of when the fault was injected — we do NOT leak
+            # the real inject time to keep the agent's reasoning
+            # production-portable. See docs/ADR/dealing_with_temporality_2.md.
+            "anomaly_window_hint_seconds": 300,
         },
     )
 

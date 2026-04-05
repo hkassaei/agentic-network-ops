@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -441,6 +442,47 @@ class OntologyClient:
                 {**dict(record["c"]), "subsystem_name": record["subsystem_name"]}
                 for record in result
             ]
+
+    def get_vonr_components(self) -> list[dict]:
+        """Return only the components relevant to VoNR evaluation.
+
+        Filters out components where `use_cases.vonr.enabled: false` in
+        the ontology (WebUI, Prometheus, Grafana, etc.). The result is
+        the list of containers whose health an RCA agent should actually
+        consider when assessing network state.
+
+        Each entry includes: name, label, layer, role, container_name,
+        subsystem, and the ontology note explaining its role.
+        """
+        components = self.get_all_components()
+        relevant: list[dict] = []
+        for comp in components:
+            use_cases_raw = comp.get("use_cases", "{}")
+            try:
+                use_cases = (
+                    json.loads(use_cases_raw)
+                    if isinstance(use_cases_raw, str)
+                    else use_cases_raw or {}
+                )
+            except (json.JSONDecodeError, TypeError):
+                use_cases = {}
+
+            vonr = use_cases.get("vonr", {})
+            if not isinstance(vonr, dict):
+                continue
+            if not vonr.get("enabled", False):
+                continue
+
+            relevant.append({
+                "name": comp.get("name", ""),
+                "label": comp.get("label", ""),
+                "layer": comp.get("layer", ""),
+                "role": comp.get("role", ""),
+                "container_name": comp.get("container_name", comp.get("name", "")),
+                "subsystem": comp.get("subsystem", ""),
+                "note": vonr.get("note", ""),
+            })
+        return relevant
 
     def get_all_interfaces(self) -> list[dict]:
         """Return all interfaces with source and target component names."""

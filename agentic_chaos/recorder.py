@@ -86,6 +86,7 @@ class EpisodeRecorder(BaseAgent):
             "scenario": scenario,
             "baseline": baseline,
             "faults": successful_faults,
+            "fault_verification": state.get("fault_verification"),
             "observations": observations,
             "resolution": resolution,
             "rca_label": rca_label,
@@ -139,6 +140,171 @@ class EpisodeRecorder(BaseAgent):
 
     async def _run_live_impl(self, ctx):
         raise NotImplementedError
+
+
+# -------------------------------------------------------------------------
+# Formatters for structured v5 pipeline output
+# -------------------------------------------------------------------------
+
+_RATING_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+
+
+def _extract_rating(rating) -> str:
+    """Normalize a rating value to a lowercase string.
+
+    Handles:
+      - plain strings: 'green', 'GREEN', 'Green'
+      - enum objects: LayerRating.GREEN → 'green'
+      - enum repr strings that slipped through: 'LayerRating.GREEN' → 'green'
+    """
+    if rating is None:
+        return ""
+    # If it's an Enum instance, use its value
+    if hasattr(rating, "value"):
+        return str(rating.value).lower()
+    s = str(rating).lower()
+    # Strip "classname." prefix if present
+    if "." in s:
+        s = s.split(".", 1)[1]
+    return s
+
+
+def _coerce_to_dict(value) -> dict | None:
+    """Accept a dict, a JSON string, or a Python repr and return a dict or None."""
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    # Try JSON first
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fall back to ast.literal_eval for Python repr (e.g. {'foo': <Enum.X>})
+    try:
+        import ast
+        # Strip enum reprs like <LayerRating.RED: 'red'> → 'red'
+        import re
+        cleaned = re.sub(r"<\w+\.\w+:\s*('[^']*'|\"[^\"]*\")>", r"\1", s)
+        parsed = ast.literal_eval(cleaned)
+        return parsed if isinstance(parsed, dict) else None
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _format_network_analysis(value) -> list[str]:
+    """Render the NetworkAnalysis Pydantic dict as readable markdown."""
+    data = _coerce_to_dict(value)
+    if not data:
+        # Not parseable — fall back to raw text in a code block
+        return ["```", str(value)[:800], "```"]
+
+    out: list[str] = []
+
+    summary = data.get("summary", "")
+    if summary:
+        out.append(f"**Summary:** {summary}")
+        out.append("")
+
+    # Layer status table
+    layer_status = data.get("layer_status", {}) or {}
+    if layer_status:
+        out.append("**Layer status:**")
+        out.append("")
+        out.append("| Layer | Rating | Note |")
+        out.append("|---|---|---|")
+        for layer in ["infrastructure", "ran", "core", "ims"]:
+            ls = layer_status.get(layer, {})
+            if not isinstance(ls, dict):
+                continue
+            rating = _extract_rating(ls.get("rating"))
+            icon = _RATING_ICON.get(rating, "")
+            note = (ls.get("note") or "").replace("|", "\\|")
+            out.append(f"| **{layer}** | {icon} {rating.upper()} | {note} |")
+        out.append("")
+
+        # Evidence per non-green layer
+        for layer in ["infrastructure", "ran", "core", "ims"]:
+            ls = layer_status.get(layer, {})
+            if not isinstance(ls, dict):
+                continue
+            rating = _extract_rating(ls.get("rating"))
+            if rating == "green":
+                continue
+            evidence = ls.get("evidence") or []
+            if not evidence:
+                continue
+            out.append(f"**{layer.upper()} evidence:**")
+            for item in evidence:
+                out.append(f"- {item}")
+            out.append("")
+
+    # Suspect components
+    suspects = data.get("suspect_components") or []
+    if suspects:
+        out.append("**Suspect components:**")
+        out.append("")
+        for s in suspects:
+            if not isinstance(s, dict):
+                continue
+            name = s.get("name", "?")
+            conf = s.get("confidence", "?")
+            reason = s.get("reason", "")
+            out.append(f"- **{name}** ({conf}): {reason}")
+        out.append("")
+
+    # Investigation hint
+    hint = data.get("investigation_hint", "")
+    if hint:
+        out.append(f"**Investigation hint:** {hint}")
+        out.append("")
+
+    # Tools called
+    tools = data.get("tools_called") or []
+    if tools:
+        out.append(f"**Tools called:** {', '.join(tools)}")
+        out.append("")
+
+    return out
+
+
+def _format_pattern_match(value) -> list[str]:
+    """Render PatternMatcher JSON output as readable markdown."""
+    data = _coerce_to_dict(value)
+    if not data:
+        return ["```", str(value)[:500], "```"]
+
+    out: list[str] = []
+
+    matched = data.get("matched", False)
+    top = data.get("top_diagnosis", "?")
+    confidence = data.get("confidence", "?")
+    failure_domain = data.get("failure_domain", "?")
+
+    status_icon = "✅" if matched else "❌"
+    out.append(f"**{status_icon} Match:** {top}")
+    out.append("")
+    out.append(f"- **Confidence:** {confidence}")
+    out.append(f"- **Failure domain:** {failure_domain}")
+
+    sigs = data.get("matched_signatures") or []
+    if sigs and isinstance(sigs[0], dict):
+        out.append(f"- **Matched signatures:** {len(sigs)}")
+        for sig in sigs[:3]:
+            sid = sig.get("signature_id", "?")
+            score = sig.get("match_score", "?")
+            out.append(f"  - `{sid}` (score: {score})")
+
+    anomalies = data.get("baseline_anomalies") or {}
+    if anomalies:
+        count = sum(len(v) for v in anomalies.values() if isinstance(v, list))
+        out.append(f"- **Baseline anomalies:** {count} metrics across {len(anomalies)} components")
+
+    out.append("")
+    return out
 
 
 def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
@@ -198,6 +364,35 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
             lines.append("All containers running at baseline.")
     lines.append("")
 
+    # Fault Propagation Verification
+    verification = episode.get("fault_verification") or {}
+    if verification:
+        verdict = verification.get("verdict", "?")
+        verdict_icon = {
+            "confirmed": "✅",
+            "inconclusive": "⚠️",
+            "not_observed": "❌",
+        }.get(verdict, "?")
+        lines.append("## Fault Propagation Verification")
+        lines.append("")
+        lines.append(f"**Verdict:** {verdict_icon} `{verdict}`")
+        lines.append("")
+        lines.append(f"- **Wait:** {verification.get('wait_seconds', '?')}s")
+        lines.append(f"- **Actual elapsed:** {verification.get('elapsed_seconds', '?')}s")
+        lines.append(
+            f"- **Nodes with significant deltas:** "
+            f"{len(verification.get('filtered_deltas', {}))}"
+        )
+        lines.append(
+            f"- **Nodes with any drift:** "
+            f"{verification.get('raw_delta_node_count', '?')}"
+        )
+        if verification.get("aborted"):
+            lines.append(
+                "- **⚠️ Episode aborted** — `--abort-on-unpropagated` was set"
+            )
+        lines.append("")
+
     # Symptoms observed
     lines.append("## Symptoms Observed")
     lines.append("")
@@ -231,36 +426,34 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     # Notable log lines omitted from report — they contain stale logs
     # from previous runs and are not useful for diagnosis evaluation.
 
-    # Pipeline intermediate state — v5 6-phase pipeline
+    # Pipeline intermediate state — v5 5-phase pipeline
     challenge = episode.get("challenge_result", {})
+
+    network_analysis = challenge.get("network_analysis", "")
+    lines.append("## Network Analysis (Phase 1)")
+    lines.append("")
+    if network_analysis:
+        lines.extend(_format_network_analysis(network_analysis))
+    else:
+        lines.append("*No output produced.*")
+    lines.append("")
 
     pattern_match = challenge.get("pattern_match", "")
     lines.append("## Pattern Match (Phase 2)")
     lines.append("")
     if pattern_match:
-        lines.append(f"```")
-        lines.append(str(pattern_match)[:500])
-        lines.append(f"```")
-    else:
-        lines.append("*No output produced.*")
-    lines.append("")
-
-    anomaly_analysis = challenge.get("anomaly_analysis")
-    lines.append("## Anomaly Analysis (Phase 3)")
-    lines.append("")
-    if anomaly_analysis and "Skipped" not in str(anomaly_analysis):
-        lines.append(f"> {str(anomaly_analysis)[:500]}")
-    elif anomaly_analysis:
-        lines.append(f"*{anomaly_analysis}*")
+        lines.extend(_format_pattern_match(pattern_match))
     else:
         lines.append("*No output produced.*")
     lines.append("")
 
     investigation_instruction = challenge.get("investigation_instruction", "")
-    lines.append("## Investigation Instruction (Phase 4)")
+    lines.append("## Investigation Instruction (Phase 3)")
     lines.append("")
     if investigation_instruction:
-        lines.append(f"> {str(investigation_instruction)[:500]}")
+        # Render as a blockquote, preserving line breaks
+        for ln in str(investigation_instruction).splitlines():
+            lines.append(f"> {ln}" if ln.strip() else ">")
     else:
         lines.append("*No output produced.*")
     lines.append("")

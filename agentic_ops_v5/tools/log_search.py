@@ -4,15 +4,27 @@ from __future__ import annotations
 from ._common import _t, _get_deps, _truncate_output
 
 
-async def read_container_logs(container: str, tail: int = 200, grep: str | None = None) -> str:
+async def read_container_logs(
+    container: str,
+    tail: int = 200,
+    grep: str | None = None,
+    since_seconds: int | None = None,
+) -> str:
     """Read recent logs from a Docker container.
 
     Args:
         container: Container name (e.g. 'pcscf', 'scscf', 'amf').
         tail: Number of recent lines to return (default 200).
         grep: Optional pattern to filter log lines (case-insensitive).
+        since_seconds: Only return log lines from the last N seconds. Use
+            this to avoid stale historical lines from previous runs.
+            Translates to `docker logs --since Ns`. Prefer this for
+            time-bounded investigations — a typical starting value is 120
+            (2 minutes). Widen to 300 or 900 only if nothing is found.
     """
-    result = await _t.read_container_logs(_get_deps(), container, tail, grep)
+    result = await _t.read_container_logs(
+        _get_deps(), container, tail=tail, grep=grep, since_seconds=since_seconds,
+    )
     if not grep:
         return _truncate_output(result)
     return result

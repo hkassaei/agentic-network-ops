@@ -1,8 +1,14 @@
 # ADR: Agentic Ops v5 — 6-Phase Agent Pipeline
 
 **Date:** 2026-04-01
-**Status:** Accepted
+**Status:** Superseded by `v5_5phase_pipeline.md` (2026-04-04)
 **Supersedes:** `agentic_ops_v5_plan.md`, `v5_implementation_plan.md`
+
+> **Note:** This 6-phase design was replaced by a 5-phase pipeline on 2026-04-04.
+> TriageAgent and AnomalyDetectorAgent were merged into a single `NetworkAnalystAgent`
+> with structured Pydantic output. See `v5_5phase_pipeline.md` for rationale (persistent
+> ADK thinking-mode crashes, expensive inter-phase duplication, and pattern matching on
+> uninterpreted data).
 
 ---
 

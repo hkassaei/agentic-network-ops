@@ -47,6 +47,9 @@ gnb_radio_link_failure = Scenario(
         "SIP REGISTER expires without renewal",
         "gNB disappears from AMF",
     ],
+    # Self-evident: killing the gNB collapses NGAP, AMF session count, and
+    # connected-UE gauges immediately — no extra traffic needed.
+    required_traffic="none",
     observation_window_seconds=30,
     ttl_seconds=300,
 )
@@ -73,6 +76,11 @@ pcscf_latency = Scenario(
         "Kamailio tm transaction timeouts",
         "IMS registration failures at UEs",
     ],
+    # Control-plane fault: without a fresh REGISTER, existing cached
+    # registrations stay put and 500ms of latency on the edge proxy
+    # produces zero observable symptoms. ControlPlaneTrafficAgent forces
+    # UE re-registration so new SIP transactions traverse the delayed path.
+    required_traffic="control_plane",
     escalation=True,
     observation_window_seconds=30,
     ttl_seconds=300,
@@ -96,6 +104,10 @@ scscf_crash = Scenario(
         "Active SIP dialogs expire",
         "I-CSCF cannot route to S-CSCF",
     ],
+    # Control-plane fault: killing S-CSCF has no impact on existing
+    # cached registrations until a new REGISTER needs routing through
+    # I-CSCF → S-CSCF. We force a re-register to expose the outage.
+    required_traffic="control_plane",
     observation_window_seconds=30,
     ttl_seconds=300,
 )
@@ -125,6 +137,10 @@ hss_unresponsive = Scenario(
         "SIP REGISTER stalls (waiting for Diameter)",
         "CDP peer state changes",
     ],
+    # Control-plane fault: 60s latency on HSS only matters if somebody
+    # is actually making Diameter queries. A fresh REGISTER fires UAR/MAR
+    # through the delayed path and exposes the timeout.
+    required_traffic="control_plane",
     observation_window_seconds=30,
     ttl_seconds=300,
 )
@@ -151,7 +167,12 @@ data_plane_degradation = Scenario(
         "GTP-U packet counters anomaly",
         "Potential call quality degradation",
     ],
-    requires_active_call=True,
+    # User-plane fault: packet loss on UPF requires active RTP media
+    # flowing through the data path. CallSetupAgent establishes a VoNR
+    # call before injection and keeps it active through the propagation
+    # window so RTCP MOS/jitter/loss metrics reflect the degradation.
+    required_traffic="user_plane",
+    requires_active_call=True,  # legacy flag, kept in sync for back-compat
     observation_window_seconds=30,
     ttl_seconds=300,
 )
@@ -179,6 +200,11 @@ mongodb_gone = Scenario(
         "5G subscriber queries fail",
         "AMF registration may still work (cached)",
     ],
+    # Control-plane fault: killing MongoDB doesn't affect cached 5G
+    # sessions. To expose the outage, we force a fresh SIP REGISTER —
+    # the REGISTER path ultimately needs PyHSS → MongoDB subscriber
+    # lookups. Without new traffic, the kill is silent.
+    required_traffic="control_plane",
     observation_window_seconds=30,
     ttl_seconds=300,
 )
@@ -201,6 +227,10 @@ dns_failure = Scenario(
         "Kamailio DNS lookup errors",
         "New registrations fail",
     ],
+    # Control-plane fault: DNS lookups only happen on new SIP
+    # transactions. A fresh REGISTER forces Kamailio to resolve the
+    # IMS domain and surface the NAPTR/SRV failure.
+    required_traffic="control_plane",
     observation_window_seconds=30,
     ttl_seconds=300,
 )
@@ -239,6 +269,9 @@ ims_network_partition = Scenario(
         "Kamailio tm transaction timeouts",
         "Active calls may survive briefly (RTP via UPF, not CSCFs)",
     ],
+    # Control-plane fault: iptables DROP on the CSCF-to-CSCF path only
+    # breaks things if new SIP transactions try to traverse it.
+    required_traffic="control_plane",
     observation_window_seconds=30,
     ttl_seconds=300,
 )
@@ -266,6 +299,10 @@ amf_restart = Scenario(
         "UEs must re-register after AMF recovers",
         "Temporary PDU session disruption",
     ],
+    # Self-evident: stopping the AMF drops NGAP associations and AMF
+    # session/UE count gauges go to zero immediately. No extra traffic
+    # needed — UERANSIM will auto-retry NGAP on its own.
+    required_traffic="none",
     observation_window_seconds=45,
     ttl_seconds=300,
 )
@@ -294,6 +331,10 @@ cascading_ims_failure = Scenario(
         "Total IMS registration failure",
         "No voice calls possible",
     ],
+    # Control-plane fault: both HSS kill and S-CSCF latency only bite
+    # when new SIP/Diameter transactions flow. Forces re-register to
+    # expose the total IMS outage.
+    required_traffic="control_plane",
     challenge_mode=True,
     observation_window_seconds=30,
     ttl_seconds=300,

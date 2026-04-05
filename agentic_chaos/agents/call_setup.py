@@ -45,16 +45,26 @@ class CallSetupAgent(BaseAgent):
     ) -> AsyncGenerator[Event, None]:
         scenario = ctx.session.state.get("scenario", {})
 
-        if not scenario.get("requires_active_call", False):
+        # Support both the new required_traffic field and the legacy
+        # requires_active_call boolean. A scenario only needs user-plane
+        # traffic (active call) if explicitly marked so.
+        required_traffic = scenario.get("required_traffic", "none")
+        legacy_flag = scenario.get("requires_active_call", False)
+        needs_active_call = required_traffic == "user_plane" or legacy_flag
+
+        if not needs_active_call:
             yield Event(
                 author=self.name,
                 content=types.Content(
-                    parts=[types.Part(text="Call setup: skipped (not required for this scenario)")],
+                    parts=[types.Part(text=(
+                        f"Call setup: skipped — required_traffic="
+                        f"'{required_traffic}' does not need user-plane traffic"
+                    ))],
                 ),
             )
             return
 
-        log.info("Establishing VoNR call for data plane scenario...")
+        log.info("Establishing VoNR call for user-plane scenario...")
 
         env = _load_env()
         ims_domain = _get_ims_domain(env)

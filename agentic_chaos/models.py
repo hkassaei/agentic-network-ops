@@ -206,9 +206,29 @@ class Scenario(BaseModel):
     challenge_mode: bool = False
     """Run RCA agent after observation and score its diagnosis?"""
 
+    required_traffic: str = "none"
+    """What kind of traffic the fault needs in order to produce observable
+    symptoms. One of:
+
+      - "none"          — fault is self-evident (container kill, etc.)
+      - "control_plane" — needs fresh SIP signaling during propagation.
+                          ControlPlaneTrafficAgent will force a UE
+                          re-registration after fault injection so new
+                          REGISTER transactions flow through the affected
+                          path. Use for P-CSCF latency, S-CSCF crash,
+                          HSS unresponsive, DNS failure, IMS partition,
+                          cascading IMS failure, MongoDB gone.
+      - "user_plane"    — needs active RTP media during propagation.
+                          CallSetupAgent will establish a VoNR call
+                          before fault injection and keep it active
+                          during the propagation window. Use for data
+                          plane degradation scenarios.
+    """
+
     requires_active_call: bool = False
-    """Establish a VoNR call between UE1 and UE2 before fault injection?
-    Required for data plane scenarios where traffic must be flowing."""
+    """DEPRECATED — use required_traffic='user_plane' instead. Retained
+    for backward compatibility. When True, is treated as equivalent to
+    required_traffic='user_plane'."""
 
     observation_window_seconds: int = 30
     """DEPRECATED — the FaultPropagationVerifier now waits a single

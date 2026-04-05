@@ -296,3 +296,44 @@ async def hangup_call() -> dict:
 
     log.info("VoNR call hangup sent")
     return {"success": True, "detail": "Hangup command sent"}
+
+
+# -------------------------------------------------------------------------
+# Control-plane traffic stimulation (for signaling fault scenarios)
+# -------------------------------------------------------------------------
+
+async def trigger_sip_reregister(ue_container: str = "e2e_ue1") -> dict:
+    """Force a fresh SIP REGISTER from a UE via pjsua's 'rr' command.
+
+    Writes the 'rr' (re-register) command to the UE's pjsua FIFO. The UE
+    will send a new REGISTER transaction through the full IMS signaling
+    chain: P-CSCF → I-CSCF → S-CSCF → HSS (Diameter UAR/MAR) → back.
+
+    Use this to generate control-plane traffic during fault propagation
+    windows for scenarios that target the signaling path (P-CSCF latency,
+    S-CSCF crash, HSS unresponsive, DNS failure, IMS partition, etc.).
+    Without fresh signaling, latency and connectivity faults on IMS
+    components produce no observable symptoms — existing registrations
+    stay cached and nothing exercises the affected path.
+
+    Args:
+        ue_container: UE container name (e.g. 'e2e_ue1', 'e2e_ue2').
+
+    Returns:
+        {success, detail}
+    """
+    safe_container = shlex.quote(ue_container)
+    rc, out = await shell(
+        f'docker exec {safe_container} bash -c "echo rr >> {_PJSUA_FIFO}"'
+    )
+    if rc != 0:
+        return {
+            "success": False,
+            "detail": f"Failed to send rr command to {ue_container}: {out}",
+        }
+
+    log.info("SIP re-register triggered on %s", ue_container)
+    return {
+        "success": True,
+        "detail": f"Re-register command sent to {ue_container}",
+    }

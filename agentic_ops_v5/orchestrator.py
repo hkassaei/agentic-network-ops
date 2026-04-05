@@ -34,6 +34,7 @@ from .subagents.network_analyst import create_network_analyst
 from .subagents.pattern_matcher import create_pattern_matcher
 from .subagents.instruction_generator import create_instruction_generator
 from .subagents.investigator import create_investigator_agent
+from .subagents.evidence_validator import create_evidence_validator
 from .subagents.synthesis import create_synthesis_agent
 from .models import (
     InvestigationTrace,
@@ -207,18 +208,33 @@ async def _run_phase(
 # Public API
 # -------------------------------------------------------------------------
 
+def _accumulate_phase_traces(state: dict, new_traces: list) -> None:
+    """Append serialized phase traces to state["phase_traces_so_far"].
+
+    The EvidenceValidatorAgent reads this list to cross-check LLM
+    claims against actual tool calls. Must run after every phase so
+    downstream phases see the accumulated history.
+    """
+    current = state.get("phase_traces_so_far", []) or []
+    for t in new_traces:
+        # Use model_dump with mode='json' for clean serialization
+        current.append(t.model_dump(mode="json") if hasattr(t, "model_dump") else dict(t))
+    state["phase_traces_so_far"] = current
+
+
 async def investigate(
     question: str,
     on_event=None,
     anomaly_window_hint_seconds: int = 300,
 ) -> dict:
-    """Run the v5 5-phase investigation pipeline.
+    """Run the v5 6-phase investigation pipeline.
 
     Phase 1: NetworkAnalystAgent — collect data + ontology-guided layer assessment
     Phase 2: PatternMatcherAgent — deterministic signature matching
     Phase 3: InstructionGeneratorAgent — synthesize investigator instruction
     Phase 4: InvestigatorAgent — verify hypothesis with tools
-    Phase 5: SynthesisAgent — NOC-ready diagnosis
+    Phase 5: EvidenceValidatorAgent — fact-check claims against real tool calls
+    Phase 6: SynthesisAgent — NOC-ready diagnosis (honors validation verdict)
 
     Args:
         question: The user's investigation question.
@@ -251,6 +267,7 @@ async def investigate(
             create_network_analyst(), state, question, session_service, on_event)
         all_phases.extend(traces)
         invocation_order.extend(t.agent_name for t in traces)
+        _accumulate_phase_traces(state, traces)
     except Exception as e:
         log.error("NetworkAnalystAgent failed: %s", e)
         state["network_analysis"] = f"Network analysis failed: {e}"
@@ -262,6 +279,7 @@ async def investigate(
         create_pattern_matcher(), state, question, session_service, on_event)
     all_phases.extend(traces)
     invocation_order.extend(t.agent_name for t in traces)
+    _accumulate_phase_traces(state, traces)
 
     # =================================================================
     # Phase 3: Instruction Generator (LLM)
@@ -271,6 +289,7 @@ async def investigate(
             create_instruction_generator(), state, question, session_service, on_event)
         all_phases.extend(traces)
         invocation_order.extend(t.agent_name for t in traces)
+        _accumulate_phase_traces(state, traces)
     except Exception as e:
         log.error("InstructionGeneratorAgent failed: %s", e)
         state["investigation_instruction"] = (
@@ -286,18 +305,41 @@ async def investigate(
             create_investigator_agent(), state, question, session_service, on_event)
         all_phases.extend(traces)
         invocation_order.extend(t.agent_name for t in traces)
+        _accumulate_phase_traces(state, traces)
     except Exception as e:
         log.error("InvestigatorAgent failed: %s", e)
         state["investigation"] = f"Investigation failed: {e}"
 
     # =================================================================
-    # Phase 5: Synthesis (LLM)
+    # Phase 5: Evidence Validator (deterministic BaseAgent)
+    # Cross-checks NetworkAnalyst + Investigator claims against the
+    # actual tool-call trace. Never blocks Synthesis — writes a verdict
+    # and confidence level into state for Synthesis to honor.
+    # =================================================================
+    try:
+        state, traces = await _run_phase(
+            create_evidence_validator(), state, question, session_service, on_event)
+        all_phases.extend(traces)
+        invocation_order.extend(t.agent_name for t in traces)
+        _accumulate_phase_traces(state, traces)
+    except Exception as e:
+        log.error("EvidenceValidatorAgent failed: %s", e)
+        state["evidence_validation"] = {
+            "verdict": "severe",
+            "investigator_confidence": "none",
+            "summary": f"Evidence validation failed: {e}",
+        }
+        state["investigator_confidence"] = "none"
+
+    # =================================================================
+    # Phase 6: Synthesis (LLM) — reads evidence_validation from state
     # =================================================================
     try:
         state, traces = await _run_phase(
             create_synthesis_agent(), state, question, session_service, on_event)
         all_phases.extend(traces)
         invocation_order.extend(t.agent_name for t in traces)
+        _accumulate_phase_traces(state, traces)
     except Exception as e:
         log.error("SynthesisAgent failed: %s", e)
         state["diagnosis"] = state.get("investigation", f"Synthesis failed: {e}")
@@ -337,6 +379,8 @@ async def investigate(
         "network_analysis": state.get("network_analysis"),
         "pattern_match": state.get("pattern_match"),
         "investigation_instruction": state.get("investigation_instruction"),
+        "evidence_validation": state.get("evidence_validation"),
+        "investigator_confidence": state.get("investigator_confidence"),
         "investigation": state.get("investigation"),
         "diagnosis": state.get("diagnosis"),
         "events": [f"[{p.agent_name}] {p.output_summary}" for p in all_phases if p.output_summary],

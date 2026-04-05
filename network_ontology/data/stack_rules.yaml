@@ -47,6 +47,18 @@ stack_rules:
       - "rtpengine_pps=0 with owned_sessions=0 → no call, media relay has nothing to relay"
       - "upf_in_pps=0 and upf_out_pps=0 during no-call period → expected baseline"
 
+  - id: upf_counters_are_directional
+    rule: "The UPF GTP-U cumulative counters fivegs_ep_n3_gtp_indatapktn3upf (uplink: gNB→UPF) and fivegs_ep_n3_gtp_outdatapktn3upf (downlink: UPF→gNB) measure INDEPENDENT traffic directions over the container's lifetime. Their ratio is determined by whatever traffic has flowed historically (TCP downloads = more downlink, TCP uploads = more uplink, VoNR voice = roughly symmetric, idle SIP = roughly symmetric). Asymmetry between these counters is STRUCTURAL, not pathological. You CANNOT compute packet loss by subtracting one from the other."
+    condition: "both fivegs_ep_n3_gtp_indatapktn3upf and fivegs_ep_n3_gtp_outdatapktn3upf present in observations"
+    implication: "FORBIDDEN INFERENCE: Do NOT report the difference between in and out counters as 'packet loss', 'drop rate', or 'massive loss'. This is structurally wrong and will lead to false diagnoses. For actual packet loss detection, use one of these CORRECT methods: (1) rate() comparisons within the SAME direction over a time window, compared against the expected rate for the current traffic type (e.g., during a G.711 VoNR call, ~50 pps per direction is expected — significantly lower means loss); (2) RTCP-based metrics from RTPEngine: rate(rtpengine_packetloss_total[2m]) / rate(rtpengine_packetloss_samples_total[2m]) gives the sampled loss fraction from RTCP reports, which is the ground truth for voice media quality; (3) Interface-level drop counters on the tc qdisc (not currently exposed as a tool). If none of these correct methods indicate loss, then no loss is confirmed — asymmetry between cumulative counters alone is NOT evidence."
+    priority: 2
+    invalidates: ["packet_loss_from_cumulative_counter_subtraction", "in_minus_out_as_loss_calculation"]
+    examples:
+      - "in=3423, out=1267 → 65% asymmetry — STRUCTURAL (probably TCP downloads dominated lifetime), NOT loss"
+      - "in=5000, out=4900 → roughly symmetric — consistent with voice or idle traffic"
+      - "in=100, out=5000 → 98% asymmetry — STRUCTURAL (probably TCP downloads), still NOT loss evidence"
+      - "During active G.711 call: rate(in[2m])=20 pps vs expected 50 pps → THIS would indicate loss (same-direction rate comparison)"
+
   - id: log_direction_rule
     rule: "A container logging 'connection refused to X' means X is down, not that the logging container is broken."
     condition: "Log message contains 'connection refused' or 'connection failed'"

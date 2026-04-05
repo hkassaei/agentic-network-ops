@@ -52,7 +52,8 @@ Call `compare_to_baseline` at least once, passing observations from Step 1, to i
 
 - **Data plane gauge values from `get_dp_quality_gauges`**: `upf_kbps`, `upf_in_pps`, `upf_out_pps`, `rtpengine_pps`. These are REQUIRED for the ontology to evaluate idle-state rules. Forgetting them means the ontology cannot tell you whether zero throughput is a real problem or an expected idle state.
 - **Active call indicators**: `dialog_ng:active` from P-CSCF/S-CSCF, `owned_sessions` and `total_sessions` from RTPEngine. These let the ontology cross-check whether a voice call is actually in progress.
-- **Core health indicators**: `ran_ue`, `gnb`, `fivegs_upffunction_upf_sessionnbr`, GTP counters.
+- **Core health indicators**: `ran_ue`, `gnb`, `fivegs_upffunction_upf_sessionnbr`.
+- **UPF directional GTP counters** (BOTH are REQUIRED): `fivegs_ep_n3_gtp_indatapktn3upf` (uplink total) AND `fivegs_ep_n3_gtp_outdatapktn3upf` (downlink total). These trigger the `upf_counters_are_directional` rule, which tells you how these counters work and how to correctly detect packet loss. Always include both.
 - **Pre-existing baseline noise markers**: `httpclient:connfail` (flagged as `is_pre_existing` in the ontology so the stack rules can correctly dismiss it).
 
 Pass these as a flat observations dict (`{metric_name: value, ...}`) to `check_stack_rules`. The more complete the dict, the more helpful the rule output will be.
@@ -100,9 +101,30 @@ For any layer rated YELLOW or RED, the `evidence` field MUST contain specific va
 
 Evidence without specific values is not evidence.
 
-### Forbidden inferences
+### UPF counter asymmetry gate (MANDATORY before claiming packet loss)
 
-- **Do NOT compute packet loss by subtracting cumulative UPF ingress and egress counters.** `fivegs_ep_n3_gtp_indatapktn3upf` (uplink) and `fivegs_ep_n3_gtp_outdatapktn3upf` (downlink) measure independent traffic directions and are naturally asymmetric. A difference between them is NOT packet loss. For loss detection, use `rate()` comparisons within the same direction, or the RTCP-based RTPEngine metrics (`rtpengine_packetloss_total` / `rtpengine_packetloss_samples_total`).
+If your `check_stack_rules` output in Step 2 includes the `upf_counters_are_directional` rule, you MUST honor its guidance before making any claim about packet loss from UPF counters.
+
+Read the rule's output fields:
+- `in_total`, `out_total` — the raw counter values
+- `asymmetry_pct` — the percentage asymmetry between them
+- `severity` — `informational` or `high_temptation`
+- `verdict` — plain-English explanation of why the asymmetry is structural
+- `correct_methods` — the list of valid techniques for actual loss detection
+
+**Forbidden inference:** You MUST NOT write evidence strings like *"UPF ingress packet total (3423) is more than double the egress total (1267), indicating massive packet loss"*. Any difference between these two counters is **structural**, determined by the historical traffic mix that has flowed through the container over its entire lifetime (TCP downloads produce more downlink, TCP uploads produce more uplink, idle SIP and VoNR voice produce roughly symmetric counts, mixed traffic produces arbitrary ratios). Subtracting uplink from downlink is never a valid loss calculation.
+
+**What you MAY cite:**
+- The raw values themselves as context: *"UPF cumulative counters: in=3423 (uplink), out=1267 (downlink)"*.
+- Loss evidence ONLY from one of the correct methods listed in the rule:
+  1. **Same-direction rate**: compare `rate(in[2m])` or `rate(out[2m])` against the expected rate for the current traffic type (e.g., during a G.711 voice call, expect ~50 pps per direction — significantly lower is loss).
+  2. **RTCP-based loss**: `rate(rtpengine_packetloss_total[2m]) / rate(rtpengine_packetloss_samples_total[2m])` is the sampled loss fraction from RTCP reports — ground truth for voice quality.
+  3. Interface-level drop counters on the tc qdisc (not currently exposed).
+
+If none of these three methods shows loss, you cannot claim loss. Asymmetry between cumulative counters alone is not evidence and MUST NOT appear in your `evidence` array as a loss claim.
+
+### Other forbidden inferences
+
 - **Do NOT rate a layer as degraded based on pre-existing baseline noise.** Metrics flagged `is_pre_existing: true` in the ontology (e.g., `httpclient:connfail` at P-CSCF in its typical range) are known background conditions and do not indicate a new fault.
 
 ## Step 4 — Identify suspect components

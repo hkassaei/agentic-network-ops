@@ -123,5 +123,36 @@ The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root 
 
 ## Resolution
 
-**Heal method:** scheduled  
+**Heal method:** scheduled
 **Recovery time:** 215.0s
+
+---
+
+## Post-Run Analysis
+
+### Agent Performance Assessment
+
+The agent performed well on this scenario. The 40% score from the automated scorer does not reflect the actual quality of the diagnosis.
+
+**What the agent got right:**
+- Correctly identified HSS (pyhss) as the root cause component
+- Correctly traced the full causal chain: I-CSCF → Diameter UAR to HSS → timeout → registration fails
+- Correctly identified `ims_icscf:uar_timeouts` and `cdp:timeout` as the key diagnostic signals
+- Correctly separated the `httpclient:connfail` at P-CSCF as a "separate, secondary issue" (pre-existing noise)
+- Correctly concluded RAN and Core are GREEN and focused exclusively on IMS
+- Cited tool evidence throughout: `measure_rtt`, `get_nf_metrics`, container logs
+- The 6-phase pipeline worked as designed: Pattern Matcher found no match → Anomaly Detector identified IMS YELLOW with Diameter timeouts → Instruction Generator focused the investigator on IMS → Investigator confirmed HSS connectivity issue
+
+**Estimated fair score: ~85%**
+
+### Scorer Problem: Latency vs Packet Loss Indistinguishability
+
+The scorer penalized the agent for diagnosing "100% packet loss / network partition" instead of "elevated latency (60s delay)." This is unfair for two reasons:
+
+1. **`measure_rtt` (ping) cannot distinguish extreme latency from packet loss.** The default ping timeout is 1-5 seconds. A 60-second network delay causes every ping to timeout, and the tool reports "100% packet loss." The agent correctly interpreted the tool output it received — it didn't misread the evidence; the evidence itself is ambiguous at this latency level.
+
+2. **From the network's observable perspective, extreme latency and packet loss are functionally identical** when the latency exceeds the application's timeout. The Diameter Tw timer is ~30s. A 60-second delay means the Diameter response arrives AFTER the timeout has fired — the I-CSCF treats this identically to a dropped packet. The agent's diagnosis ("S-CSCF cannot reach HSS, Diameter requests timeout") is operationally correct regardless of whether the underlying cause is loss or delay.
+
+The agent's recommendation — "resolve the network connectivity issue between I-CSCF and HSS" — is the correct action for both scenarios.
+
+**Scorer improvement needed:** The scorer should accept "transport failure to HSS" / "HSS unreachable" / "network partition" as equivalent to "elevated latency on HSS" when the simulated latency exceeds the application's timeout threshold, since both produce identical observable symptoms and require the same remediation.

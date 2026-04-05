@@ -319,6 +319,49 @@ class OntologyClient:
                 if gtp_in == 0 and gtp_out == 0 and sessions > 0:
                     triggered.append(rule)
 
+            elif rule_id == "idle_data_plane_is_normal":
+                # Fires when any data plane throughput rate is present
+                # in observations AND is near zero. The rule tells the
+                # agent to cross-check call activity before flagging
+                # zero throughput as a failure.
+                #
+                # Only checks rate/gauge metrics — NOT cumulative
+                # counters like gtp_indatapktn3upf (which are always
+                # non-zero on a warm stack and cannot detect idleness).
+                rate_keys = [
+                    "upf_kbps",        # from get_dp_quality_gauges
+                    "rtpengine_pps",   # from get_dp_quality_gauges
+                    "upf_in_pps",      # from get_dp_quality_gauges
+                    "upf_out_pps",     # from get_dp_quality_gauges
+                ]
+                near_zero_rates = []
+                for key in rate_keys:
+                    val = observations.get(key)
+                    if val is not None and isinstance(val, (int, float)) and val <= 0.5:
+                        near_zero_rates.append(key)
+
+                if near_zero_rates:
+                    # Cross-check: is there any active call indicator?
+                    activity_keys = [
+                        "dialog_ng:active",      # Kamailio CSCFs
+                        "owned_sessions",        # RTPEngine
+                        "total_sessions",        # RTPEngine (gauge)
+                        "rtpengine_active_sessions",  # data plane gauges
+                    ]
+                    any_activity = any(
+                        (observations.get(k) or 0) > 0 for k in activity_keys
+                    )
+                    triggered.append({
+                        **rule,
+                        "near_zero_rates": near_zero_rates,
+                        "active_call_detected": any_activity,
+                        "verdict": (
+                            "Active call detected — zero rates may be a real problem."
+                            if any_activity
+                            else "No active call — zero data plane rates are EXPECTED idle state. DO NOT flag as degraded."
+                        ),
+                    })
+
             elif rule_id == "baseline_delta_rule":
                 # This rule is advisory — always include it as context
                 triggered.append(rule)

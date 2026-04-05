@@ -36,6 +36,17 @@ stack_rules:
     priority: 2
     invalidates: ["sip_timeout_analysis", "kamailio_transaction_analysis"]
 
+  - id: idle_data_plane_is_normal
+    rule: "Zero data plane throughput (upf_kbps = 0, upf_in_pps / upf_out_pps = 0, rtpengine_pps = 0) is NORMAL when no voice call is active. Active PDU sessions alone do NOT require traffic — they just provide a path for traffic when a call is placed. An idle network is a healthy network."
+    condition: "upf_kbps <= 0.5 OR rtpengine_pps <= 0.5 OR upf_in_pps <= 0.5 OR upf_out_pps <= 0.5"
+    implication: "Before rating the CORE or IMS layer as degraded based on zero data plane throughput, you MUST verify a voice call is actually in progress. Check for active call indicators: rtpengine_sessions{type='own'} > 0 OR total_sessions > 0 (RTPEngine), OR dialog_ng:active > 0 at P-CSCF/S-CSCF. If no active call indicator is present, zero data plane throughput is the expected idle state. DO NOT rate any layer YELLOW or RED based on idle data plane metrics. DO NOT list UPF or RTPEngine as suspect components just because they are idle."
+    priority: 2
+    invalidates: ["data_plane_failure_analysis_without_active_call_check", "treating_idle_rates_as_degradation"]
+    examples:
+      - "upf_kbps=0 with 4 PDU sessions but dialog_ng:active=0 → idle, not broken"
+      - "rtpengine_pps=0 with owned_sessions=0 → no call, media relay has nothing to relay"
+      - "upf_in_pps=0 and upf_out_pps=0 during no-call period → expected baseline"
+
   - id: log_direction_rule
     rule: "A container logging 'connection refused to X' means X is down, not that the logging container is broken."
     condition: "Log message contains 'connection refused' or 'connection failed'"

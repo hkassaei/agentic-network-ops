@@ -48,6 +48,15 @@ These four calls are non-negotiable. They establish the factual baseline for you
 
 Call `compare_to_baseline` at least once, passing observations from Step 1, to identify which metrics deviate from expected values. Also call `check_stack_rules` to determine whether any protocol layering invariants are being violated (e.g., if RAN is down, IMS issues are downstream symptoms, not root causes).
 
+**When you call `check_stack_rules`, you MUST build the observations dict from ALL your Step 1 outputs — not just a subset.** In particular, include:
+
+- **Data plane gauge values from `get_dp_quality_gauges`**: `upf_kbps`, `upf_in_pps`, `upf_out_pps`, `rtpengine_pps`. These are REQUIRED for the ontology to evaluate idle-state rules. Forgetting them means the ontology cannot tell you whether zero throughput is a real problem or an expected idle state.
+- **Active call indicators**: `dialog_ng:active` from P-CSCF/S-CSCF, `owned_sessions` and `total_sessions` from RTPEngine. These let the ontology cross-check whether a voice call is actually in progress.
+- **Core health indicators**: `ran_ue`, `gnb`, `fivegs_upffunction_upf_sessionnbr`, GTP counters.
+- **Pre-existing baseline noise markers**: `httpclient:connfail` (flagged as `is_pre_existing` in the ontology so the stack rules can correctly dismiss it).
+
+Pass these as a flat observations dict (`{metric_name: value, ...}`) to `check_stack_rules`. The more complete the dict, the more helpful the rule output will be.
+
 Optionally, if specific components look suspect after the comparison, call:
 - `check_component_health` for detailed health probes
 - `get_causal_chain_for_component` to understand cascading failure modes
@@ -65,12 +74,36 @@ You MUST assess all four layers, **considering only the containers returned by `
 - **core** — 5G control and user plane NFs in scope (typically AMF, SMF, UPF, PCF, NRF, SCP, AUSF, UDM, UDR)
 - **ims** — IMS functions in scope (typically P-CSCF, I-CSCF, S-CSCF, HSS, RTPEngine)
 
+### Idle-state gate (MANDATORY before flagging the data plane)
+
+Before rating the **core** or **ims** layer as YELLOW or RED based on data plane metrics (zero UPF throughput, zero RTPEngine pps, zero UPF in/out rates), you MUST honor the `idle_data_plane_is_normal` stack rule from your `check_stack_rules` output in Step 2.
+
+Read the rule's output fields:
+- `near_zero_rates` — which data plane metrics are near zero
+- `active_call_detected` — whether any active call indicator is present
+- `verdict` — plain-English guidance
+
+**If the rule fired with `active_call_detected: False`:** the zero data plane rates are the expected idle state. A voice call is NOT in progress, so there is no traffic for the UPF or RTPEngine to forward. You MUST rate core and ims layers GREEN with respect to data plane metrics. You MUST NOT list UPF or RTPEngine as suspect components on this basis. An idle network is a healthy network.
+
+**If the rule fired with `active_call_detected: True`:** a call IS in progress and zero throughput represents a real data plane failure. Proceed to rate the affected layer RED and list UPF / RTPEngine as suspects.
+
+**If the rule did NOT fire** (data plane rates are non-zero): skip this gate and continue with normal rating logic.
+
+This gate exists because zero data plane throughput without an active call is indistinguishable from failure at the metric level — the only way to tell them apart is to cross-check call activity indicators. The ontology does this cross-check for you; your job is to read and honor its verdict.
+
+### Evidence requirements
+
 For any layer rated YELLOW or RED, the `evidence` field MUST contain specific values from the tools you called. Examples:
 - "ran_ue=0 from get_nf_metrics (expected: 2)"
 - "pcscf container exited per get_network_status"
 - "cdp:timeout=5 at I-CSCF (expected: 0) — Diameter timeouts"
 
 Evidence without specific values is not evidence.
+
+### Forbidden inferences
+
+- **Do NOT compute packet loss by subtracting cumulative UPF ingress and egress counters.** `fivegs_ep_n3_gtp_indatapktn3upf` (uplink) and `fivegs_ep_n3_gtp_outdatapktn3upf` (downlink) measure independent traffic directions and are naturally asymmetric. A difference between them is NOT packet loss. For loss detection, use `rate()` comparisons within the same direction, or the RTCP-based RTPEngine metrics (`rtpengine_packetloss_total` / `rtpengine_packetloss_samples_total`).
+- **Do NOT rate a layer as degraded based on pre-existing baseline noise.** Metrics flagged `is_pre_existing: true` in the ontology (e.g., `httpclient:connfail` at P-CSCF in its typical range) are known background conditions and do not indicate a new fault.
 
 ## Step 4 — Identify suspect components
 

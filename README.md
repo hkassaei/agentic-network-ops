@@ -1,12 +1,12 @@
 # Agentic Network Ops
 
-AI-powered troubleshooting platform for a 5G SA + IMS (VoNR) network stack. Includes a browser-based GUI, three generations of RCA agents, and a chaos engineering framework.
+AI-powered troubleshooting platform for a 5G SA + IMS (VoNR) network stack. Includes a browser-based multi-page GUI, a Neo4j network ontology, four generations of RCA agents (v1.5, v3, v4, v5), and a chaos engineering framework that scores diagnoses against ground truth.
 
 ## Prerequisites
 
 - Docker + Docker Compose v2.14+
 - Python 3.10+
-- For v1.5/v2/v3/v4 agents + chaos engine (Vertex AI / Gemini):
+- For RCA agents (v1.5/v3/v4/v5) and the chaos engine (Vertex AI / Gemini):
   ```
   export GOOGLE_CLOUD_PROJECT=<your-project>
   export GOOGLE_CLOUD_LOCATION=<region>
@@ -25,9 +25,9 @@ Edit `ops.env` with your values:
 
 | Variable | Required for | Example |
 |---|---|---|
-| `GOOGLE_CLOUD_PROJECT` | RCA agents v3/v4 | `my-gcp-project` |
-| `GOOGLE_CLOUD_LOCATION` | RCA agents v3/v4 | `northamerica-northeast1` |
-| `GOOGLE_GENAI_USE_VERTEXAI` | RCA agents v3/v4 | `TRUE` |
+| `GOOGLE_CLOUD_PROJECT` | RCA agents v3/v4/v5 + chaos scorer | `my-gcp-project` |
+| `GOOGLE_CLOUD_LOCATION` | RCA agents v3/v4/v5 + chaos scorer | `northamerica-northeast1` |
+| `GOOGLE_GENAI_USE_VERTEXAI` | RCA agents v3/v4/v5 + chaos scorer | `TRUE` |
 | `ANTHROPIC_API_KEY` | RCA agent v1.5 (optional, for Claude) | `sk-ant-...` |
 
 `ops.env` is listed in `.gitignore` and is never committed.
@@ -54,7 +54,7 @@ This brings up the GUI (Python process), Neo4j ontology database, and ontology l
 
 ### 3. Deploy the network from the GUI
 
-Open http://localhost:8073 and use the **Deploy Full Stack** button in the Stack Controls tab. This builds Docker images, starts the 5G core + IMS stack, provisions subscribers, and deploys UEs — all streamed in real-time.
+Open http://localhost:8073 and navigate to the **Stack** page. Click **Build & Deploy Stack** to build Docker images, start the 5G core + IMS stack, provision subscribers, and deploy UEs — all streamed in real-time.
 
 Or start the network manually (with custom Grafana dashboards):
 
@@ -67,31 +67,35 @@ docker compose -p vonr \
 
 ## GUI
 
-The GUI is the main control surface. It deploys/tears down the stack, controls UEs, streams logs, shows live topology, and runs AI investigations — all from the browser at **http://localhost:8073**.
+The GUI is the main control surface — a multi-page web app at **http://localhost:8073** for deploying/tearing down the stack, controlling UEs, streaming logs, visualizing the live topology, stepping through protocol flows, and running AI investigations.
 
-### Tabs
+### Pages
 
-1. **Stack Controls** — Deploy/teardown the full 5G+IMS stack or just the UEs (streams progress over WebSocket)
-2. **UE Control** — Call, Hangup, Answer, Hold/Unhold buttons for UE1 and UE2
-3. **Live Logs** — Streams docker logs from UEs with color-coded SIP/NAS events
-4. **Topology** — Live network graph showing container status and fault overlays
-5. **AI Investigation** — Free-text troubleshooting, routed to one of three agent versions
+| Route | Nav label | Description |
+|-------|-----------|-------------|
+| `/topology` | **Network** | D3.js live topology with metrics badges, click-to-open detail panel (metrics + ontology-backed tooltips + live logs), plane filters, RTP/UPF data plane gauge strip |
+| `/` | **UEs** | UE1/UE2 call controls (call, hangup, answer, hold), live log stream with event timeline, AI log explain |
+| `/flows` | **Protocol Flows** | Animated step-through of 6 protocol flows: IMS Registration, VoNR Call Setup, VoNR Call Teardown, PDU Session Establishment, UE Deregistration, Diameter Cx Authentication |
+| `/investigate` | **Investigate** | Tabbed interface for all RCA agent versions (v1.5, v3, v4, v5) with streamed phase/tool-call/diagnosis output |
+| `/stack` | **Stack** | Deploy/teardown for stack + UEs, container health status by layer, ontology DB maintenance (re-seed from YAML) |
+
+All pages share a common nav bar with active page highlighting and a live `N/N Ready` status pill. Every metric in the detail panels has an `i` tooltip icon with a description pulled from the ontology (`network_ontology/data/baselines.yaml`) — single source of truth.
 
 ### Running Agentic Ops via GUI
 
-1. Deploy the stack using **"Deploy Full Stack"** in Stack Controls
-2. Once up, switch to the **AI Investigation** tab
-3. Type a question like *"UE1 can't register. What's wrong?"*
+1. Deploy the stack from the **Stack** page
+2. Navigate to the **Investigate** page
+3. Select an agent version tab and type a question like *"UE1 can't register. What's wrong?"*
 4. The GUI streams the agent's thinking, tool calls, and final diagnosis in real-time
 
 ### Agent Versions
 
-| Version | Tab | Engine | Description |
-|---------|-----|--------|-------------|
-| v1.5 | Investigate | Pydantic AI (Claude/Gemini) | Single agent with tools |
-| v2 | Investigate V2 | Google ADK (Gemini) | Multi-phase pipeline with specialist agents |
-| v3 | Investigate V3 | Google ADK (Gemini) | Context-isolated multi-phase |
-| v4 | Investigate V4 | Google ADK (Gemini 2.5) | Topology-aware, context-isolated multi-phase with dynamic specialist dispatch (latest) |
+| Version | Engine | Description |
+|---------|--------|-------------|
+| v1.5 | Pydantic AI (Claude/Gemini) | Single agent with tools |
+| v3 | Google ADK (Gemini) | Context-isolated multi-phase pipeline |
+| v4 | Google ADK (Gemini 2.5) | Topology-aware, context-isolated multi-phase with dynamic specialist dispatch |
+| v5 | Google ADK (Gemini 2.5) | 6-phase ontology-powered pipeline: Triage → Pattern Matcher (deterministic) → Anomaly Detector (optional) → Instruction Generator → Investigator → Synthesis |
 
 ## E2E VoNR Voice Test
 
@@ -108,7 +112,7 @@ docker build -t docker_ueransim ./network/ueransim
 # 1. Start the ops layer, then deploy the network from the GUI
 cp ops.env.example ops.env  # Edit with your GCP project + API keys
 ./scripts/start-ops.sh
-# Open http://localhost:8073 → Deploy Full Stack
+# Open http://localhost:8073 → Stack page → Build & Deploy Stack
 # Or start the network manually:
 docker compose -p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml up -d
 
@@ -122,7 +126,7 @@ docker compose -p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml
 ./scripts/teardown.sh
 ```
 
-Or just use the GUI — the **Deploy Full Stack** button runs the same flow.
+Or just use the GUI — the **Build & Deploy Stack** button on the `/stack` page runs the same flow.
 
 ### What the Deploy Script Does
 
@@ -214,18 +218,17 @@ export GOOGLE_GENAI_USE_VERTEXAI="TRUE"
 v5 requires the Neo4j ontology database to be running and seeded:
 
 ```bash
-# Activate the chaos venv
-source agentic_chaos/.venv/bin/activate
-
-# neo4j driver is already in requirements.txt — verify it's installed
-pip install neo4j
-
-# Start the ops layer (includes Neo4j)
+# Start the ops layer (brings up Neo4j + ontology-loader)
 ./scripts/start-ops.sh
-
-# Seed the ontology database (run once, or after ontology YAML changes)
-python -m network_ontology --uri bolt://localhost:7687 --reset -v
 ```
+
+The ontology loader runs as a one-shot container and seeds Neo4j from the YAML files in `network_ontology/data/`. After editing any ontology YAML, re-seed via the GUI's **Stack → Re-seed Ontology** button, or from the shell:
+
+```bash
+./scripts/reseed-ontology.sh
+```
+
+The loader container mounts `./network_ontology` as a volume, so YAML edits are picked up without rebuilding the Docker image. Re-seeding takes ~3 seconds.
 
 ### CLI Usage
 
@@ -256,18 +259,20 @@ python -m agentic_chaos -v run "P-CSCF Latency" --agent v1.5
 
 ### Scenarios
 
-| Scenario | Category | Blast Radius | What It Does |
-|----------|----------|--------------|--------------|
-| gNB Radio Link Failure | RAN | single | Kills the gNB container |
-| P-CSCF Latency | IMS | single | Adds network latency to P-CSCF |
-| S-CSCF Crash | IMS | single | Stops the S-CSCF container |
-| HSS Unresponsive | IMS | single | Pauses PyHSS |
-| Data Plane Degradation | core | single | Packet loss/latency on UPF |
-| MongoDB Gone | infra | global | Stops MongoDB (affects all NFs) |
-| DNS Failure | infra | global | Kills the DNS container |
-| IMS Network Partition | IMS | multi | Network partition between IMS components |
-| AMF Restart | core | single | Restarts AMF (simulates upgrade) |
-| Cascading IMS Failure | IMS | multi | Multiple IMS faults in sequence |
+| Scenario | Category | Blast Radius | Simulated Failure Mode |
+|----------|----------|--------------|------------------------|
+| gNB Radio Link Failure | RAN | single | Loss of N2/N3 connectivity between gNB and core |
+| P-CSCF Latency | IMS | single | Degraded SIP signaling path through P-CSCF |
+| S-CSCF Crash | IMS | single | S-CSCF unavailable — registration and call setup fail |
+| HSS Unresponsive | IMS | single | Diameter Cx queries to HSS time out |
+| Data Plane Degradation | core | single | GTP-U packet loss / latency on N3 |
+| MongoDB Gone | infra | global | 5G subscriber DB unreachable — all NFs that depend on it degrade |
+| DNS Failure | infra | global | Name resolution broken across the stack |
+| IMS Network Partition | IMS | multi | IMS components partitioned from each other |
+| AMF Restart | core | single | Temporary AMF unavailability (simulates rolling upgrade) |
+| Cascading IMS Failure | IMS | multi | Multiple IMS components fail in sequence |
+
+> **Note:** Scenarios describe the **simulated failure mode** (what it looks like from the outside), not the injection mechanism (container kill, `tc netem`, pause, etc.). RCA agents must diagnose the failure mode from observable evidence — not detect the injection mechanism. The chaos scorer evaluates diagnoses against the failure mode.
 
 ## Operations Layer (`network-ops.yaml`)
 
@@ -299,37 +304,72 @@ To add a new dashboard: drop a JSON file in `grafana/dashboards/` and restart Gr
 
 ### Network Ontology
 
-The ontology is a Neo4j graph database encoding the network's component topology, causal failure chains, log semantics, symptom signatures, and protocol stack rules. It replaces LLM causal reasoning with pre-computed domain knowledge.
+The ontology is a Neo4j graph database encoding the network's domain knowledge. It is the **single source of truth** for everything agents and the GUI reason about — components, interfaces, failure modes, log semantics, metric descriptions, and protocol flows. It replaces LLM causal reasoning with pre-computed knowledge.
 
-YAML source files live in `network_ontology/data/`. The `ontology-loader` container seeds Neo4j automatically on startup. See `docs/network-ontology-brainstorm.md` for design details.
+YAML source files in `network_ontology/data/`:
+
+| File | Contents |
+|------|----------|
+| `components.yaml` | 26 network functions — 3GPP role, layer, subsystem, protocols, diagnostic commands |
+| `deployment.yaml` | Per-deployment bindings — IPs (env keys), container names, metrics ports, grid positions |
+| `interfaces.yaml` | 53 interfaces between components (N1/N2/N3, SBI, Diameter Cx, SIP Mw, etc.) |
+| `causal_chains.yaml` | 12 failure modes — observable symptoms, possible causes, diagnostic approaches (never references injection mechanisms) |
+| `log_patterns.yaml` | 11 annotated log patterns with meaning and common misinterpretations |
+| `symptom_signatures.yaml` | 10 pre-computed symptom → fault signatures for deterministic matching |
+| `stack_rules.yaml` | 11 protocol stack invariants for sanity checking |
+| `baselines.yaml` | Healthy baseline values + **metric descriptions** (consumed by GUI tooltips via `/api/metric-descriptions`) |
+| `healthchecks.yaml` | 11 component health checks with disambiguation logic |
+| `flows.yaml` | 6 protocol flows: IMS Registration, VoNR Call Setup, VoNR Call Teardown, PDU Session Establishment, UE Deregistration, Diameter Cx Authentication |
+
+Query API in `network_ontology/query.py` (`OntologyClient`): `diagnose()`, `match_symptoms()`, `check_stack_rules()`, `get_healthcheck()`, `compare_to_baseline()`, `get_all_flows()`, `get_flow()`, etc. Used by v5 agents and the GUI flows/topology APIs.
+
+See `docs/network-ontology-brainstorm.md` for design details and `docs/ADR/v5_6phase_pipeline.md` for how v5 consumes the ontology.
 
 ## Directory Structure
 
 ```
 agentic-network-ops/
 ├── gui/                        # Browser-based GUI (Python aiohttp + vanilla JS)
-│   ├── server.py               # Backend: REST + WebSocket handlers
-│   ├── index.html              # Single-page app frontend
-│   ├── metrics.py              # Prometheus metrics collector
-│   ├── topology.py             # Network topology builder
-│   └── requirements.txt        # Python deps (aiohttp, pydantic-ai, google-adk)
+│   ├── server.py               # Backend: REST + WebSocket + page route handlers
+│   ├── templates/              # Page HTML templates
+│   │   ├── topology.html       # /topology — D3.js topology + metrics detail + tooltips
+│   │   ├── dashboard.html      # / — UE call controls + live logs
+│   │   ├── flows.html          # /flows — protocol flow animation (6 flows)
+│   │   ├── investigate.html    # /investigate — v1.5/v3/v4/v5 tabs
+│   │   └── stack.html          # /stack — deploy/teardown + re-seed ontology
+│   ├── static/
+│   │   ├── css/style.css       # Shared styles
+│   │   ├── js/common.js        # Shared utilities (API_BASE, WS_BASE, polling)
+│   │   ├── js/topology.js      # D3.js topology renderer (single source of truth)
+│   │   ├── js/controls.js      # Stack deploy/teardown + UE actions + modal
+│   │   ├── js/logs.js          # Log streaming, classification, timeline events
+│   │   ├── js/investigate.js   # All investigation modals (v1.5, v3, v4/v5)
+│   │   ├── js/flow-viewer.js   # Flow step-through animation
+│   │   └── lib/d3.v7.min.js    # D3.js v7 library
+│   ├── metrics.py              # Prometheus + kamcmd + rtpengine-ctl metrics collector
+│   ├── topology.py             # Network topology builder (ontology → YAML → fallback)
+│   └── requirements.txt        # Python deps (aiohttp, pydantic-ai, google-adk, neo4j)
 ├── agentic_ops/                # v1.5: Single Pydantic AI agent
 │   ├── agent.py                # Agent definition + tool wiring
 │   ├── tools.py                # Docker/network inspection tools
 │   └── prompts/system.md       # System prompt
-├── agentic_ops_v2/             # v2: Multi-agent ADK pipeline
-│   ├── orchestrator.py         # Triage → Trace → Dispatch → Specialists → Synthesis
-│   └── agents/                 # Specialist agent definitions
 ├── agentic_ops_v3/             # v3: Context-isolated multi-phase
-│   ├── orchestrator.py         # Same pipeline, fresh sessions per phase
+│   ├── orchestrator.py         # Fresh ADK sessions per phase
 │   └── agents/                 # Specialist agent definitions
-├── agentic_ops_v4/             # v4: Topology-aware multi-phase (latest)
+├── agentic_ops_v4/             # v4: Topology-aware multi-phase
 │   ├── orchestrator.py         # Session-per-phase + dynamic specialist dispatch
 │   ├── agents/                 # 8 agents: triage, tracer, dispatcher, 4 specialists, synthesis
 │   └── tools.py                # Reuses v1.5 tools + get_network_topology
+├── agentic_ops_v5/             # v5: 6-phase ontology-powered pipeline (latest)
+│   ├── orchestrator.py         # Triage → PatternMatcher → AnomalyDetector → InstructionGen → Investigator → Synthesis
+│   ├── subagents/              # Per-phase agent definitions
+│   ├── tools/                  # 14 tool files split by purpose (topology, metrics, logs, reachability, etc.)
+│   ├── prompts/                # Per-agent system prompts
+│   └── models.py               # TokenBreakdown, ToolCallTrace, PhaseTrace, InvestigationTrace
 ├── agentic_chaos/              # Fault injection + RCA challenge framework
 │   ├── cli.py                  # CLI: run scenarios, list episodes, heal
 │   ├── engine.py               # Fault injection engine (triple-lock safety)
+│   ├── scorer.py               # LLM judge scoring diagnoses vs simulated failure mode
 │   └── scenarios/              # Pre-built failure scenarios
 ├── network-ops.yaml             # Docker Compose: operations layer (GUI, ontology)
 ├── grafana-dashboards.yaml      # Docker Compose override: custom Grafana dashboards
@@ -358,6 +398,9 @@ agentic-network-ops/
 │   ├── pcscf/                  # P-CSCF: IPsec disabled
 │   └── scscf/                  # S-CSCF: MD5 auth
 └── scripts/                    # Orchestration scripts
+    ├── start-ops.sh            # Start ops layer: Neo4j + ontology loader + GUI (host venv)
+    ├── reseed-ontology.sh      # Re-seed Neo4j from YAML (also wired to GUI button)
+    ├── deploy-ontology-db.sh   # Bring up just the Neo4j container
     ├── e2e-vonr-test.sh        # Full deploy + test (10-step super script)
     ├── deploy-ues.sh           # Deploy UEs on existing stack
     ├── teardown-ues.sh         # Teardown UEs only

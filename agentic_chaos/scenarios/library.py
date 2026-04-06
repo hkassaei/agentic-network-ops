@@ -67,7 +67,7 @@ pcscf_latency = Scenario(
         FaultSpec(
             fault_type="network_latency",
             target="pcscf",
-            params={"delay_ms": 5000, "jitter_ms": 50},
+            params={"delay_ms": 2000, "jitter_ms": 50},
             ttl_seconds=300,
         ),
     ],
@@ -81,6 +81,9 @@ pcscf_latency = Scenario(
     # produces zero observable symptoms. ControlPlaneTrafficAgent forces
     # UE re-registration so new SIP transactions traverse the delayed path.
     required_traffic="control_plane",
+    # Extended observation: generate 2 minutes of IMS traffic under the fault
+    # while collecting metric snapshots for the anomaly screener.
+    observation_traffic_seconds=120,
     escalation=True,
     observation_window_seconds=30,
     ttl_seconds=300,

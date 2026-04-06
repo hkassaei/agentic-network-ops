@@ -75,6 +75,20 @@ async def auto_heal_stack() -> bool:
             log.info("Auto-heal: UEs redeployed successfully")
             log.info("Auto-heal: waiting 60s for 5G attachment + IMS registration...")
             await asyncio.sleep(60)
+
+            # Force a fresh re-register from both UEs to ensure P-CSCF/S-CSCF
+            # usrloc databases have the contacts. deploy-ues.sh confirms
+            # registration from the UE side, but the IMS server side may have
+            # stale/expired contacts from a previous fault.
+            log.info("Auto-heal: forcing SIP re-register from both UEs...")
+            for ue in ("e2e_ue1", "e2e_ue2"):
+                await asyncio.create_subprocess_shell(
+                    f'docker exec {ue} bash -c "echo rr >> /tmp/pjsua_cmd"',
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+            await asyncio.sleep(10)  # allow REGISTER transactions to complete
+
             return True
         else:
             log.error("Auto-heal: deploy-ues.sh failed (exit %d): %s",

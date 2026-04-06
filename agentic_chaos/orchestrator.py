@@ -44,6 +44,7 @@ from .agents.call_setup import CallSetupAgent, CallTeardownAgent
 from .agents.challenger import ChallengeAgent
 from .agents.control_plane_traffic import ControlPlaneTrafficAgent
 from .agents.fault_injector import FaultInjector
+from .agents.observation_traffic import ObservationTrafficAgent
 from .agents.fault_propagation_verifier import create_fault_propagation_verifier
 from .agents.healer import Healer
 from .fault_registry import FaultRegistry
@@ -82,18 +83,20 @@ def create_chaos_director(
     fault_injector = FaultInjector(registry=reg)
     control_plane_traffic = ControlPlaneTrafficAgent()
     fault_verifier = create_fault_propagation_verifier()
+    observation_traffic = ObservationTrafficAgent()
     challenge_agent = ChallengeAgent()
     healer = Healer(registry=reg)
     call_teardown = CallTeardownAgent()
     episode_recorder = EpisodeRecorder()
 
-    # Pipeline: baseline → [call_setup] → inject → [cp_traffic] → verify → [challenge] → heal → [call_teardown] → record
+    # Pipeline: baseline → [call_setup] → inject → [cp_traffic] → verify →
+    #           [observation_traffic] → [challenge] → heal → [call_teardown] → record
     return SequentialAgent(
         name="ChaosDirector",
         description=(
             "Orchestrates a complete chaos episode: "
             "baseline → [call_setup] → inject → [cp_traffic] → verify → "
-            "[challenge] → heal → [call_teardown] → record."
+            "[observation_traffic] → [challenge] → heal → [call_teardown] → record."
         ),
         sub_agents=[
             baseline_collector,
@@ -101,6 +104,7 @@ def create_chaos_director(
             fault_injector,
             control_plane_traffic,
             fault_verifier,
+            observation_traffic,
             challenge_agent,
             healer,
             call_teardown,

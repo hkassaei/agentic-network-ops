@@ -230,6 +230,19 @@ class Scenario(BaseModel):
     for backward compatibility. When True, is treated as equivalent to
     required_traffic='user_plane'."""
 
+    observation_traffic_seconds: int = 0
+    """Duration (in seconds) of extended traffic generation + metric
+    collection under fault conditions. When > 0, the ObservationTrafficAgent
+    generates randomized IMS traffic (SIP REGISTER, VoNR calls) while
+    collecting metric snapshots every 5 seconds. These snapshots are passed
+    to the v5 pipeline's anomaly screener.
+
+    Recommended values:
+      - 120 (2 min): control-plane faults (P-CSCF latency, S-CSCF crash, etc.)
+      - 60 (1 min): self-evident faults (container kill, gNB down)
+      - 0: disable (legacy behavior — no extended observation)
+    """
+
     observation_window_seconds: int = 30
     """DEPRECATED — the FaultPropagationVerifier now waits a single
     framework-wide value (see agents/fault_propagation_verifier.py).

@@ -83,7 +83,7 @@ async def run_training(duration: int, output_dir: Path | None) -> None:
 
     # Save to disk
     out = save_model(
-        screener, preprocessor,
+        screener,
         output_dir=output_dir,
         duration_seconds=int(elapsed),
         n_samples=n_samples,

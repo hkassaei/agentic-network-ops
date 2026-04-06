@@ -116,6 +116,9 @@ class ChallengeAgent(BaseAgent):
         anomaly_window_hint_seconds = int(
             ctx.session.state.get("anomaly_window_hint_seconds", 300)
         )
+        observation_snapshots = ctx.session.state.get("observation_snapshots", [])
+        if observation_snapshots:
+            log.info("Passing %d observation snapshots to RCA agent", len(observation_snapshots))
 
         question = self._build_question()
 
@@ -124,6 +127,7 @@ class ChallengeAgent(BaseAgent):
             diagnosis_dict = await self._run_rca_agent(
                 question, agent_version,
                 anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+                metric_snapshots=observation_snapshots,
             )
         except Exception as e:
             log.error("RCA agent failed: %s", e)
@@ -287,6 +291,7 @@ class ChallengeAgent(BaseAgent):
     async def _run_adk_agent(
         self, question: str, version: str = "v3",
         anomaly_window_hint_seconds: int = 300,
+        metric_snapshots: list | None = None,
     ) -> dict:
         """Run an ADK multi-phase troubleshooting agent (v3, v4, or v5)."""
         if version == "v5":
@@ -294,6 +299,7 @@ class ChallengeAgent(BaseAgent):
             result = await investigate(
                 question,
                 anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+                metric_snapshots=metric_snapshots or [],
             )
         elif version == "v4":
             from agentic_ops_v4.orchestrator import investigate

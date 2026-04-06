@@ -36,6 +36,7 @@
       <span id="ue1-status" class="ue-status pill-down">--</span>
     </div>
     <div class="ue-actions">
+      <button onclick="ueAction('ue1','register')" id="btn-ue1-register" disabled>Register</button>
       <button onclick="ueAction('ue1','call')" id="btn-ue1-call" disabled>Call UE2</button>
       <button onclick="ueAction('ue1','hangup')" id="btn-ue1-hangup" disabled>Hang Up</button>
       <button onclick="ueAction('ue1','answer')" id="btn-ue1-answer" disabled>Answer</button>
@@ -66,6 +67,7 @@
       <span id="ue2-status" class="ue-status pill-down">--</span>
     </div>
     <div class="ue-actions">
+      <button onclick="ueAction('ue2','register')" id="btn-ue2-register" disabled>Register</button>
       <button onclick="ueAction('ue2','call')" id="btn-ue2-call" disabled>Call UE1</button>
       <button onclick="ueAction('ue2','hangup')" id="btn-ue2-hangup" disabled>Hang Up</button>
       <button onclick="ueAction('ue2','answer')" id="btn-ue2-answer" disabled>Answer</button>
@@ -179,7 +181,7 @@ async function dashboardPollStatus() {
 
       const running = status === 'running';
       if (running) uesUp = true;
-      for (const act of ['call', 'hangup', 'answer', 'hold', 'unhold']) {
+      for (const act of ['register', 'call', 'hangup', 'answer', 'hold', 'unhold']) {
         document.getElementById(`btn-${ue}-${act}`).disabled = !running;
       }
 

@@ -266,6 +266,8 @@ async def handle_ue_action(request: web.Request) -> web.Response:
         cmd = f"docker exec {container} bash -c \"echo H >> /tmp/pjsua_cmd\""
     elif action == "unhold":
         cmd = f"docker exec {container} bash -c \"echo v >> /tmp/pjsua_cmd\""
+    elif action == "register":
+        cmd = f"docker exec {container} bash -c \"echo rr >> /tmp/pjsua_cmd\""
     else:
         return web.json_response({"ok": False, "error": f"Unknown action: {action}"}, status=400)
 

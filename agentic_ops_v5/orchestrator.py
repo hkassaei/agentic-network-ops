@@ -1,17 +1,18 @@
 """
-Investigation Director v5 — 6-Phase Agent Pipeline.
+Investigation Director v5 — 7-Phase Agent Pipeline.
 
 Pipeline:
-  Phase 1: TriageAgent (LLM)              → Collects metrics, topology, health
+  Phase 0: AnomalyScreener (ML, no LLM)   → River HalfSpaceTrees flags statistical anomalies
+  Phase 1: NetworkAnalystAgent (LLM)       → Layer assessment informed by pre-screened anomalies
   Phase 2: PatternMatcherAgent (BaseAgent) → Deterministic signature matching
-  Phase 3: AnomalyDetectorAgent (LLM)     → Ontology-guided anomaly analysis (optional)
-  Phase 4: InstructionGeneratorAgent (LLM) → Synthesizes investigator instruction
-  Phase 5: InvestigatorAgent (LLM)         → Verifies hypothesis with tools + OntologyConsultation
+  Phase 3: InstructionGeneratorAgent (LLM) → Synthesizes investigator instruction
+  Phase 4: InvestigatorAgent (LLM)         → Verifies hypothesis with tools + OntologyConsultation
+  Phase 5: EvidenceValidatorAgent (BaseAgent) → Fact-checks claims against tool traces
   Phase 6: SynthesisAgent (LLM)            → NOC-ready diagnosis
 
 The orchestrator is pure workflow plumbing — every agent is invoked via
-_run_phase() with session isolation. The only logic in the orchestrator
-is the skip decision for Phase 3.
+_run_phase() with session isolation. Phase 0 (anomaly screening) runs
+as plain Python, not an ADK agent.
 
 Usage:
     from agentic_ops_v5.orchestrator import investigate
@@ -227,26 +228,25 @@ async def investigate(
     on_event=None,
     anomaly_window_hint_seconds: int = 300,
 ) -> dict:
-    """Run the v5 6-phase investigation pipeline.
+    """Run the v5 7-phase investigation pipeline.
 
-    Phase 1: NetworkAnalystAgent — collect data + ontology-guided layer assessment
+    Phase 0: AnomalyScreener — statistical anomaly detection (ML, no LLM)
+    Phase 1: NetworkAnalystAgent — layer assessment informed by pre-screened anomalies
     Phase 2: PatternMatcherAgent — deterministic signature matching
     Phase 3: InstructionGeneratorAgent — synthesize investigator instruction
     Phase 4: InvestigatorAgent — verify hypothesis with tools
     Phase 5: EvidenceValidatorAgent — fact-check claims against real tool calls
     Phase 6: SynthesisAgent — NOC-ready diagnosis (honors validation verdict)
 
+    Phase 0 loads a pre-trained anomaly model from disk (trained separately
+    via `python -m anomaly_trainer`). If no trained model exists, Phase 0
+    is skipped and the NetworkAnalyst operates without pre-screened anomalies.
+
     Args:
         question: The user's investigation question.
         on_event: Optional async callback for streaming events to the caller.
         anomaly_window_hint_seconds: Rough lookback hint for the agent's
             temporal reasoning (see docs/ADR/dealing_with_temporality_2.md).
-            Default 300 (5 minutes). This is an imprecise starting point
-            that tells the agent "the problem started in roughly the last
-            N seconds." The agent starts narrower (60s) and widens only
-            if needed, capped at this hint. Do not pass precise fault
-            injection times here — the agent must work in production
-            contexts where that information is unavailable.
     """
     session_service = InMemorySessionService()
     state: dict[str, Any] = {
@@ -260,7 +260,81 @@ async def investigate(
     log.info("Starting v5 investigation: %s", question[:100])
 
     # =================================================================
-    # Phase 1: Network Analyst (LLM, merged triage + anomaly analysis)
+    # Phase 0: Anomaly Screener (ML, no LLM)
+    # Loads pre-trained model from disk, collects current metrics,
+    # scores them, and injects flagged anomalies into state for
+    # NetworkAnalyst. Model is trained separately via:
+    #   python -m anomaly_trainer --duration 300
+    # =================================================================
+    try:
+        from anomaly_trainer.persistence import load_model
+        from .anomaly.preprocessor import parse_nf_metrics_text
+        from . import tools as v5_tools
+
+        screener, pp, meta = load_model()
+
+        if screener is not None and screener.is_trained and pp is not None:
+            phase0_start = time.time()
+            if on_event:
+                await on_event({"type": "phase_start", "agent": "AnomalyScreener"})
+
+            log.info("Anomaly model loaded: %d samples, %d features (trained %s)",
+                     meta.get("n_samples", 0), meta.get("n_features", 0),
+                     meta.get("trained_at", "?"))
+
+            # Collect current metrics and score against trained model.
+            # The preprocessor carries counter state from the last healthy
+            # training snapshot, so deltas are computed against the healthy
+            # baseline (e.g., register count was 50 at end of training →
+            # now 66 → delta=16 → rate=0.53/s, trained normal ~0.1/s).
+            metrics_text = await v5_tools.get_nf_metrics()
+            raw_metrics = parse_nf_metrics_text(metrics_text)
+            features = pp.process(raw_metrics)
+
+            report = screener.score(features)
+
+            state["anomaly_report"] = report.to_prompt_text()
+            state["anomaly_flags"] = report.to_dict_list()
+
+            phase0_duration = int((time.time() - phase0_start) * 1000)
+            log.info("Phase 0 (AnomalyScreener): %d flags, score=%.3f, %dms",
+                     len(report.flags), report.overall_score, phase0_duration)
+
+            phase0_trace = PhaseTrace(
+                agent_name="AnomalyScreener",
+                started_at=phase0_start,
+                finished_at=time.time(),
+                duration_ms=phase0_duration,
+            )
+            phase0_trace.output_summary = (
+                f"{len(report.flags)} anomalies flagged "
+                f"(score={report.overall_score:.3f})"
+            )
+            all_phases.append(phase0_trace)
+            invocation_order.append("AnomalyScreener")
+
+            if on_event:
+                await on_event({
+                    "type": "text", "agent": "AnomalyScreener",
+                    "content": report.to_prompt_text()[:300],
+                })
+        else:
+            log.info("No trained anomaly model found — Phase 0 skipped. "
+                     "Run: python -m anomaly_trainer --duration 300")
+            state["anomaly_report"] = (
+                "Anomaly screening not available (no trained model). "
+                "Run: python -m anomaly_trainer --duration 300"
+            )
+
+    except ImportError:
+        log.info("anomaly_trainer module not available — Phase 0 skipped")
+        state["anomaly_report"] = "Anomaly screening not available."
+    except Exception as e:
+        log.warning("AnomalyScreener failed (non-fatal): %s", e)
+        state["anomaly_report"] = "Anomaly screening unavailable."
+
+    # =================================================================
+    # Phase 1: Network Analyst (LLM, informed by anomaly screening)
     # =================================================================
     try:
         state, traces = await _run_phase(

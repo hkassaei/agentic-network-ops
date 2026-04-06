@@ -227,6 +227,7 @@ async def investigate(
     question: str,
     on_event=None,
     anomaly_window_hint_seconds: int = 300,
+    metric_snapshots: list[dict] | None = None,
 ) -> dict:
     """Run the v5 7-phase investigation pipeline.
 
@@ -239,14 +240,18 @@ async def investigate(
     Phase 6: SynthesisAgent — NOC-ready diagnosis (honors validation verdict)
 
     Phase 0 loads a pre-trained anomaly model from disk (trained separately
-    via `python -m anomaly_trainer`). If no trained model exists, Phase 0
-    is skipped and the NetworkAnalyst operates without pre-screened anomalies.
+    via `python -m anomaly_trainer`), then processes the provided metric
+    snapshots through a fresh preprocessor and scores them against the model.
 
     Args:
         question: The user's investigation question.
         on_event: Optional async callback for streaming events to the caller.
         anomaly_window_hint_seconds: Rough lookback hint for the agent's
             temporal reasoning (see docs/ADR/dealing_with_temporality_2.md).
+        metric_snapshots: List of raw metric snapshot dicts collected during
+            the observation period (e.g., by ObservationTrafficAgent in the
+            chaos framework). Each snapshot is {component: {metric: value}}.
+            If empty/None, Phase 0 collects a single live snapshot instead.
     """
     session_service = InMemorySessionService()
     state: dict[str, Any] = {
@@ -261,19 +266,17 @@ async def investigate(
 
     # =================================================================
     # Phase 0: Anomaly Screener (ML, no LLM)
-    # Loads pre-trained model from disk, collects current metrics,
-    # scores them, and injects flagged anomalies into state for
-    # NetworkAnalyst. Model is trained separately via:
-    #   python -m anomaly_trainer --duration 300
+    # Loads pre-trained model from disk, processes metric snapshots
+    # through a fresh preprocessor (building counter rates from
+    # sequential snapshots), and scores against the model.
     # =================================================================
     try:
         from anomaly_trainer.persistence import load_model
-        from .anomaly.preprocessor import parse_nf_metrics_text
-        from . import tools as v5_tools
+        from .anomaly.preprocessor import MetricPreprocessor
 
-        screener, pp, meta = load_model()
+        screener, _, meta = load_model()
 
-        if screener is not None and screener.is_trained and pp is not None:
+        if screener is not None and screener.is_trained:
             phase0_start = time.time()
             if on_event:
                 await on_event({"type": "phase_start", "agent": "AnomalyScreener"})
@@ -282,23 +285,65 @@ async def investigate(
                      meta.get("n_samples", 0), meta.get("n_features", 0),
                      meta.get("trained_at", "?"))
 
-            # Collect current metrics and score against trained model.
-            # The preprocessor carries counter state from the last healthy
-            # training snapshot, so deltas are computed against the healthy
-            # baseline (e.g., register count was 50 at end of training →
-            # now 66 → delta=16 → rate=0.53/s, trained normal ~0.1/s).
-            metrics_text = await v5_tools.get_nf_metrics()
-            raw_metrics = parse_nf_metrics_text(metrics_text)
-            features = pp.process(raw_metrics)
+            # Determine snapshots to score
+            snapshots = metric_snapshots or []
 
-            report = screener.score(features)
+            if not snapshots:
+                # No pre-collected snapshots — collect one live snapshot.
+                # Less effective than extended observation but still useful.
+                from .anomaly.preprocessor import parse_nf_metrics_text
+                from . import tools as v5_tools
+                log.info("No observation snapshots provided — collecting live snapshot")
+                text = await v5_tools.get_nf_metrics()
+                raw = parse_nf_metrics_text(text)
+                snapshots = [{"_parsed": raw}]
 
-            state["anomaly_report"] = report.to_prompt_text()
-            state["anomaly_flags"] = report.to_dict_list()
+            # Process all snapshots through a FRESH preprocessor.
+            # Each sequential snapshot builds counter state, so by snapshot
+            # ~3+ the rates are meaningful. We score the last few snapshots
+            # and take the highest anomaly score.
+            pp = MetricPreprocessor()
+            best_report = None
+
+            for i, snap in enumerate(snapshots):
+                # Snapshots from ObservationTrafficAgent are in the format
+                # {component: {metrics: {key: value}, badge: ..., source: ...}}
+                # We need {component: {key: value}} for the preprocessor.
+                raw_metrics = {}
+                for comp, data in snap.items():
+                    if comp.startswith("_"):
+                        # Already parsed format
+                        raw_metrics = snap["_parsed"]
+                        break
+                    if isinstance(data, dict) and "metrics" in data:
+                        raw_metrics[comp] = data["metrics"]
+                    elif isinstance(data, dict):
+                        raw_metrics[comp] = data
+
+                features = pp.process(raw_metrics)
+
+                # Only score snapshots after the preprocessor has built
+                # counter state (need ≥2 snapshots for meaningful rates)
+                if i >= 2 and features:
+                    report = screener.score(features)
+                    if best_report is None or report.overall_score > best_report.overall_score:
+                        best_report = report
+
+            if best_report is not None:
+                state["anomaly_report"] = best_report.to_prompt_text()
+                state["anomaly_flags"] = best_report.to_dict_list()
+                log.info("Phase 0 (AnomalyScreener): %d flags, best score=%.3f "
+                         "(%d snapshots processed)",
+                         len(best_report.flags), best_report.overall_score,
+                         len(snapshots))
+            else:
+                state["anomaly_report"] = (
+                    "Anomaly screening produced no results "
+                    f"({len(snapshots)} snapshots, need ≥3 for rate computation)."
+                )
+                log.info("Phase 0: insufficient snapshots for scoring (%d)", len(snapshots))
 
             phase0_duration = int((time.time() - phase0_start) * 1000)
-            log.info("Phase 0 (AnomalyScreener): %d flags, score=%.3f, %dms",
-                     len(report.flags), report.overall_score, phase0_duration)
 
             phase0_trace = PhaseTrace(
                 agent_name="AnomalyScreener",
@@ -307,16 +352,16 @@ async def investigate(
                 duration_ms=phase0_duration,
             )
             phase0_trace.output_summary = (
-                f"{len(report.flags)} anomalies flagged "
-                f"(score={report.overall_score:.3f})"
+                f"{len(best_report.flags) if best_report else 0} anomalies flagged "
+                f"(score={best_report.overall_score:.3f if best_report else 0})"
             )
             all_phases.append(phase0_trace)
             invocation_order.append("AnomalyScreener")
 
-            if on_event:
+            if on_event and best_report:
                 await on_event({
                     "type": "text", "agent": "AnomalyScreener",
-                    "content": report.to_prompt_text()[:300],
+                    "content": best_report.to_prompt_text()[:300],
                 })
         else:
             log.info("No trained anomaly model found — Phase 0 skipped. "

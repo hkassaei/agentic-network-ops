@@ -57,6 +57,12 @@ Some citations could not be verified. Your output MUST:
 ### investigator_made_zero_calls: true
 This is a special case of `severe`. It means the Investigator generated narrative text without invoking any diagnostic tools. Treat exactly like `severe` above. In the explanation, specifically call out: *"The Investigator agent produced no tool calls — any evidence citations in its output are fabricated."*
 
+## Observation-Only Constraint (MANDATORY)
+
+You are producing a diagnostic report, not a remediation playbook. Your output MUST NOT include specific commands or procedures to fix the problem (e.g., `docker restart pcscf`, `tc qdisc del dev eth0 root`, `systemctl restart docker`). Do not reference simulation or injection mechanisms (tc, netem, qdisc, container_kill, docker pause, iptables drop rules) — diagnose the observable failure mode, not the injection method.
+
+The `recommendation` field should describe what the operator should **investigate further** or **verify** to confirm the diagnosis, not what they should change. Good: "Verify P-CSCF egress latency to other IMS components and check if the condition is transient." Bad: "Remove the traffic shaping rule using `tc qdisc del dev eth0 root`."
+
 ## Output Format
 
 Produce your response as a structured diagnosis with these fields:
@@ -68,7 +74,7 @@ For each root cause (rank by probability, most likely first):
 - **timeline**: Chronological steps showing how the failure propagated.
 - **root_cause**: The definitive first cause and causal chain.
 - **affected_components**: Which containers/NFs are involved.
-- **recommendation**: Actionable fix.
+- **recommendation**: What the operator should investigate or verify next to confirm this diagnosis. Do NOT include remediation commands.
 - **confidence**: high / medium / low — MUST match the Evidence Validation verdict.
 - **explanation**: 3-5 sentences for a NOC engineer. Explain WHY this happened, not just WHAT happened. If the validation verdict is not `clean`, the explanation MUST include the validation-based caveat described above.
 

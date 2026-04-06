@@ -427,7 +427,7 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     # from previous runs and are not useful for diagnosis evaluation.
 
     # Pipeline intermediate state — v5 5-phase pipeline
-    challenge = episode.get("challenge_result", {})
+    challenge = episode.get("challenge_result") or {}
 
     network_analysis = challenge.get("network_analysis", "")
     lines.append("## Network Analysis (Phase 1)")

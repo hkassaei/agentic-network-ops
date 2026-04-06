@@ -67,7 +67,7 @@ pcscf_latency = Scenario(
         FaultSpec(
             fault_type="network_latency",
             target="pcscf",
-            params={"delay_ms": 500, "jitter_ms": 50},
+            params={"delay_ms": 5000, "jitter_ms": 50},
             ttl_seconds=300,
         ),
     ],

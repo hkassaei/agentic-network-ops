@@ -24,6 +24,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
 from google.genai import types
 
+
 from ..scorer import score_diagnosis
 
 log = logging.getLogger("chaos-agent.challenger")

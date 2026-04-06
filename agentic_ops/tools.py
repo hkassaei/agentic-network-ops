@@ -758,11 +758,8 @@ async def measure_rtt(
     """Measure round-trip time (RTT) from a container to a target IP.
 
     In a healthy Docker bridge network, RTT between any two containers is
-    <1ms. If RTT is elevated (>10ms), it indicates network latency injection
-    (tc netem) or severe congestion.
-
-    Use this to confirm latency faults detected by check_tc_rules, or to
-    measure the actual impact of injected latency on specific paths.
+    <1ms. Elevated RTT (>10ms) indicates abnormal latency or congestion
+    on the network path. Use this to detect transport-layer degradation.
 
     Args:
         deps: Agent dependencies.
@@ -775,11 +772,11 @@ async def measure_rtt(
     if container not in deps.all_containers:
         return f"Unknown container '{container}'. Known: {', '.join(deps.all_containers)}"
 
-    cmd = f"docker exec {container} ping -c 3 -W 2 {target_ip}"
+    cmd = f"docker exec {container} ping -c 3 -W 10 {target_ip}"
     rc, output = await _shell(cmd)
 
     if rc != 0 and "100% packet loss" in output:
-        return f"Target {target_ip} is UNREACHABLE from {container}:\n{output.strip()}"
+        return f"Target {target_ip} is UNREACHABLE from {container} (no response within 10s):\n{output.strip()}"
     if rc != 0:
         return f"Ping failed from {container} to {target_ip}: {output.strip()}"
 

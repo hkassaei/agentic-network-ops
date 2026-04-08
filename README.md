@@ -1,6 +1,6 @@
 # Agentic Network Ops
 
-AI-powered troubleshooting platform for a 5G SA + IMS (VoNR) network stack. Includes a browser-based multi-page GUI, a Neo4j network ontology, four generations of RCA agents (v1.5, v3, v4, v5), and a chaos engineering framework that scores diagnoses against ground truth.
+AI-powered troubleshooting platform for a 5G SA + IMS (VoNR) network stack. Includes a browser-based multi-page GUI, a Neo4j network ontology, five generations of RCA agents (v1.5, v2, v3, v4, v5), and a chaos engineering framework that scores diagnoses against ground truth.
 
 ## Prerequisites
 
@@ -40,8 +40,11 @@ python3 -m venv gui/.venv
 source gui/.venv/bin/activate
 pip install -r gui/requirements.txt
 
-# Start the ops layer (Neo4j + GUI)
-./scripts/start-ops.sh
+# Start the ops layer (Neo4j + ontology loader)
+docker compose -f network-ops.yaml up -d
+
+# Start the GUI
+python3 gui/server.py
 ```
 
 This brings up the GUI (Python process), Neo4j ontology database, and ontology loader — without starting the network stack. You can then deploy the network and UEs from the GUI.
@@ -93,9 +96,10 @@ All pages share a common nav bar with active page highlighting and a live `N/N R
 | Version | Engine | Description |
 |---------|--------|-------------|
 | v1.5 | Pydantic AI (Claude/Gemini) | Single agent with tools |
+| v2 | Google ADK (Gemini) | 4-phase pipeline: Triage → End-to-End Trace → Strategic Dispatch + Parallel Specialists → Synthesis |
 | v3 | Google ADK (Gemini) | Context-isolated multi-phase pipeline |
 | v4 | Google ADK (Gemini 2.5) | Topology-aware, context-isolated multi-phase with dynamic specialist dispatch |
-| v5 | Google ADK (Gemini 2.5) | 6-phase ontology-powered pipeline: Triage → Pattern Matcher (deterministic) → Anomaly Detector (optional) → Instruction Generator → Investigator → Synthesis |
+| v5 | Google ADK (Gemini 2.5) | 7-phase ontology-powered pipeline: **Anomaly Screener (ML)** → NetworkAnalyst → Pattern Matcher (deterministic) → Instruction Generator → Investigator (with nested OntologyConsultation sub-agent) → Evidence Validator → Synthesis |
 
 ## E2E VoNR Voice Test
 
@@ -111,7 +115,8 @@ docker build -t docker_ueransim ./network/ueransim
 
 # 1. Start the ops layer, then deploy the network from the GUI
 cp ops.env.example ops.env  # Edit with your GCP project + API keys
-./scripts/start-ops.sh
+docker compose -f network-ops.yaml up -d
+python3 gui/server.py &
 # Open http://localhost:8073 → Stack page → Build & Deploy Stack
 # Or start the network manually:
 docker compose -p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml up -d
@@ -213,22 +218,28 @@ export GOOGLE_CLOUD_LOCATION="<region>"
 export GOOGLE_GENAI_USE_VERTEXAI="TRUE"
 ```
 
-#### Additional setup for v5 agent (ontology-backed)
+#### Additional setup for v5 agent (ontology + anomaly model)
 
-v5 requires the Neo4j ontology database to be running and seeded:
-
-```bash
-# Start the ops layer (brings up Neo4j + ontology-loader)
-./scripts/start-ops.sh
-```
-
-The ontology loader runs as a one-shot container and seeds Neo4j from the YAML files in `network_ontology/data/`. After editing any ontology YAML, re-seed via the GUI's **Stack → Re-seed Ontology** button, or from the shell:
+v5 requires the Neo4j ontology database and a trained anomaly detection model:
 
 ```bash
-./scripts/reseed-ontology.sh
+# 1. Start the ops layer (brings up Neo4j + ontology-loader)
+docker compose -f network-ops.yaml up -d
+
+# 2. Train the anomaly detection model (one-time, ~5 minutes)
+#    Generates realistic IMS traffic (SIP REGISTER, VoNR calls) on
+#    the healthy stack and trains a River HalfSpaceTrees model that
+#    learns what "normal active traffic" looks like.
+python -m anomaly_trainer --duration 300
 ```
 
-The loader container mounts `./network_ontology` as a volume, so YAML edits are picked up without rebuilding the Docker image. Re-seeding takes ~3 seconds.
+The anomaly model is persisted to `agentic_ops_v5/anomaly/baseline/` (`model.pkl` + `training_meta.json`) and loaded automatically by the v5 pipeline at runtime. Re-train after network topology changes or new use cases are added.
+
+After editing any ontology YAML, re-seed via the GUI's **Stack → Re-seed Ontology** button, or:
+
+```bash
+./scripts/reseed-ontology.sh  # ~3 seconds, no image rebuild needed
+```
 
 ### CLI Usage
 
@@ -269,7 +280,7 @@ python -m agentic_chaos -v run "P-CSCF Latency" --agent v1.5
 | MongoDB Gone | infra | global | 5G subscriber DB unreachable — all NFs that depend on it degrade |
 | DNS Failure | infra | global | Name resolution broken across the stack |
 | IMS Network Partition | IMS | multi | IMS components partitioned from each other |
-| AMF Restart | core | single | Temporary AMF unavailability (simulates rolling upgrade) |
+| AMF Restart (Upgrade Simulation) | core | single | Temporary AMF unavailability (simulates rolling upgrade) |
 | Cascading IMS Failure | IMS | multi | Multiple IMS components fail in sequence |
 
 > **Note:** Scenarios describe the **simulated failure mode** (what it looks like from the outside), not the injection mechanism (container kill, `tc netem`, pause, etc.). RCA agents must diagnose the failure mode from observable evidence — not detect the injection mechanism. The chaos scorer evaluates diagnoses against the failure mode.
@@ -282,8 +293,8 @@ The operations layer is split into two compose files:
 
 | Component | Type | Port | How to start |
 |-----------|------|------|-------------|
-| GUI | Python process (host) | 8073 | `./scripts/start-ops.sh` or `python3 gui/server.py` |
-| Neo4j ontology | Docker (`network-ops.yaml`) | 7474, 7687 | `./scripts/start-ops.sh` |
+| GUI | Python process (host) | 8073 | `python3 gui/server.py` |
+| Neo4j ontology | Docker (`network-ops.yaml`) | 7474, 7687 | `docker compose -f network-ops.yaml up -d` |
 | Ontology loader | Docker (one-shot) | — | Runs automatically with Neo4j |
 | Grafana overrides | Docker (`grafana-dashboards.yaml`) | 3000 | Paired with network stack |
 
@@ -351,29 +362,111 @@ agentic-network-ops/
 │   └── requirements.txt        # Python deps (aiohttp, pydantic-ai, google-adk, neo4j)
 ├── agentic_ops/                # v1.5: Single Pydantic AI agent
 │   ├── agent.py                # Agent definition + tool wiring
+│   ├── models.py               # Data models
 │   ├── tools.py                # Docker/network inspection tools
 │   └── prompts/system.md       # System prompt
+├── agentic_ops_v2/             # v2: 4-phase ADK pipeline (Triage → Trace → Dispatch → Synthesis)
+│   ├── orchestrator.py         # 4-phase pipeline with parallel specialist dispatch
+│   ├── agent.py                # Top-level agent entry point
+│   ├── models.py               # Data models
+│   ├── tools.py                # Docker/network inspection tools
+│   ├── agents/                 # 8 agents: triage, tracer, dispatcher, 4 specialists, synthesis
+│   └── prompts/                # Per-agent system prompts
 ├── agentic_ops_v3/             # v3: Context-isolated multi-phase
 │   ├── orchestrator.py         # Fresh ADK sessions per phase
-│   └── agents/                 # Specialist agent definitions
+│   ├── agent.py                # Top-level agent entry point
+│   ├── models.py               # Data models
+│   ├── tools.py                # Docker/network inspection tools
+│   ├── agents/                 # 8 agents: triage, tracer, dispatcher, 4 specialists, synthesis
+│   └── prompts/                # Per-agent system prompts
 ├── agentic_ops_v4/             # v4: Topology-aware multi-phase
 │   ├── orchestrator.py         # Session-per-phase + dynamic specialist dispatch
+│   ├── agent.py                # Top-level agent entry point
+│   ├── models.py               # Data models
+│   ├── tools.py                # Reuses v1.5 tools + get_network_topology
 │   ├── agents/                 # 8 agents: triage, tracer, dispatcher, 4 specialists, synthesis
-│   └── tools.py                # Reuses v1.5 tools + get_network_topology
-├── agentic_ops_v5/             # v5: 6-phase ontology-powered pipeline (latest)
-│   ├── orchestrator.py         # Triage → PatternMatcher → AnomalyDetector → InstructionGen → Investigator → Synthesis
+│   └── prompts/                # Per-agent system prompts
+├── agentic_ops_v5/             # v5: 7-phase ontology-powered pipeline (latest)
+│   ├── orchestrator.py         # AnomalyScreener → NetworkAnalyst → PatternMatcher → InstructionGen → Investigator → EvidenceValidator → Synthesis
+│   ├── models.py               # TokenBreakdown, ToolCallTrace, PhaseTrace, InvestigationTrace
 │   ├── subagents/              # Per-phase agent definitions
-│   ├── tools/                  # 14 tool files split by purpose (topology, metrics, logs, reachability, etc.)
+│   │   ├── network_analyst.py      # Phase 1: LLM analysis of anomalies + topology
+│   │   ├── pattern_matcher.py      # Phase 2: Deterministic symptom→fault matching
+│   │   ├── instruction_generator.py # Phase 3: Generates investigation instructions
+│   │   ├── investigator.py         # Phase 4: Executes investigation (has OntologyConsultation sub-agent)
+│   │   ├── ontology_consultation.py # Nested sub-agent for follow-up ontology queries during investigation
+│   │   ├── evidence_validator.py   # Phase 5: Validates evidence against hypotheses
+│   │   └── synthesis.py            # Phase 6: Final diagnosis synthesis
+│   ├── tools/                  # 14 tool files split by purpose
+│   │   ├── _common.py              # Shared tool utilities
+│   │   ├── causal_reasoning.py     # Ontology causal chain queries
+│   │   ├── config_inspection.py    # Container config inspection
+│   │   ├── container_status.py     # Docker container status
+│   │   ├── data_plane.py           # GTP-U / data plane checks
+│   │   ├── health_checks.py        # Component health checks
+│   │   ├── kamailio_state.py       # Kamailio (P-CSCF/S-CSCF) state
+│   │   ├── log_interpretation.py   # Ontology-backed log interpretation
+│   │   ├── log_search.py           # Container log search
+│   │   ├── metrics.py              # Prometheus metrics queries
+│   │   ├── reachability.py         # Network reachability probes
+│   │   ├── subscriber_lookup.py    # Subscriber DB lookups
+│   │   ├── symptom_matching.py     # Ontology symptom matching
+│   │   ├── topology.py             # Network topology queries
+│   │   └── vonr_scope.py           # VoNR-specific scope checks
 │   ├── prompts/                # Per-agent system prompts
-│   └── models.py               # TokenBreakdown, ToolCallTrace, PhaseTrace, InvestigationTrace
+│   │   ├── network_analyst.md
+│   │   ├── instruction_generator.md
+│   │   ├── investigator.md
+│   │   ├── ontology_consultation.md
+│   │   └── synthesis.md
+│   └── anomaly/                # ML anomaly detection (River HalfSpaceTrees)
+│       ├── screener.py         # AnomalyScreener wrapper (train/score API)
+│       ├── preprocessor.py     # Counter→rate conversion, feature filtering
+│       └── baseline/           # Persisted trained model (model.pkl, training_meta.json)
 ├── agentic_chaos/              # Fault injection + RCA challenge framework
 │   ├── cli.py                  # CLI: run scenarios, list episodes, heal
-│   ├── engine.py               # Fault injection engine (triple-lock safety)
+│   ├── orchestrator.py         # Chaos pipeline orchestrator (baseline → inject → observe → challenge → score → heal)
+│   ├── fault_registry.py       # SQLite fault registry (triple-lock safety)
 │   ├── scorer.py               # LLM judge scoring diagnoses vs simulated failure mode
-│   └── scenarios/              # Pre-built failure scenarios
-├── network-ops.yaml             # Docker Compose: operations layer (GUI, ontology)
+│   ├── recorder.py             # Episode recording (JSON + markdown reports)
+│   ├── models.py               # Scenario, Episode, Fault data models
+│   ├── scenarios/
+│   │   └── library.py          # All 10 pre-built failure scenarios
+│   ├── agents/                 # Chaos pipeline agents
+│   │   ├── baseline.py         # Pre-fault metric/state capture
+│   │   ├── fault_injector.py   # Fault injection agent
+│   │   ├── observation_traffic.py  # Traffic generation during observation
+│   │   ├── control_plane_traffic.py # Control plane traffic generation
+│   │   ├── call_setup.py       # VoNR call setup during observation
+│   │   ├── fault_propagation_verifier.py # Verifies fault symptoms appeared
+│   │   ├── challenger.py       # Challenges RCA agent with blind question
+│   │   ├── healer.py           # Reverses all injected faults
+│   │   └── escalation.py       # Escalation handling
+│   └── tools/                  # Chaos-specific tools
+│       ├── docker_tools.py     # Container kill/pause/restart
+│       ├── network_tools.py    # tc netem, iptables injection
+│       ├── application_tools.py # Config corruption, process manipulation
+│       ├── observation_tools.py # Metric/log observation during fault
+│       └── verification_tools.py # Symptom verification
+├── anomaly_trainer/            # Standalone anomaly model trainer
+│   ├── __main__.py             # CLI: python -m anomaly_trainer --duration 300
+│   ├── traffic.py              # IMS traffic generator (SIP REGISTER, VoNR calls, random patterns)
+│   ├── collector.py            # Metric collector (5s polls → River model training)
+│   └── persistence.py          # Save/load trained model to/from disk
+├── common/                     # Shared utilities
+│   └── stack_health.py         # Stack health check + auto-heal (used by chaos + trainer)
+├── network-ops.yaml             # Docker Compose: operations layer (Neo4j ontology)
 ├── grafana-dashboards.yaml      # Docker Compose override: custom Grafana dashboards
 ├── ops.env.example             # Template for ops.env (API keys, GCP project)
+├── e2e-vonr.yaml               # Docker Compose: test UEs
+├── e2e.env                     # Test subscriber credentials
+├── docs/                       # Project documentation
+│   ├── ADR/                    # Architecture decision records (21 ADRs)
+│   ├── RCAs/                   # Post-run root cause analyses
+│   ├── critical-observations/  # Notable chaos run observations
+│   ├── bugs/                   # Bug investigations
+│   ├── plans/                  # Feature/implementation plans
+│   └── ...                     # Design docs, retrospectives, guides
 ├── grafana/                    # Custom Grafana dashboards (overlay on submodule)
 │   ├── dashboards/             # Dashboard JSON files
 │   │   └── 5g_core_dashboard.json
@@ -381,30 +474,35 @@ agentic-network-ops/
 │   └── ims-metrics-plan.md     # Plan for IMS metrics exporter
 ├── network_ontology/           # Network domain knowledge graph
 │   ├── data/                   # YAML source files (components, causal chains, etc.)
-│   ├── schema/                 # Neo4j graph schema
+│   ├── schema/                 # Neo4j graph schema (constraints.cypher)
 │   ├── loader.py               # Seeds Neo4j from YAML
 │   ├── query.py                # Python query API for agents
+│   ├── __main__.py             # CLI entry point
 │   └── Dockerfile              # One-shot loader container
 ├── network/                    # Full 5G SA + IMS stack (from docker_open5gs)
 │   ├── sa-vonr-deploy.yaml     # Docker Compose: core + IMS (17 containers)
 │   ├── nr-gnb.yaml             # Docker Compose: gNB
 │   └── .env                    # Network topology (IPs, MCC/MNC, subnets)
-├── e2e-vonr.yaml               # Docker Compose: test UEs
-├── e2e.env                     # Test subscriber credentials
 ├── ueransim/                   # UERANSIM + pjsua image and configs
 │   ├── Dockerfile              # Extends docker_ueransim with pjsua
-│   └── pjsua_entrypoint.sh    # Waits for IMS bearer, registers with P-CSCF
+│   ├── pjsua_entrypoint.sh    # Waits for IMS bearer, registers with P-CSCF
+│   ├── ueransim-ue1.yaml      # UE1 UERANSIM config
+│   ├── ueransim-ue2.yaml      # UE2 UERANSIM config
+│   ├── ueransim-ue1_init.sh   # UE1 init script
+│   ├── ueransim-ue2_init.sh   # UE2 init script
+│   └── ueransim_image_init.sh # Image-level init script
 ├── kamailio/                   # Modified Kamailio configs for digest auth
 │   ├── pcscf/                  # P-CSCF: IPsec disabled
 │   └── scscf/                  # S-CSCF: MD5 auth
 └── scripts/                    # Orchestration scripts
-    ├── start-ops.sh            # Start ops layer: Neo4j + ontology loader + GUI (host venv)
     ├── reseed-ontology.sh      # Re-seed Neo4j from YAML (also wired to GUI button)
     ├── deploy-ontology-db.sh   # Bring up just the Neo4j container
     ├── e2e-vonr-test.sh        # Full deploy + test (10-step super script)
+    ├── run-e2e-vonr.sh         # Run e2e VoNR test
     ├── deploy-ues.sh           # Deploy UEs on existing stack
     ├── teardown-ues.sh         # Teardown UEs only
     ├── teardown-stack.sh       # Teardown core + IMS + gNB
+    ├── teardown-ops.sh         # Teardown the ops layer (Neo4j, GUI)
     ├── teardown.sh             # Teardown everything
     ├── build.sh                # Build docker_ueransim_pjsua image
     └── provision.sh            # Provision test subscribers

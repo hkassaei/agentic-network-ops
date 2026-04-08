@@ -146,16 +146,28 @@ class ObservationTrafficAgent(BaseAgent):
     async def _generate_traffic(
         self, duration: int, ims_domain: str, callee_imsi: str
     ) -> None:
-        """Generate randomized IMS traffic for the specified duration."""
-        elapsed = 0.0
+        """Generate randomized IMS traffic for the specified duration.
+
+        Uses wall-clock time (not accumulated sleep time) to ensure the
+        traffic generator runs for exactly the specified duration, regardless
+        of how long individual operations take (e.g., failed VoNR calls
+        timeout after 30s under fault conditions).
+        """
+        start = time.time()
         call_count = 0
         register_count = 0
 
-        while elapsed < duration:
+        while (time.time() - start) < duration:
+            remaining = duration - (time.time() - start)
+            if remaining < 3:
+                break
+
             activity = random.choices(
                 ["register_both", "register_one", "call", "idle"],
                 weights=[20, 15, 45, 20],
             )[0]
+
+            elapsed = time.time() - start
 
             if activity == "register_both":
                 log.debug("[T+%.0fs] Re-registering both UEs", elapsed)
@@ -163,52 +175,43 @@ class ObservationTrafficAgent(BaseAgent):
                 await asyncio.sleep(1)
                 await trigger_sip_reregister("e2e_ue2")
                 register_count += 2
-                wait = random.uniform(3, 8)
-                await asyncio.sleep(wait)
-                elapsed += wait + 1
+                await asyncio.sleep(random.uniform(3, 8))
 
             elif activity == "register_one":
                 ue = random.choice(list(_UE_CONTAINERS))
                 log.debug("[T+%.0fs] Re-registering %s", elapsed, ue)
                 await trigger_sip_reregister(ue)
                 register_count += 1
-                wait = random.uniform(3, 6)
-                await asyncio.sleep(wait)
-                elapsed += wait
+                await asyncio.sleep(random.uniform(3, 6))
 
             elif activity == "call":
-                call_duration = random.uniform(5, min(20, duration - elapsed - 5))
-                if call_duration < 3:
+                if remaining < 15:
                     # Not enough time for a call — do a register instead
                     await trigger_sip_reregister("e2e_ue1")
                     register_count += 1
                     await asyncio.sleep(3)
-                    elapsed += 3
                     continue
 
+                call_duration = random.uniform(5, min(20, remaining - 10))
                 log.debug("[T+%.0fs] Placing VoNR call (hold %.0fs)", elapsed, call_duration)
                 result = await establish_vonr_call(ims_domain, callee_imsi)
                 if result.get("success"):
                     call_count += 1
                     await asyncio.sleep(call_duration)
-                    elapsed += call_duration
                     await hangup_call()
-                    settle = random.uniform(3, 6)
-                    await asyncio.sleep(settle)
-                    elapsed += settle
+                    await asyncio.sleep(random.uniform(3, 6))
                 else:
-                    log.debug("[T+%.0fs] Call failed (expected under fault)", elapsed)
-                    wait = random.uniform(3, 6)
-                    await asyncio.sleep(wait)
-                    elapsed += wait
+                    log.debug("[T+%.0fs] Call failed (expected under fault)", time.time() - start)
+                    await asyncio.sleep(random.uniform(3, 6))
 
             else:  # idle
                 idle_time = random.uniform(3, 8)
                 log.debug("[T+%.0fs] Idle for %.0fs", elapsed, idle_time)
                 await asyncio.sleep(idle_time)
-                elapsed += idle_time
 
-        log.info("Traffic generation done: %d calls, %d registrations", call_count, register_count)
+        actual_duration = int(time.time() - start)
+        log.info("Traffic generation done: %d calls, %d registrations in %ds",
+                 call_count, register_count, actual_duration)
 
     async def _collect_metrics(
         self, duration: int, snapshots: list[dict]

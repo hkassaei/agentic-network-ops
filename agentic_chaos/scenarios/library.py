@@ -39,7 +39,7 @@ gnb_radio_link_failure = Scenario(
     category=FaultCategory.CONTAINER,
     blast_radius=BlastRadius.SINGLE_NF,
     faults=[
-        FaultSpec(fault_type="container_kill", target="nr_gnb", ttl_seconds=300),
+        FaultSpec(fault_type="container_kill", target="nr_gnb", ttl_seconds=600),
     ],
     expected_symptoms=[
         "UEs lose RAN connection",
@@ -48,10 +48,12 @@ gnb_radio_link_failure = Scenario(
         "gNB disappears from AMF",
     ],
     # Self-evident: killing the gNB collapses NGAP, AMF session count, and
-    # connected-UE gauges immediately — no extra traffic needed.
+    # connected-UE gauges immediately — but traffic generation still helps
+    # the anomaly screener observe the impact pattern.
     required_traffic="none",
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 pcscf_latency = Scenario(
@@ -86,7 +88,7 @@ pcscf_latency = Scenario(
     observation_traffic_seconds=120,
     escalation=True,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 scscf_crash = Scenario(
@@ -99,7 +101,7 @@ scscf_crash = Scenario(
     category=FaultCategory.CONTAINER,
     blast_radius=BlastRadius.SINGLE_NF,
     faults=[
-        FaultSpec(fault_type="container_kill", target="scscf", ttl_seconds=300),
+        FaultSpec(fault_type="container_kill", target="scscf", ttl_seconds=600),
     ],
     expected_symptoms=[
         "IMS authentication fails (no MAR/MAA)",
@@ -109,10 +111,11 @@ scscf_crash = Scenario(
     ],
     # Control-plane fault: killing S-CSCF has no impact on existing
     # cached registrations until a new REGISTER needs routing through
-    # I-CSCF → S-CSCF. We force a re-register to expose the outage.
+    # I-CSCF → S-CSCF. Traffic generation exposes the outage.
     required_traffic="control_plane",
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 hss_unresponsive = Scenario(
@@ -131,7 +134,7 @@ hss_unresponsive = Scenario(
             fault_type="network_latency",
             target="pyhss",
             params={"delay_ms": 60000, "jitter_ms": 0},
-            ttl_seconds=300,
+            ttl_seconds=600,
         ),
     ],
     expected_symptoms=[
@@ -141,11 +144,12 @@ hss_unresponsive = Scenario(
         "CDP peer state changes",
     ],
     # Control-plane fault: 60s latency on HSS only matters if somebody
-    # is actually making Diameter queries. A fresh REGISTER fires UAR/MAR
+    # is actually making Diameter queries. Traffic generation fires UAR/MAR
     # through the delayed path and exposes the timeout.
     required_traffic="control_plane",
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 data_plane_degradation = Scenario(
@@ -162,7 +166,7 @@ data_plane_degradation = Scenario(
             fault_type="network_loss",
             target="upf",
             params={"loss_pct": 30},
-            ttl_seconds=300,
+            ttl_seconds=600,
         ),
     ],
     expected_symptoms=[
@@ -171,13 +175,13 @@ data_plane_degradation = Scenario(
         "Potential call quality degradation",
     ],
     # User-plane fault: packet loss on UPF requires active RTP media
-    # flowing through the data path. CallSetupAgent establishes a VoNR
-    # call before injection and keeps it active through the propagation
-    # window so RTCP MOS/jitter/loss metrics reflect the degradation.
+    # flowing through the data path. Traffic generation includes VoNR
+    # calls so RTCP MOS/jitter/loss metrics reflect the degradation.
     required_traffic="user_plane",
     requires_active_call=True,  # legacy flag, kept in sync for back-compat
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 
@@ -195,7 +199,7 @@ mongodb_gone = Scenario(
     category=FaultCategory.CONTAINER,
     blast_radius=BlastRadius.GLOBAL,
     faults=[
-        FaultSpec(fault_type="container_kill", target="mongo", ttl_seconds=300),
+        FaultSpec(fault_type="container_kill", target="mongo", ttl_seconds=600),
     ],
     expected_symptoms=[
         "UDR connection errors to MongoDB",
@@ -204,12 +208,12 @@ mongodb_gone = Scenario(
         "AMF registration may still work (cached)",
     ],
     # Control-plane fault: killing MongoDB doesn't affect cached 5G
-    # sessions. To expose the outage, we force a fresh SIP REGISTER —
-    # the REGISTER path ultimately needs PyHSS → MongoDB subscriber
-    # lookups. Without new traffic, the kill is silent.
+    # sessions. Traffic generation forces fresh SIP REGISTERs that
+    # need PyHSS → MongoDB subscriber lookups, exposing the outage.
     required_traffic="control_plane",
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 dns_failure = Scenario(
@@ -222,7 +226,7 @@ dns_failure = Scenario(
     category=FaultCategory.CONTAINER,
     blast_radius=BlastRadius.GLOBAL,
     faults=[
-        FaultSpec(fault_type="container_kill", target="dns", ttl_seconds=300),
+        FaultSpec(fault_type="container_kill", target="dns", ttl_seconds=600),
     ],
     expected_symptoms=[
         "IMS domain unresolvable",
@@ -231,11 +235,12 @@ dns_failure = Scenario(
         "New registrations fail",
     ],
     # Control-plane fault: DNS lookups only happen on new SIP
-    # transactions. A fresh REGISTER forces Kamailio to resolve the
-    # IMS domain and surface the NAPTR/SRV failure.
+    # transactions. Traffic generation forces Kamailio to resolve the
+    # IMS domain and surfaces the NAPTR/SRV failure.
     required_traffic="control_plane",
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 
@@ -257,13 +262,13 @@ ims_network_partition = Scenario(
             fault_type="network_partition",
             target="pcscf",
             params={"target_ip": _ICSCF_IP},
-            ttl_seconds=300,
+            ttl_seconds=600,
         ),
         FaultSpec(
             fault_type="network_partition",
             target="pcscf",
             params={"target_ip": _SCSCF_IP},
-            ttl_seconds=300,
+            ttl_seconds=600,
         ),
     ],
     expected_symptoms=[
@@ -275,8 +280,9 @@ ims_network_partition = Scenario(
     # Control-plane fault: iptables DROP on the CSCF-to-CSCF path only
     # breaks things if new SIP transactions try to traverse it.
     required_traffic="control_plane",
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 amf_restart = Scenario(
@@ -293,7 +299,7 @@ amf_restart = Scenario(
             fault_type="container_stop",
             target="amf",
             params={"timeout": 10},
-            ttl_seconds=300,
+            ttl_seconds=600,
         ),
     ],
     expected_symptoms=[
@@ -303,11 +309,12 @@ amf_restart = Scenario(
         "Temporary PDU session disruption",
     ],
     # Self-evident: stopping the AMF drops NGAP associations and AMF
-    # session/UE count gauges go to zero immediately. No extra traffic
-    # needed — UERANSIM will auto-retry NGAP on its own.
+    # session/UE count gauges go to zero immediately. Traffic generation
+    # helps the anomaly screener capture the full impact pattern.
     required_traffic="none",
+    observation_traffic_seconds=120,
     observation_window_seconds=45,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 cascading_ims_failure = Scenario(
@@ -320,12 +327,12 @@ cascading_ims_failure = Scenario(
     category=FaultCategory.COMPOUND,
     blast_radius=BlastRadius.MULTI_NF,
     faults=[
-        FaultSpec(fault_type="container_kill", target="pyhss", ttl_seconds=300),
+        FaultSpec(fault_type="container_kill", target="pyhss", ttl_seconds=600),
         FaultSpec(
             fault_type="network_latency",
             target="scscf",
             params={"delay_ms": 2000},
-            ttl_seconds=300,
+            ttl_seconds=600,
         ),
     ],
     expected_symptoms=[
@@ -335,12 +342,13 @@ cascading_ims_failure = Scenario(
         "No voice calls possible",
     ],
     # Control-plane fault: both HSS kill and S-CSCF latency only bite
-    # when new SIP/Diameter transactions flow. Forces re-register to
-    # expose the total IMS outage.
+    # when new SIP/Diameter transactions flow. Traffic generation
+    # exposes the total IMS outage.
     required_traffic="control_plane",
     challenge_mode=True,
+    observation_traffic_seconds=120,
     observation_window_seconds=30,
-    ttl_seconds=300,
+    ttl_seconds=600,
 )
 
 

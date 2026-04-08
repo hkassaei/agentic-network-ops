@@ -229,18 +229,22 @@ def _check_claims(
 
 def _determine_confidence_and_verdict(
     investigator_tool_calls: int,
+    investigator_citations: int,
     total_citations: int,
     unmatched: int,
 ) -> tuple[str, str]:
     """Derive (investigator_confidence, verdict) from the aggregate stats."""
-    # Layer 1 check: zero tool calls is its own catastrophic case
+    # Layer 1: zero tool calls — Investigator didn't investigate at all
     if investigator_tool_calls == 0:
         return "none", "severe"
 
-    # No citations at all — can't verify anything, but also no fabrications
-    if total_citations == 0:
-        return "medium", "clean"
+    # Layer 2: Investigator called tools but produced zero formal citations.
+    # The investigation is unverifiable — tool results exist but the
+    # Investigator's narrative doesn't reference them traceably.
+    if investigator_citations == 0 and investigator_tool_calls > 0:
+        return "low", "has_warnings"
 
+    # Layer 3: normal citation matching
     unmatched_ratio = unmatched / total_citations if total_citations else 0
 
     if unmatched == 0:
@@ -293,8 +297,10 @@ def validate(
     inv_tool_count = len(inv_tools)
     inv_zero_calls = inv_tool_count == 0
 
+    inv_citation_count = len(inv_checks)
     confidence, verdict = _determine_confidence_and_verdict(
         investigator_tool_calls=inv_tool_count,
+        investigator_citations=inv_citation_count,
         total_citations=total,
         unmatched=unmatched,
     )
@@ -306,9 +312,16 @@ def validate(
             "⚠️ CRITICAL: InvestigatorAgent made ZERO tool calls — "
             "no actual verification was performed."
         )
+    elif inv_citation_count == 0 and inv_tool_count > 0:
+        lines.append(
+            f"⚠️ WARNING: InvestigatorAgent made {inv_tool_count} tool calls but "
+            f"produced ZERO [EVIDENCE: ...] citations. The investigation narrative "
+            f"is unverifiable — tool results exist but are not traceably referenced."
+        )
     lines.append(
         f"Evidence validation: {matched}/{total} citations verified "
-        f"({unmatched} unmatched)."
+        f"({unmatched} unmatched). "
+        f"Investigator: {inv_citation_count} citations from {inv_tool_count} tool calls."
     )
     lines.append(f"Verdict: {verdict}. Investigator confidence: {confidence}.")
     if unmatched > 0:
@@ -359,8 +372,19 @@ class EvidenceValidatorAgent(BaseAgent):
         phase_traces = state.get("phase_traces_so_far", []) or []
 
         log.info(
-            "Validating evidence across %d phase traces", len(phase_traces)
+            "Validating evidence: %d phase traces, investigation_text=%d chars, "
+            "network_analysis type=%s",
+            len(phase_traces),
+            len(investigation_text),
+            type(network_analysis).__name__,
         )
+        if phase_traces:
+            for pt in phase_traces:
+                agent = pt.get("agent_name", "?") if isinstance(pt, dict) else "?"
+                tc = pt.get("tool_calls", []) if isinstance(pt, dict) else []
+                log.info("  Phase trace: %s — %d tool calls", agent, len(tc))
+        else:
+            log.warning("  NO phase traces available — evidence validation will be limited")
 
         try:
             result = validate(

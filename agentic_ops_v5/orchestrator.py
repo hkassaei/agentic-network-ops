@@ -228,6 +228,8 @@ async def investigate(
     on_event=None,
     anomaly_window_hint_seconds: int = 300,
     metric_snapshots: list[dict] | None = None,
+    observation_window_duration: int = 0,
+    seconds_since_observation: int = 0,
 ) -> dict:
     """Run the v5 7-phase investigation pipeline.
 
@@ -239,24 +241,32 @@ async def investigate(
     Phase 5: EvidenceValidatorAgent — fact-check claims against real tool calls
     Phase 6: SynthesisAgent — NOC-ready diagnosis (honors validation verdict)
 
-    Phase 0 loads a pre-trained anomaly model from disk (trained separately
-    via `python -m anomaly_trainer`), then processes the provided metric
-    snapshots through a fresh preprocessor and scores them against the model.
-
     Args:
         question: The user's investigation question.
         on_event: Optional async callback for streaming events to the caller.
         anomaly_window_hint_seconds: Rough lookback hint for the agent's
             temporal reasoning (see docs/ADR/dealing_with_temporality_2.md).
         metric_snapshots: List of raw metric snapshot dicts collected during
-            the observation period (e.g., by ObservationTrafficAgent in the
-            chaos framework). Each snapshot is {component: {metric: value}}.
-            If empty/None, Phase 0 collects a single live snapshot instead.
+            the observation period.
+        observation_window_duration: How long (seconds) the observation traffic
+            ran for. Used to tell agents the right Prometheus query window.
+        seconds_since_observation: How many seconds ago the observation window
+            ended. Used to offset Prometheus queries to the event timeframe.
     """
+    # Compute the Prometheus lookback window that covers the observation period.
+    # If the observation ran for 120s and ended 60s ago, agents should query
+    # Prometheus with a window of at least 120+60=180s to capture the event.
+    event_lookback_seconds = (observation_window_duration + seconds_since_observation
+                              if observation_window_duration > 0
+                              else anomaly_window_hint_seconds)
+
     session_service = InMemorySessionService()
     state: dict[str, Any] = {
         "user_question": question,
         "anomaly_window_hint_seconds": anomaly_window_hint_seconds,
+        "event_lookback_seconds": event_lookback_seconds,
+        "observation_window_duration": observation_window_duration,
+        "seconds_since_observation": seconds_since_observation,
     }
     all_phases: list[PhaseTrace] = []
     invocation_order: list[str] = []

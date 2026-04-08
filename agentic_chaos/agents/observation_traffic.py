@@ -102,6 +102,9 @@ class ObservationTrafficAgent(BaseAgent):
         ims_domain = _get_ims_domain(env)
         callee_imsi = env.get("UE2_IMSI", "001011234567892")
 
+        # Record the observation window timestamps
+        observation_start = time.time()
+
         # Run traffic generation and metric collection concurrently.
         # Both tasks are wrapped in try/except to prevent crashes from
         # killing the entire pipeline (which would skip the ChallengeAgent).
@@ -119,11 +122,14 @@ class ObservationTrafficAgent(BaseAgent):
                 task_name = "traffic generation" if i == 0 else "metric collection"
                 log.warning("ObservationTrafficAgent: %s failed: %s", task_name, r)
 
+        observation_end = time.time()
+        elapsed_since_start = int(observation_end - observation_start)
+
         log.info("Observation traffic complete: %d metric snapshots collected "
-                 "over %ds", len(snapshots), duration)
+                 "over %ds", len(snapshots), elapsed_since_start)
 
         msg = (
-            f"Observation traffic: generated IMS traffic for {duration}s, "
+            f"Observation traffic: generated IMS traffic for {elapsed_since_start}s, "
             f"collected {len(snapshots)} metric snapshots"
         )
         yield Event(
@@ -131,6 +137,9 @@ class ObservationTrafficAgent(BaseAgent):
             content=types.Content(parts=[types.Part(text=msg)]),
             actions=EventActions(state_delta={
                 "observation_snapshots": snapshots,
+                "observation_window_start": observation_start,
+                "observation_window_end": observation_end,
+                "observation_window_duration": elapsed_since_start,
             }),
         )
 

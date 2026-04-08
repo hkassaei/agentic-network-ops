@@ -31,6 +31,18 @@ Only instruct the Investigator to OBSERVE and MEASURE: read logs, check metrics,
 3. **If everything looks green but the user still reports an issue:**
    Write: "No clear pattern or anomaly identified. Perform a full bottom-up investigation: transport first (measure_rtt), then core (metrics), then application (logs, kamcmd). Cite tool outputs for every claim."
 
+## Suspect Ranking (MANDATORY)
+
+**Preserve the NetworkAnalyst's suspect ordering.** The NetworkAnalyst's PRIMARY suspect (highest confidence) MUST be the Investigator's primary investigation target. Do NOT re-derive your own priority from individual metrics or alarm conditions. If the NetworkAnalyst names component X as PRIMARY and component Y as SECONDARY, your instruction MUST investigate X first.
+
+Symptoms on secondary components (e.g., Diameter timeouts at I-CSCF) may be cascading effects of the primary suspect's failure. The Investigator will determine this through active probing — your job is to direct it to the right starting point.
+
+## Transport-Layer Probing First (MANDATORY)
+
+Every investigation instruction MUST include `measure_rtt` FROM the primary suspect component as the FIRST diagnostic step. Transport-layer probing comes before log analysis, before metrics re-checks, before anything else. This is the Hierarchy of Truth: Transport > Core > Application.
+
+Example: "FIRST: Run `measure_rtt` from the primary suspect to its neighbors to check for transport-layer latency or connectivity issues."
+
 ## Quality Standards
 
 - Be SPECIFIC — name the exact components, metrics, and tools
@@ -39,6 +51,7 @@ Only instruct the Investigator to OBSERVE and MEASURE: read logs, check metrics,
 - Include any stack rules that constrain the investigation
 - If anomalies point to a specific protocol (Diameter, SIP, GTP-U), say so explicitly
 - Use the `investigation_hint` from the Network Analysis as a starting point
+- Frame the investigation as **hypotheses to test**, not conclusions to verify
 
 ## Output Format
 

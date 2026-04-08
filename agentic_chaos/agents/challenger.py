@@ -117,17 +117,27 @@ class ChallengeAgent(BaseAgent):
             ctx.session.state.get("anomaly_window_hint_seconds", 300)
         )
         observation_snapshots = ctx.session.state.get("observation_snapshots", [])
+        observation_window_end = ctx.session.state.get("observation_window_end", 0)
+        observation_window_duration = ctx.session.state.get("observation_window_duration", 0)
         if observation_snapshots:
-            log.info("Passing %d observation snapshots to RCA agent", len(observation_snapshots))
+            log.info("Passing %d observation snapshots to RCA agent "
+                     "(window: %ds, ended %ds ago)",
+                     len(observation_snapshots), observation_window_duration,
+                     int(time.time() - observation_window_end) if observation_window_end else 0)
 
         question = self._build_question()
 
         start_time = time.time()
+        # Compute how many seconds ago the observation window ended
+        # so the agents can query Prometheus for the right timeframe
+        seconds_since_observation = int(time.time() - observation_window_end) if observation_window_end else 0
         try:
             diagnosis_dict = await self._run_rca_agent(
                 question, agent_version,
                 anomaly_window_hint_seconds=anomaly_window_hint_seconds,
                 metric_snapshots=observation_snapshots,
+                observation_window_duration=observation_window_duration,
+                seconds_since_observation=seconds_since_observation,
             )
         except Exception as e:
             log.error("RCA agent failed: %s", e)
@@ -172,6 +182,7 @@ class ChallengeAgent(BaseAgent):
             "network_analysis": diagnosis_dict.get("_network_analysis", ""),
             "pattern_match": diagnosis_dict.get("_pattern_match", ""),
             "investigation_instruction": diagnosis_dict.get("_investigation_instruction", ""),
+            "evidence_validation": diagnosis_dict.get("_evidence_validation", ""),
         }
 
         total = score.get("total_score", 0)
@@ -247,6 +258,8 @@ class ChallengeAgent(BaseAgent):
         self, question: str, agent_version: str = "v1.5",
         anomaly_window_hint_seconds: int = 300,
         metric_snapshots: list | None = None,
+        observation_window_duration: int = 0,
+        seconds_since_observation: int = 0,
     ) -> dict:
         """Run the specified troubleshooting agent and return its diagnosis."""
         ops_path = str(_REPO_ROOT)
@@ -258,6 +271,8 @@ class ChallengeAgent(BaseAgent):
                 question, agent_version,
                 anomaly_window_hint_seconds=anomaly_window_hint_seconds,
                 metric_snapshots=metric_snapshots,
+                observation_window_duration=observation_window_duration,
+                seconds_since_observation=seconds_since_observation,
             )
         return await self._run_v15_agent(question)
 
@@ -295,6 +310,8 @@ class ChallengeAgent(BaseAgent):
         self, question: str, version: str = "v3",
         anomaly_window_hint_seconds: int = 300,
         metric_snapshots: list | None = None,
+        observation_window_duration: int = 0,
+        seconds_since_observation: int = 0,
     ) -> dict:
         """Run an ADK multi-phase troubleshooting agent (v3, v4, or v5)."""
         if version == "v5":
@@ -303,6 +320,8 @@ class ChallengeAgent(BaseAgent):
                 question,
                 anomaly_window_hint_seconds=anomaly_window_hint_seconds,
                 metric_snapshots=metric_snapshots or [],
+                observation_window_duration=observation_window_duration,
+                seconds_since_observation=seconds_since_observation,
             )
         elif version == "v4":
             from agentic_ops_v4.orchestrator import investigate
@@ -343,6 +362,7 @@ class ChallengeAgent(BaseAgent):
             "_network_analysis": result.get("network_analysis", ""),
             "_pattern_match": result.get("pattern_match", ""),
             "_investigation_instruction": result.get("investigation_instruction", ""),
+            "_evidence_validation": result.get("evidence_validation", ""),
         }
 
     async def _run_live_impl(self, ctx):

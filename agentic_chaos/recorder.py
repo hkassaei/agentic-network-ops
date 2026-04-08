@@ -477,6 +477,28 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
         lines.append(f"```")
         lines.append("")
 
+    # Evidence validation
+    evidence_validation = challenge.get("evidence_validation", "")
+    lines.append("## Evidence Validation (Phase 5)")
+    lines.append("")
+    if evidence_validation:
+        if isinstance(evidence_validation, dict):
+            lines.append(f"**Verdict:** {evidence_validation.get('verdict', '?')}")
+            lines.append(f"**Investigator confidence:** {evidence_validation.get('investigator_confidence', '?')}")
+            lines.append(f"**Citations:** {evidence_validation.get('matched', 0)}/{evidence_validation.get('total_citations', 0)} verified")
+            if evidence_validation.get('investigator_made_zero_calls'):
+                lines.append("")
+                lines.append("**WARNING:** Investigator made ZERO tool calls — all evidence citations are fabricated.")
+            summary = evidence_validation.get('summary', '')
+            if summary:
+                lines.append("")
+                lines.append(f"```\n{summary}\n```")
+        else:
+            lines.append(str(evidence_validation))
+    else:
+        lines.append("*No evidence validation output.*")
+    lines.append("")
+
     # Ground truth
     lines.append("## Ground Truth")
     lines.append("")

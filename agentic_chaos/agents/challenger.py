@@ -158,10 +158,12 @@ class ChallengeAgent(BaseAgent):
             diagnosis_text = diagnosis_dict.get("root_cause", diagnosis_dict.get("summary", ""))
 
         # Score the diagnosis using LLM judge
+        network_analysis = diagnosis_dict.get("_network_analysis", "")
         score = await score_diagnosis(
             diagnosis_text=diagnosis_text,
             injected_faults=faults_injected,
             scenario=scenario,
+            network_analysis=str(network_analysis) if network_analysis else "",
         )
 
         if agent_version in ("v3", "v4", "v5"):
@@ -193,6 +195,7 @@ class ChallengeAgent(BaseAgent):
             f"    Root cause correct: {score.get('root_cause_correct')}\n"
             f"    Component overlap:  {score.get('component_overlap', 0):.0%}\n"
             f"    Severity correct:   {score.get('severity_correct')}\n"
+            f"    Layer accuracy:     {score.get('layer_accuracy')}\n"
             f"  Scorer summary: {score.get('summary', '?')}"
         )
         log.info("Challenge Mode: score=%.0f%%", total * 100)

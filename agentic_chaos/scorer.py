@@ -11,12 +11,13 @@ Example: "Kill gNB to simulate a radio link failure"
   - The scorer accepts any semantically equivalent description of the failure mode
 
 Scoring dimensions:
-  - root_cause_correct: Did the agent identify the simulated failure mode?
-  - component_overlap:  Did it name the right affected component(s)?
-  - severity_correct:   Did it assess severity accurately?
+  - root_cause_correct:    Did the agent identify the simulated failure mode?
+  - component_overlap:     Did it name the right affected component(s)?
+  - severity_correct:      Did it assess severity accurately?
   - fault_type_identified: Did it identify the observable class of failure?
+  - layer_accuracy:        Did it attribute components to the correct ontology layers?
   - confidence_calibrated: Is confidence justified by evidence quality?
-  - ranking_position:   Where did the correct cause rank in the agent's list?
+  - ranking_position:      Where did the correct cause rank in the agent's list?
 """
 
 from __future__ import annotations
@@ -28,6 +29,34 @@ import os
 log = logging.getLogger("chaos-scorer")
 
 _SCORER_MODEL = "gemini-2.5-flash"
+
+# Component → ontology layer mapping (from network_ontology/data/components.yaml)
+_COMPONENT_ONTOLOGY_LAYER = {
+    "mongo": "infrastructure",
+    "mysql": "infrastructure",
+    "dns": "infrastructure",
+    "webui": "infrastructure",
+    "nrf": "core",
+    "scp": "core",
+    "ausf": "core",
+    "udm": "core",
+    "udr": "core",
+    "amf": "core",
+    "smf": "core",
+    "pcf": "core",
+    "upf": "core",
+    "nssf": "core",
+    "bsf": "core",
+    "pcscf": "ims",
+    "icscf": "ims",
+    "scscf": "ims",
+    "pyhss": "ims",
+    "smsc": "ims",
+    "rtpengine": "ims",
+    "nr_gnb": "ran",
+    "e2e_ue1": "ue",
+    "e2e_ue2": "ue",
+}
 
 _SCORER_PROMPT = """\
 You are an evaluation judge for a telecom troubleshooting agent. Your job is to
@@ -95,12 +124,34 @@ Score the diagnosis on these dimensions:
    Do NOT require the agent to name the simulation mechanism (container_kill,
    tc netem, docker pause).
 
-5. **confidence_calibrated** (bool): Is the agent's stated confidence level
+5. **layer_accuracy** (bool): Did the agent correctly attribute the affected
+   component(s) to their correct ontology layer in the layer status assessment?
+
+   Each component belongs to a specific layer per the network ontology. The
+   ground truth section below specifies each affected component's ontology
+   layer. The agent's NETWORK ANALYSIS section (if provided) contains a layer
+   status table with ratings per layer.
+
+   Score True if EITHER:
+   - The agent's layer ratings correctly place the primary affected
+     component(s) under their ontology layer (e.g., rating the "ims" layer
+     RED when the affected component is an IMS component), OR
+   - No layer status information is available in the diagnosis (no
+     misattribution can be detected).
+
+   Score False if the agent attributed a component's failure to the WRONG
+   layer. For example: rating the "infrastructure" layer RED because of an
+   HSS failure, when the ontology defines HSS as an IMS component. The
+   nature of the failure (e.g., network unreachability) does NOT determine
+   the component's layer — a network-level failure of an IMS component is
+   still an IMS-layer problem.
+
+6. **confidence_calibrated** (bool): Is the agent's stated confidence level
    appropriate given the quality of its diagnosis? High confidence + correct
    diagnosis with tool evidence = well calibrated. High confidence + wrong
    diagnosis = poorly calibrated.
 
-6. **ranking_position** (int or null): If the agent returned multiple ranked
+7. **ranking_position** (int or null): If the agent returned multiple ranked
    candidates, what position (1-based) is the correct cause? 1 = top,
    null = correct cause not listed.
 
@@ -117,6 +168,8 @@ Return ONLY a JSON object (no markdown fences, no extra text):
   "severity_rationale": "...",
   "fault_type_identified": true/false,
   "fault_type_rationale": "...",
+  "layer_accuracy": true/false,
+  "layer_accuracy_rationale": "...",
   "confidence_calibrated": true/false,
   "confidence_rationale": "...",
   "ranking_position": 1/2/3/null,
@@ -127,9 +180,10 @@ Return ONLY a JSON object (no markdown fences, no extra text):
 
 Compute total_score as:
   0.40 × root_cause_correct
-+ 0.25 × component_overlap
++ 0.20 × component_overlap
 + 0.15 × severity_correct
 + 0.10 × fault_type_identified
++ 0.05 × layer_accuracy
 + 0.10 × confidence_calibrated
 """
 
@@ -155,14 +209,23 @@ async def score_diagnosis(
     diagnosis_text: str,
     injected_faults: list[dict],
     scenario: dict,
+    network_analysis: str = "",
 ) -> dict:
     """Score an RCA diagnosis using an LLM judge.
 
     The scorer evaluates against the SIMULATED FAILURE MODE, not the
     injection mechanism.
+
+    Args:
+        diagnosis_text: The agent's raw diagnosis output.
+        injected_faults: List of fault dicts with target, fault_type, params.
+        scenario: The scenario dict with name, description, expected_symptoms.
+        network_analysis: The agent's network analysis output (contains
+            layer_status ratings). Used for scoring layer_accuracy.
     """
     # Build ground truth focused on the simulated failure mode
     fault_descriptions = []
+    layer_ground_truth = []
     for f in injected_faults:
         fault_type = f.get("fault_type", "?")
         target = f.get("target", "?")
@@ -193,6 +256,13 @@ async def score_diagnosis(
             f"- Component '{target}': {observable}"
         )
 
+        # Build ontology layer ground truth for each target
+        ontology_layer = _COMPONENT_ONTOLOGY_LAYER.get(target)
+        if ontology_layer:
+            layer_ground_truth.append(
+                f"- '{target}' belongs to the **{ontology_layer}** layer"
+            )
+
     scenario_desc = scenario.get("description", "?")
     expected_symptoms = scenario.get("expected_symptoms", [])
 
@@ -203,7 +273,16 @@ async def score_diagnosis(
         + "\n".join(fault_descriptions) + "\n"
         f"\nExpected observable symptoms:\n"
         + "\n".join(f"- {s}" for s in expected_symptoms)
-        + "\n\nNote: The agent cannot see HOW the failure was injected "
+    )
+
+    if layer_ground_truth:
+        ground_truth += (
+            "\n\nComponent ontology layers (ground truth for layer_accuracy scoring):\n"
+            + "\n".join(layer_ground_truth)
+        )
+
+    ground_truth += (
+        "\n\nNote: The agent cannot see HOW the failure was injected "
         "(container kill, tc netem, etc.). Score based on whether the agent "
         "correctly identified the failure from the network's observable perspective."
     )
@@ -212,6 +291,11 @@ async def score_diagnosis(
         f"## SIMULATED FAILURE\n\n{ground_truth}\n\n"
         f"## AGENT DIAGNOSIS\n\n{diagnosis_text}"
     )
+
+    if network_analysis:
+        user_message += (
+            f"\n\n## AGENT NETWORK ANALYSIS (layer status)\n\n{network_analysis}"
+        )
 
     try:
         result = await _call_scorer_llm(user_message)
@@ -253,7 +337,8 @@ async def _call_scorer_llm(user_message: str) -> dict:
 
     # Validate and ensure required fields
     required_bools = ["root_cause_correct", "severity_correct",
-                      "fault_type_identified", "confidence_calibrated"]
+                      "fault_type_identified", "layer_accuracy",
+                      "confidence_calibrated"]
     for key in required_bools:
         if key not in parsed:
             parsed[key] = False
@@ -264,9 +349,10 @@ async def _call_scorer_llm(user_message: str) -> dict:
     if "total_score" not in parsed:
         parsed["total_score"] = round(
             0.40 * float(parsed.get("root_cause_correct", False))
-            + 0.25 * float(parsed.get("component_overlap", 0))
+            + 0.20 * float(parsed.get("component_overlap", 0))
             + 0.15 * float(parsed.get("severity_correct", False))
             + 0.10 * float(parsed.get("fault_type_identified", False))
+            + 0.05 * float(parsed.get("layer_accuracy", False))
             + 0.10 * float(parsed.get("confidence_calibrated", False)),
             3,
         )
@@ -285,6 +371,8 @@ def _fallback_score(error_msg: str) -> dict:
         "severity_rationale": "Scorer failed",
         "fault_type_identified": False,
         "fault_type_rationale": "Scorer failed",
+        "layer_accuracy": False,
+        "layer_accuracy_rationale": "Scorer failed",
         "confidence_calibrated": False,
         "confidence_rationale": "Scorer failed",
         "ranking_position": None,

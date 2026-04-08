@@ -572,6 +572,10 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
                 f"| {score.get('fault_type_rationale', '')} |"
             )
             lines.append(
+                f"| Layer accuracy | {'Yes' if score.get('layer_accuracy') else 'No'} "
+                f"| {score.get('layer_accuracy_rationale', '')} |"
+            )
+            lines.append(
                 f"| Confidence calibrated | {'Yes' if score.get('confidence_calibrated') else 'No'} "
                 f"| {score.get('confidence_rationale', '')} |"
             )

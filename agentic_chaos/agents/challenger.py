@@ -182,6 +182,7 @@ class ChallengeAgent(BaseAgent):
             "network_analysis": diagnosis_dict.get("_network_analysis", ""),
             "pattern_match": diagnosis_dict.get("_pattern_match", ""),
             "investigation_instruction": diagnosis_dict.get("_investigation_instruction", ""),
+            "investigation": diagnosis_dict.get("_investigation", ""),
             "evidence_validation": diagnosis_dict.get("_evidence_validation", ""),
         }
 
@@ -362,6 +363,7 @@ class ChallengeAgent(BaseAgent):
             "_network_analysis": result.get("network_analysis", ""),
             "_pattern_match": result.get("pattern_match", ""),
             "_investigation_instruction": result.get("investigation_instruction", ""),
+            "_investigation": result.get("investigation", ""),
             "_evidence_validation": result.get("evidence_validation", ""),
         }
 

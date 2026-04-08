@@ -72,13 +72,22 @@ class FaultPropagationVerifier(BaseAgent):
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
 
-        wait_seconds = FAULT_PROPAGATION_TIME_SECONDS
+        # If the ObservationTrafficAgent already ran (observation_snapshots
+        # in state), the fault has had plenty of time to propagate — skip
+        # the wait and just take a verification snapshot immediately.
+        observation_ran = bool(ctx.session.state.get("observation_snapshots"))
+        if observation_ran:
+            wait_seconds = 0
+            log.info("Observation traffic already ran — skipping propagation wait, taking snapshot...")
+        else:
+            wait_seconds = FAULT_PROPAGATION_TIME_SECONDS
+            log.info("Waiting %ds for fault propagation...", wait_seconds)
 
-        log.info("Waiting %ds for fault propagation...", wait_seconds)
         start = datetime.now(timezone.utc)
-        await asyncio.sleep(wait_seconds)
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
-        log.info("Wait complete (%.1fs). Taking verification snapshot...", elapsed)
+        log.info("Taking verification snapshot (%.1fs after start)...", elapsed)
 
         # Snapshot current metrics
         try:

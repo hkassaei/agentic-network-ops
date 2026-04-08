@@ -467,15 +467,17 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
         lines.append("*No output produced.*")
     lines.append("")
 
-    # Legacy support: ontology_diagnosis from older v5 runs
-    ontology_diag = challenge.get("ontology_diagnosis", "")
-    if ontology_diag and not pattern_match:
-        lines.append("## Ontology Analysis")
-        lines.append("")
-        lines.append(f"```")
-        lines.append(ontology_diag)
-        lines.append(f"```")
-        lines.append("")
+    # Investigation output (Phase 4)
+    investigation = challenge.get("investigation", "")
+    lines.append("## Investigation (Phase 4)")
+    lines.append("")
+    if investigation:
+        inv_text = str(investigation)
+        for ln in inv_text.splitlines():
+            lines.append(f"> {ln}" if ln.strip() else ">")
+    else:
+        lines.append("*No investigation output produced.*")
+    lines.append("")
 
     # Evidence validation
     evidence_validation = challenge.get("evidence_validation", "")

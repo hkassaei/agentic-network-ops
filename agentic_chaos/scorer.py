@@ -171,7 +171,19 @@ async def score_diagnosis(
 
         # Include params that describe the observable effect
         if fault_type == "network_latency" and "delay_ms" in params:
-            observable += f" ({params['delay_ms']}ms delay)"
+            delay_ms = params["delay_ms"]
+            if delay_ms >= 10000:
+                observable = (
+                    f"Extreme network latency ({delay_ms}ms delay) on the component's "
+                    f"interfaces — functionally equivalent to unreachability for "
+                    f"real-time protocols (SIP timers ~500ms, Diameter timers ~5-30s). "
+                    f"Standard diagnostic probes (ping with 10s timeout) will report "
+                    f"100% packet loss because the delay exceeds the probe timeout. "
+                    f"The agent may correctly describe this as 'unreachable' or "
+                    f"'unresponsive' — this is an acceptable interpretation."
+                )
+            else:
+                observable += f" ({delay_ms}ms delay)"
         elif fault_type == "network_loss" and "loss_pct" in params:
             observable += f" ({params['loss_pct']}% packet loss)"
         elif fault_type == "network_partition" and "target_ip" in params:

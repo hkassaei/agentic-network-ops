@@ -121,11 +121,13 @@ scscf_crash = Scenario(
 hss_unresponsive = Scenario(
     name="HSS Unresponsive",
     description=(
-        "Inject 60-second outbound delay on the HSS (PyHSS). The HSS container "
-        "is running, the process is alive, and the IP is reachable — but all "
-        "Diameter responses are delayed by 60 seconds, far exceeding the Cx "
-        "Diameter timeout. Tests how the I-CSCF and S-CSCF handle a Diameter "
-        "peer that accepts connections but never responds in time."
+        "Inject 60-second outbound delay on the HSS (PyHSS), making it "
+        "functionally unreachable for all real-time protocols. The HSS "
+        "container is running and the process is alive, but all network "
+        "responses are delayed by 60 seconds — far exceeding Diameter Cx "
+        "timeouts (5-30s) and standard probe timeouts (10s). From the "
+        "perspective of diagnostic tools and IMS peers, the HSS appears "
+        "completely unresponsive or unreachable."
     ),
     category=FaultCategory.NETWORK,
     blast_radius=BlastRadius.SINGLE_NF,
@@ -142,6 +144,8 @@ hss_unresponsive = Scenario(
         "Diameter MAR/MAA timeout at S-CSCF",
         "SIP REGISTER stalls (waiting for Diameter)",
         "CDP peer state changes",
+        "measure_rtt to HSS shows 100% packet loss (60s delay exceeds 10s probe timeout)",
+        "HSS appears unreachable/unresponsive despite container running",
     ],
     # Control-plane fault: 60s latency on HSS only matters if somebody
     # is actually making Diameter queries. Traffic generation fires UAR/MAR

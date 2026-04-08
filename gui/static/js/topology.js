@@ -78,7 +78,7 @@ function renderTopology(svgSelector, topo, opts = {}) {
 
     const sbiEdgeInfo = { label: 'SBI Service Bus', protocol: 'HTTP/2', interface: 'SBI', plane: 'control', source: 'NRF/SCP', target: 'All Core NFs', active: true };
 
-    const busG = svg.append('g').attr('class', 'topo-edge topo-edge-group');
+    const busG = svg.append('g').attr('class', 'topo-edge topo-edge-group').attr('data-plane', 'control');
     busG.append('line').attr('x1', busX1).attr('y1', busLineY).attr('x2', busX2).attr('y2', busLineY)
       .attr('stroke', 'transparent').attr('stroke-width', 14).style('pointer-events', 'stroke');
     busG.append('line').attr('x1', busX1).attr('y1', busLineY).attr('x2', busX2).attr('y2', busLineY)
@@ -90,7 +90,7 @@ function renderTopology(svgSelector, topo, opts = {}) {
 
     for (const id of sbiNodes) {
       const n = nodeMap[id];
-      const stubG = svg.append('g').attr('class', 'topo-edge topo-edge-group');
+      const stubG = svg.append('g').attr('class', 'topo-edge topo-edge-group').attr('data-plane', 'control');
       stubG.append('line').attr('x1', n.cx).attr('y1', n.cy - NODE_H / 2).attr('x2', n.cx).attr('y2', busLineY)
         .attr('stroke', 'transparent').attr('stroke-width', 14).style('pointer-events', 'stroke');
       stubG.append('line').attr('x1', n.cx).attr('y1', n.cy - NODE_H / 2).attr('x2', n.cx).attr('y2', busLineY)
@@ -109,7 +109,7 @@ function renderTopology(svgSelector, topo, opts = {}) {
     if (!src || !tgt) continue;
 
     const style = PLANE_STYLES[e.plane] || PLANE_STYLES.control;
-    const g = svg.append('g').attr('class', `topo-edge topo-edge-group${e.active ? '' : ' edge-inactive'}`);
+    const g = svg.append('g').attr('class', `topo-edge topo-edge-group${e.active ? '' : ' edge-inactive'}`).attr('data-plane', e.plane);
 
     if (e.logical) {
       const dx = tgt.cx - src.cx, dy = tgt.cy - src.cy;

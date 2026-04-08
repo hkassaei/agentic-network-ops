@@ -426,8 +426,17 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     # Notable log lines omitted from report — they contain stale logs
     # from previous runs and are not useful for diagnosis evaluation.
 
-    # Pipeline intermediate state — v5 5-phase pipeline
+    # Pipeline intermediate state — v5 pipeline phases
     challenge = episode.get("challenge_result") or {}
+
+    anomaly_report = challenge.get("anomaly_report", "")
+    lines.append("## Anomaly Screening (Phase 0)")
+    lines.append("")
+    if anomaly_report:
+        lines.append(str(anomaly_report))
+    else:
+        lines.append("*No anomaly screening output.*")
+    lines.append("")
 
     network_analysis = challenge.get("network_analysis", "")
     lines.append("## Network Analysis (Phase 1)")

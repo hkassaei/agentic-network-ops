@@ -3,14 +3,13 @@ ChaosDirector — the top-level orchestrator for chaos episodes.
 
 Wires together all Phase agents into a SequentialAgent:
   1. BaselineCollector           → captures pre-fault state
-  2. CallSetupAgent              → establishes VoNR call (if user_plane scenario)
-  3. FaultInjector               → injects faults per scenario
-  4. ControlPlaneTrafficAgent    → forces SIP re-register (if control_plane scenario)
-  5. FaultPropagationVerifier    → waits N seconds, verifies fault manifested
-  6. ChallengeAgent              → invokes the RCA agent (v1.5/v3/v4/v5)
-  7. Healer                      → reverses all faults
-  8. CallTeardownAgent           → hangs up the VoNR call
-  9. EpisodeRecorder             → writes episode JSON
+  2. FaultInjector               → injects faults per scenario
+  3. ObservationTrafficAgent     → generates IMS traffic + collects metric snapshots
+  4. FaultPropagationVerifier    → verifies fault manifested in metrics
+  5. ChallengeAgent              → invokes the RCA agent (v1.5/v3/v4/v5)
+  6. Healer                      → reverses all faults
+  7. CallTeardownAgent           → hangs up any active VoNR call
+  8. EpisodeRecorder             → writes episode JSON
 
 Usage:
     from agentic_chaos.orchestrator import run_scenario
@@ -40,9 +39,8 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from .agents.baseline import BaselineCollector
-from .agents.call_setup import CallSetupAgent, CallTeardownAgent
+from .agents.call_setup import CallTeardownAgent
 from .agents.challenger import ChallengeAgent
-from .agents.control_plane_traffic import ControlPlaneTrafficAgent
 from .agents.fault_injector import FaultInjector
 from .agents.observation_traffic import ObservationTrafficAgent
 from .agents.fault_propagation_verifier import create_fault_propagation_verifier
@@ -79,32 +77,33 @@ def create_chaos_director(
     reg = registry or get_registry()
 
     baseline_collector = BaselineCollector()
-    call_setup = CallSetupAgent()
     fault_injector = FaultInjector(registry=reg)
-    control_plane_traffic = ControlPlaneTrafficAgent()
-    fault_verifier = create_fault_propagation_verifier()
     observation_traffic = ObservationTrafficAgent()
+    fault_verifier = create_fault_propagation_verifier()
     challenge_agent = ChallengeAgent()
     healer = Healer(registry=reg)
     call_teardown = CallTeardownAgent()
     episode_recorder = EpisodeRecorder()
 
-    # Pipeline: baseline → [call_setup] → inject → [cp_traffic] → verify →
-    #           [observation_traffic] → [challenge] → heal → [call_teardown] → record
+    # Pipeline: baseline → inject → observation_traffic → verify → challenge → heal → [call_teardown] → record
+    #
+    # ObservationTrafficAgent runs BEFORE the verifier: it generates 2+ minutes
+    # of randomized IMS traffic (REGISTER, VoNR calls) while collecting metric
+    # snapshots every 5s. This gives the fault time to manifest through real
+    # traffic and produces the metric data the anomaly screener needs.
+    # The verifier then confirms propagation from the accumulated metric deltas.
     return SequentialAgent(
         name="ChaosDirector",
         description=(
             "Orchestrates a complete chaos episode: "
-            "baseline → [call_setup] → inject → [cp_traffic] → verify → "
-            "[observation_traffic] → [challenge] → heal → [call_teardown] → record."
+            "baseline → inject → observation_traffic → verify → "
+            "challenge → heal → [call_teardown] → record."
         ),
         sub_agents=[
             baseline_collector,
-            call_setup,
             fault_injector,
-            control_plane_traffic,
-            fault_verifier,
             observation_traffic,
+            fault_verifier,
             challenge_agent,
             healer,
             call_teardown,

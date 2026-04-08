@@ -179,20 +179,49 @@ signatures:
         check: "mongo container status"
     related_chain: mongodb_gone
 
-  sip_edge_latency:
-    diagnosis: "High latency on SIP signaling path at P-CSCF — SIP T1 timer timeouts"
+  ims_signaling_chain_degraded:
+    diagnosis: >
+      IMS signaling chain degraded — one or more components on the IMS path
+      (P-CSCF, I-CSCF, S-CSCF, HSS) is slow, overloaded, or broken. Active
+      probing required to pinpoint the bottleneck.
     failure_domain: ims_signaling
     confidence: high
     match_any:
-      - log_pattern: sip_408_timeout
-        at: [pcscf, e2e_ue1, e2e_ue2]
+      - metric: "core:rcv_requests_register"
+        condition: "rate anomalously high (retransmission storm)"
+        at: pcscf
       - metric: "tmx:active_transactions"
         condition: "> 0"
-        at: pcscf
-    rule_out:
-      - tool: measure_rtt
-        args: {container: "e2e_ue1", target_ip: "172.22.0.21"}
-        check: "Elevated RTT to P-CSCF confirms transport latency as root cause"
-      - tool: get_nf_metrics
-        check: "Check active_transactions accumulating at P-CSCF"
-    related_chain: sip_edge_latency
+        at: [pcscf, icscf, scscf]
+      - log_pattern: sip_408_timeout
+        at: [pcscf, e2e_ue1, e2e_ue2]
+      - metric: "cdp:timeout"
+        condition: "> 0"
+        at: [icscf, scscf]
+        note: >
+          Diameter timeout can be caused by HSS failure OR by upstream
+          IMS component latency/failure. Do NOT assume HSS is the root
+          cause without probing each component.
+    hypotheses:
+      - name: "Transport latency on one IMS component"
+        test: >
+          Run measure_rtt FROM each IMS component to its neighbors.
+          The component with elevated egress RTT (>10ms) is the bottleneck.
+        tools: [measure_rtt]
+      - name: "Application-level hang or overload on one IMS component"
+        test: >
+          If all RTTs are normal, check process health and logs on each
+          component showing elevated tmx:active_transactions or timeouts.
+        tools: [check_process_listeners, read_container_logs, run_kamcmd]
+      - name: "HSS specifically unreachable"
+        test: >
+          If cdp:timeout is elevated but pcscf register_rate is normal,
+          HSS may be genuinely unreachable. Check measure_rtt from icscf
+          to pyhss, and check pyhss process state and logs.
+        tools: [measure_rtt, read_container_logs, check_process_listeners]
+      - name: "Database backend slow"
+        test: >
+          If HSS is reachable but Diameter response times are elevated,
+          the MySQL backend may be slow. Check pyhss logs for query delays.
+        tools: [read_container_logs]
+    related_chain: ims_signaling_chain_degraded

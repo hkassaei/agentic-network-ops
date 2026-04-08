@@ -213,58 +213,116 @@ causal_chains:
   # IMS SIGNALING FAILURE MODES
   # =========================================================================
 
-  sip_edge_latency:
-    description: "High latency on the SIP signaling path at the P-CSCF edge, causing SIP transaction timeouts."
-    affected_interface: Gm
-    affected_protocol: SIP
+  ims_signaling_chain_degraded:
+    description: >
+      IMS signaling chain degraded — SIP transactions timing out, REGISTER
+      retransmissions spiking, and/or Diameter queries failing. One or more
+      components on the IMS signaling path (P-CSCF, I-CSCF, S-CSCF, HSS)
+      is slow, overloaded, or broken. This chain describes the SYMPTOM
+      PATTERN, not the specific root cause — active probing is required to
+      pinpoint which component is the bottleneck.
+    affected_interface: "Gm/Mw/Cx (full IMS signaling chain)"
+    affected_protocol: "SIP + Diameter"
     failure_domain: ims_signaling
     severity: degraded
 
     possible_causes:
-      - "Network congestion or latency on the transport segment to/from P-CSCF"
-      - "P-CSCF overload (CPU, memory, or connection exhaustion)"
-      - "DNS resolution delays for SIP routing"
-      - "Intermediate firewall or NAT introducing latency"
-      - "TLS handshake overhead (if SIP over TLS)"
-      - "P-CSCF process issues (garbage collection, thread starvation)"
+      - "Network latency on ANY hop of the IMS signaling path (P-CSCF, I-CSCF, S-CSCF, or HSS)"
+      - "Any IMS component overloaded (CPU, memory, connection exhaustion, thread starvation)"
+      - "Any IMS component process hung, crashed, or restarting"
+      - "HSS database backend (MySQL) slow or failing"
+      - "Diameter peer connection issues between I-CSCF/S-CSCF and HSS"
+      - "DNS resolution delays for SIP routing between IMS components"
+      - "SIP transport mismatch (TCP vs UDP) causing retransmissions"
+      - "Network partition between any pair of IMS components"
 
     observable_symptoms:
       immediate:
+        - metric: "core:rcv_requests_register"
+          becomes: "rate spikes dramatically (retransmission storm)"
+          at: pcscf
+          description: "UEs retransmit REGISTER when 200 OK doesn't arrive within SIP T1 timer (500ms). This is the most visible signal."
         - metric: "tmx:active_transactions"
           becomes: "> 0 and growing"
-          at: pcscf
-          description: "SIP transactions accumulating without responses"
+          at: [pcscf, icscf, scscf]
+          description: "SIP transactions accumulating at one or more IMS components"
         - log: "SIP 408 Request Timeout"
           at: [pcscf, e2e_ue1, e2e_ue2]
           description: "SIP transactions timing out"
 
       cascading:
-        - condition: "latency >= 500ms (Kamailio T1 timer)"
-          effect: "SIP transactions start timing out, REGISTER fails"
-          description: "Kamailio's T1 timer defaults to 500ms — latency above this breaks SIP"
+        - condition: "SIP transaction timeout propagates through the chain"
+          effect: >
+            The entire IMS signaling chain is sequential: UE → P-CSCF → I-CSCF →
+            S-CSCF → HSS (Diameter) → back. A bottleneck at ANY point causes the
+            full chain to slow down, producing cascading symptoms at OTHER components:
+              - A slow P-CSCF causes I-CSCF to see delayed REGISTERs and may cause
+                Diameter queries to time out (cdp:timeout at I-CSCF)
+              - A slow I-CSCF causes S-CSCF to never receive forwarded REGISTERs
+              - A slow S-CSCF causes Diameter MAR/SAR queries to appear slow
+              - A slow HSS causes Diameter timeouts at I-CSCF and S-CSCF
+            IMPORTANT: The component REPORTING the timeout is not necessarily the
+            component CAUSING the problem. Diameter timeouts at I-CSCF (cdp:timeout)
+            can be caused by P-CSCF latency, I-CSCF issues, HSS issues, or even
+            network problems between any of them.
         - condition: "UE SIP re-registration timer"
           effect: "UE appears unregistered after re-registration fails"
+        - condition: "Kamailio T1 timer (500ms)"
+          effect: "SIP transactions start timing out — any added latency >= 500ms on any hop breaks SIP"
 
     does_NOT_mean:
-      - "HSS subscriber profiles are incomplete — this is a TRANSPORT issue, not a data issue"
-      - "Diameter Cx failures — the Diameter path is separate from the Gm SIP path"
+      - >
+        cdp:timeout at I-CSCF means HSS is the root cause. Diameter timeouts
+        can be a cascading symptom of latency or failure ANYWHERE upstream
+        on the SIP signaling chain. The Diameter path between I-CSCF and HSS
+        may be perfectly healthy while the overall SIP transaction times out
+        due to delays elsewhere.
+      - >
+        The component reporting the error is the component with the problem.
+        In a sequential signaling chain, symptoms propagate: a slow P-CSCF
+        causes timeouts reported at I-CSCF; a slow I-CSCF causes stalls
+        reported at S-CSCF. Always probe each component independently.
 
     diagnostic_approach:
-      - tool: measure_rtt
-        args: {container: "e2e_ue1", target_ip: "172.22.0.21"}
-        purpose: "Measure actual RTT to P-CSCF — elevated RTT confirms transport latency"
+      - step: "Identify the failure domain"
+        purpose: "Confirm IMS signaling chain is degraded (registration storm, timeouts, Diameter failures)"
+        tools: [get_nf_metrics, compare_to_baseline]
         priority: 1
-      - tool: get_nf_metrics
-        purpose: "Check tmx:active_transactions at P-CSCF"
+      - step: "Probe each IMS component independently with measure_rtt"
+        purpose: >
+          Run measure_rtt FROM each IMS component to its neighbors to find
+          which component has elevated egress latency. The component with
+          abnormal RTT is the bottleneck:
+            - measure_rtt(pcscf, icscf_ip) — tests P-CSCF egress
+            - measure_rtt(icscf, scscf_ip) — tests I-CSCF egress
+            - measure_rtt(icscf, pyhss_ip) — tests I-CSCF to HSS path
+            - measure_rtt(scscf, pyhss_ip) — tests S-CSCF to HSS path
+          Normal RTT is <1ms. Elevated RTT (>10ms) = that component's
+          egress is the bottleneck.
+        tools: [measure_rtt]
         priority: 2
-      - tool: read_container_logs
-        args: {container: "pcscf", grep: "timeout"}
-        purpose: "Confirm SIP transaction timeouts"
+      - step: "Check process health on the suspected component"
+        purpose: >
+          If RTT is normal everywhere, the problem may be application-level
+          (process hang, overload, database slow). Check:
+            - check_process_listeners on the suspected component
+            - read_container_logs for errors, timeouts, or resource warnings
+            - run_kamcmd for Kamailio internal state (if applicable)
+        tools: [check_process_listeners, read_container_logs, run_kamcmd]
         priority: 3
+      - step: "Check HSS specifically if Diameter timeouts are present"
+        purpose: >
+          If cdp:timeout > 0 at I-CSCF or S-CSCF AND all RTTs are normal,
+          the HSS application may be slow or unresponsive. Check pyhss logs
+          and process state.
+        tools: [read_container_logs, check_process_listeners]
+        priority: 4
 
     key_diagnostic_signal:
-      - "Kamailio T1 timer is 500ms — latency at or above this threshold causes SIP timeouts"
-      - "Accumulated active_transactions with timeout errors = classic latency symptom"
+      - "Registration retransmission storm (pcscf register rate >> normal) indicates SIP transactions are failing across the chain"
+      - "Kamailio T1 timer is 500ms — latency at or above this on ANY hop breaks SIP"
+      - "The component with elevated measure_rtt egress is the bottleneck — NOT necessarily the component reporting the timeout"
+      - "If all RTTs are normal, the problem is application-level (process hang, overload, database) — check logs and process state"
 
   scscf_unreachable:
     description: "S-CSCF unreachable — IMS registration and call control stops."
@@ -355,19 +413,47 @@ causal_chains:
     does_NOT_mean:
       - "I-CSCF or S-CSCF has a bug — they are waiting for a response that never comes"
       - "SIP signaling is broken — SIP transport may be fine, it's the backend query that fails"
+      - >
+        cdp:timeout at I-CSCF necessarily means HSS is the root cause. Diameter
+        timeouts can be a cascading symptom of problems ANYWHERE on the IMS
+        signaling chain (P-CSCF latency, I-CSCF overload, network issues).
+        Before concluding HSS is the cause, rule out upstream bottlenecks by
+        probing each component with measure_rtt. See ims_signaling_chain_degraded
+        for the systematic diagnostic approach.
 
     diagnostic_approach:
-      - tool: run_kamcmd
-        args: {container: "icscf", command: "cdp.list_peers"}
-        purpose: "Check Diameter peer state and connection health"
-        priority: 1
       - tool: measure_rtt
         args: {container: "icscf", target_ip: "172.22.0.18"}
-        purpose: "Check basic connectivity to HSS"
+        purpose: "Check connectivity from I-CSCF to HSS — elevated RTT or loss confirms transport issue to HSS"
+        priority: 1
+      - tool: run_kamcmd
+        args: {container: "icscf", command: "cdp.list_peers"}
+        purpose: "Check Diameter peer state and connection health to HSS"
         priority: 2
-      - tool: get_nf_metrics
-        purpose: "Check cdp:timeout counters at I-CSCF and S-CSCF"
+      - tool: read_container_logs
+        args: {container: "pyhss", grep: "error"}
+        purpose: "Check HSS application logs for errors or unresponsiveness"
         priority: 3
+      - tool: check_process_listeners
+        args: {container: "pyhss"}
+        purpose: "Verify HSS Diameter process is running and listening"
+        priority: 4
+
+    hypothesis_testing: >
+      BEFORE concluding HSS is the root cause, generate and test these
+      hypotheses:
+        Hypothesis A: HSS is genuinely unreachable or broken.
+          Test: measure_rtt(icscf, pyhss_ip). If loss or elevated RTT → transport issue.
+                read_container_logs(pyhss). If errors → application issue.
+                check_process_listeners(pyhss). If no Diameter listener → process crashed.
+        Hypothesis B: The Diameter timeouts are a CASCADING symptom of an
+          upstream IMS signaling chain problem (see ims_signaling_chain_degraded).
+          Test: measure_rtt FROM each IMS component (pcscf, icscf, scscf).
+                If any has elevated egress RTT → that component is the bottleneck,
+                not HSS. Check register_rate at pcscf — a retransmission storm
+                indicates the chain is degraded, not just the HSS.
+      Only conclude hss_unreachable if Hypothesis A is confirmed AND
+      Hypothesis B is ruled out.
 
   ims_signaling_partition:
     description: "P-CSCF isolated from I-CSCF and S-CSCF — IMS SIP signaling path severed."

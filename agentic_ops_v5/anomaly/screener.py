@@ -52,22 +52,40 @@ class AnomalyReport:
 
     def to_prompt_text(self) -> str:
         """Render as text suitable for injection into the NetworkAnalyst prompt."""
-        if not self.flags:
+        if self.overall_score < 0.5 and not self.flags:
             return "No anomalies detected by the statistical screener."
 
-        lines = [
-            "The following metrics were flagged as anomalous by the statistical "
-            "anomaly detector. These MUST be reflected in your layer ratings:\n",
-            "| Component | Metric | Current | Learned Normal | Severity |",
-            "|-----------|--------|---------|---------------|----------|",
-        ]
-        for f in sorted(self.flags, key=lambda x: -x.anomaly_score):
-            curr = f"{f.current:.2f}" if isinstance(f.current, float) else str(f.current)
-            norm = f"{f.learned_normal:.2f}" if isinstance(f.learned_normal, float) else str(f.learned_normal)
-            lines.append(f"| {f.component} | {f.metric} | {curr} | {norm} | {f.severity} |")
+        lines = []
 
-        lines.append(f"\nOverall anomaly score: {self.overall_score:.2f} "
-                      f"(trained on {self.training_samples} healthy snapshots)")
+        if self.overall_score >= 0.5:
+            lines.append(
+                f"**ANOMALY DETECTED.** Overall anomaly score: {self.overall_score:.2f} "
+                f"(threshold: 0.70, trained on {self.training_samples} healthy snapshots). "
+                f"The current metric pattern is statistically different from the learned "
+                f"healthy baseline. Something in the network has changed."
+            )
+            lines.append("")
+
+        if self.flags:
+            lines.append(
+                "The following specific metrics were flagged as the top contributors "
+                "to the anomaly. These MUST be reflected in your layer ratings:\n"
+            )
+            lines.append("| Component | Metric | Current | Learned Normal | Severity |")
+            lines.append("|-----------|--------|---------|---------------|----------|")
+            for f in sorted(self.flags, key=lambda x: -x.anomaly_score):
+                curr = f"{f.current:.2f}" if isinstance(f.current, float) else str(f.current)
+                norm = f"{f.learned_normal:.2f}" if isinstance(f.learned_normal, float) else str(f.learned_normal)
+                lines.append(f"| {f.component} | {f.metric} | {curr} | {norm} | {f.severity} |")
+        else:
+            lines.append(
+                "No single metric dominates the anomaly — the deviation is spread "
+                "across multiple features. Perform a systematic comparison of ALL "
+                "current metric values against their expected baselines. Pay special "
+                "attention to counter rates (REGISTER rates, reply rates, transaction "
+                "counts) and Diameter response times across IMS components."
+            )
+
         return "\n".join(lines)
 
     def to_dict_list(self) -> list[dict[str, Any]]:
@@ -202,40 +220,49 @@ class AnomalyScreener:
         features: dict[str, float],
         overall_score: float,
     ) -> list[AnomalyFlag]:
-        """Identify which features contribute most to the anomaly score.
+        """Identify which features deviate most from their learned normal.
 
-        Uses leave-one-out: for each feature, replace it with its learned
-        mean and re-score. Features whose removal drops the score most
-        are the biggest contributors.
+        Uses two complementary approaches:
+        1. Deviation-based: rank features by how far they are from their
+           learned mean (normalized by the training standard deviation).
+        2. Leave-one-out: for each deviating feature, measure how much
+           removing it drops the overall anomaly score.
+
+        Reports the top features by deviation, regardless of leave-one-out
+        contribution — because in multivariate anomalies, no single feature
+        may explain the overall score, but the deviations are still real.
         """
-        flags: list[AnomalyFlag] = []
+        candidates: list[tuple[float, str, float, float]] = []  # (deviation, key, current, mean)
 
         for key, current_value in features.items():
-            # Get learned normal for this feature
             mean_values = self._feature_means.get(key, [])
             if not mean_values:
                 continue
             learned_mean = sum(mean_values) / len(mean_values)
 
-            # Skip features that haven't changed from normal
-            if abs(current_value - learned_mean) < 0.01:
-                continue
+            # Compute deviation: how many "training standard deviations" away
+            std_values = mean_values
+            if len(std_values) >= 2:
+                import statistics
+                std = statistics.stdev(std_values)
+            else:
+                std = 0.0
+            # Use at least 0.1 as the std to avoid division by zero
+            effective_std = max(std, 0.1)
+            deviation = abs(current_value - learned_mean) / effective_std
 
-            # Leave-one-out: replace this feature with its mean, re-score
-            modified = dict(features)
-            modified[key] = learned_mean
-            reduced_score = self._model.score_one(modified)
+            if deviation > 1.0:  # more than 1 std away from mean
+                candidates.append((deviation, key, current_value, learned_mean))
 
-            # Contribution = how much the score drops when this feature is "fixed"
-            contribution = overall_score - reduced_score
+        # Sort by deviation (largest first), take top 10
+        candidates.sort(key=lambda x: -x[0])
+        flags: list[AnomalyFlag] = []
 
-            if contribution > 0.05:  # meaningful contribution
-                # Parse component from feature key: "pcscf.metric_name" → "pcscf"
+        for deviation, key, current_value, learned_mean in candidates[:10]:
                 parts = key.split(".", 1)
                 component = parts[0] if len(parts) > 1 else "unknown"
                 metric_name = parts[1] if len(parts) > 1 else key
 
-                # Determine direction
                 if current_value > learned_mean * 1.5:
                     direction = "spike"
                 elif current_value < learned_mean * 0.5 and learned_mean > 0:
@@ -243,10 +270,10 @@ class AnomalyScreener:
                 else:
                     direction = "shift"
 
-                # Severity based on contribution
-                if contribution > 0.2:
+                # Severity based on deviation from mean
+                if deviation > 5.0:
                     severity = "HIGH"
-                elif contribution > 0.1:
+                elif deviation > 2.0:
                     severity = "MEDIUM"
                 else:
                     severity = "LOW"
@@ -256,7 +283,7 @@ class AnomalyScreener:
                     component=component,
                     current=round(current_value, 4),
                     learned_normal=round(learned_mean, 4),
-                    anomaly_score=round(contribution, 3),
+                    anomaly_score=round(deviation, 3),
                     severity=severity,
                     direction=direction,
                 ))

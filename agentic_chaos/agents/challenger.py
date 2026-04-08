@@ -168,6 +168,7 @@ class ChallengeAgent(BaseAgent):
             "score": score,
             "time_to_diagnosis_seconds": round(elapsed, 1),
             "token_usage": token_usage,
+            "anomaly_report": diagnosis_dict.get("_anomaly_report", ""),
             "network_analysis": diagnosis_dict.get("_network_analysis", ""),
             "pattern_match": diagnosis_dict.get("_pattern_match", ""),
             "investigation_instruction": diagnosis_dict.get("_investigation_instruction", ""),
@@ -245,6 +246,7 @@ class ChallengeAgent(BaseAgent):
     async def _run_rca_agent(
         self, question: str, agent_version: str = "v1.5",
         anomaly_window_hint_seconds: int = 300,
+        metric_snapshots: list | None = None,
     ) -> dict:
         """Run the specified troubleshooting agent and return its diagnosis."""
         ops_path = str(_REPO_ROOT)
@@ -255,6 +257,7 @@ class ChallengeAgent(BaseAgent):
             return await self._run_adk_agent(
                 question, agent_version,
                 anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+                metric_snapshots=metric_snapshots,
             )
         return await self._run_v15_agent(question)
 
@@ -336,6 +339,7 @@ class ChallengeAgent(BaseAgent):
         return {
             "_raw_diagnosis": diagnosis_raw,
             "_token_usage": token_usage,
+            "_anomaly_report": result.get("anomaly_report", ""),
             "_network_analysis": result.get("network_analysis", ""),
             "_pattern_match": result.get("pattern_match", ""),
             "_investigation_instruction": result.get("investigation_instruction", ""),

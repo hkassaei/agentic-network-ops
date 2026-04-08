@@ -68,7 +68,7 @@ pcscf_latency = Scenario(
             fault_type="network_latency",
             target="pcscf",
             params={"delay_ms": 2000, "jitter_ms": 50},
-            ttl_seconds=300,
+            ttl_seconds=600,
         ),
     ],
     expected_symptoms=[

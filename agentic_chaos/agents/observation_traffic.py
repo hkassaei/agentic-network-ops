@@ -102,7 +102,9 @@ class ObservationTrafficAgent(BaseAgent):
         ims_domain = _get_ims_domain(env)
         callee_imsi = env.get("UE2_IMSI", "001011234567892")
 
-        # Run traffic generation and metric collection concurrently
+        # Run traffic generation and metric collection concurrently.
+        # Both tasks are wrapped in try/except to prevent crashes from
+        # killing the entire pipeline (which would skip the ChallengeAgent).
         snapshots: list[dict] = []
         traffic_task = asyncio.create_task(
             self._generate_traffic(duration, ims_domain, callee_imsi)
@@ -111,7 +113,11 @@ class ObservationTrafficAgent(BaseAgent):
             self._collect_metrics(duration, snapshots)
         )
 
-        await asyncio.gather(traffic_task, collector_task)
+        results = await asyncio.gather(traffic_task, collector_task, return_exceptions=True)
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                task_name = "traffic generation" if i == 0 else "metric collection"
+                log.warning("ObservationTrafficAgent: %s failed: %s", task_name, r)
 
         log.info("Observation traffic complete: %d metric snapshots collected "
                  "over %ds", len(snapshots), duration)

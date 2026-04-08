@@ -351,9 +351,10 @@ async def investigate(
                 finished_at=time.time(),
                 duration_ms=phase0_duration,
             )
+            n_flags = len(best_report.flags) if best_report else 0
+            best_score = best_report.overall_score if best_report else 0.0
             phase0_trace.output_summary = (
-                f"{len(best_report.flags) if best_report else 0} anomalies flagged "
-                f"(score={best_report.overall_score:.3f if best_report else 0})"
+                f"{n_flags} anomalies flagged (score={best_score:.3f})"
             )
             all_phases.append(phase0_trace)
             invocation_order.append("AnomalyScreener")
@@ -375,8 +376,8 @@ async def investigate(
         log.info("anomaly_trainer module not available — Phase 0 skipped")
         state["anomaly_report"] = "Anomaly screening not available."
     except Exception as e:
-        log.warning("AnomalyScreener failed (non-fatal): %s", e)
-        state["anomaly_report"] = "Anomaly screening unavailable."
+        log.warning("AnomalyScreener failed (non-fatal): %s", e, exc_info=True)
+        state["anomaly_report"] = f"Anomaly screening failed: {e}"
 
     # =================================================================
     # Phase 1: Network Analyst (LLM, informed by anomaly screening)
@@ -495,6 +496,8 @@ async def investigate(
     # Assemble result
     # =================================================================
     result = {
+        "anomaly_report": state.get("anomaly_report"),
+        "anomaly_flags": state.get("anomaly_flags"),
         "network_analysis": state.get("network_analysis"),
         "pattern_match": state.get("pattern_match"),
         "investigation_instruction": state.get("investigation_instruction"),

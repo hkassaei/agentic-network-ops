@@ -74,7 +74,22 @@ Call ALL of the following tools. Do not produce output until every one has been 
 1. `get_network_topology` — Shows all 3GPP interfaces and whether each link is ACTIVE or INACTIVE. INACTIVE links are the strongest signal. (Instant — no window.)
 2. `get_network_status` — Container status (running/exited/absent) and stack phase. (Instant.)
 3. `get_nf_metrics` — Full metrics snapshot across Prometheus (5G core), kamcmd (IMS Kamailio), RTPEngine, PyHSS, MongoDB. (Instant snapshot.)
-4. `get_dp_quality_gauges(window_seconds=60)` — Real-time data plane quality over the last 60 seconds (RTPEngine pps/MOS/loss/jitter, UPF in/out rates). Start with 60s. Widen per the temporal strategy if nothing anomalous appears. Critical for detecting voice quality degradation and data plane failures.
+4. `get_dp_quality_gauges(window_seconds={event_lookback_seconds})` — Data plane quality over the event window.
+
+## Step 1b — Probe transport from screener-flagged components (MANDATORY if anomalies detected)
+
+If the anomaly screener flagged ANY component as HIGH severity, you MUST immediately run `measure_rtt` FROM that component to its neighbors. This captures transport-layer evidence while the condition may still be active. **Do NOT defer this to the Investigator** — by the time the Investigator runs, the condition may have cleared.
+
+For each HIGH-severity component flagged by the screener:
+- Run `measure_rtt(flagged_component, neighbor_ip)` for each direct neighbor in the topology
+- Normal Docker bridge RTT is <1ms. RTT >10ms is ABNORMAL. RTT >500ms is CATASTROPHIC for SIP.
+- Record the results in your evidence. These RTT measurements are the most time-sensitive evidence you can collect.
+
+Example: If the screener flags `pcscf` as HIGH, run:
+- `measure_rtt("pcscf", "172.22.0.19")` — pcscf to icscf
+- `measure_rtt("pcscf", "172.22.0.16")` — pcscf to rtpengine
+
+Include the RTT results in your layer evidence and suspect reasoning. If RTT from a component is elevated, that component has a transport-layer problem and should be your PRIMARY suspect regardless of what other metrics show.
 
 These four calls are non-negotiable. They establish the factual baseline for your assessment.
 

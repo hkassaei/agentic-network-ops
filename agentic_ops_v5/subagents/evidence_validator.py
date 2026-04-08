@@ -230,18 +230,36 @@ def _check_claims(
 def _determine_confidence_and_verdict(
     investigator_tool_calls: int,
     investigator_citations: int,
+    network_analyst_tool_calls: int,
     total_citations: int,
     unmatched: int,
 ) -> tuple[str, str]:
-    """Derive (investigator_confidence, verdict) from the aggregate stats."""
+    """Derive (investigator_confidence, verdict) from the aggregate stats.
+
+    The confidence reflects how trustworthy the INVESTIGATOR's output is.
+    The NetworkAnalyst's tool usage is considered separately — even if the
+    Investigator fails to cite evidence, the NetworkAnalyst's findings
+    (which called tools like measure_rtt) are still usable by the Synthesis
+    agent. The verdict distinguishes between:
+      - "clean" — citations verified, investigation trustworthy
+      - "has_warnings" — some issues, but NetworkAnalyst data is usable
+      - "severe" — no investigation was performed at all
+    """
     # Layer 1: zero tool calls — Investigator didn't investigate at all
     if investigator_tool_calls == 0:
+        # If NetworkAnalyst did substantial work, downgrade to has_warnings
+        # (not severe) — the analyst's findings are still usable
+        if network_analyst_tool_calls >= 5:
+            return "low", "has_warnings"
         return "none", "severe"
 
     # Layer 2: Investigator called tools but produced zero formal citations.
-    # The investigation is unverifiable — tool results exist but the
-    # Investigator's narrative doesn't reference them traceably.
+    # The Investigator's narrative is unverifiable, but if the NetworkAnalyst
+    # did solid work (including measure_rtt), the overall confidence is
+    # medium — the analyst's findings can anchor the diagnosis.
     if investigator_citations == 0 and investigator_tool_calls > 0:
+        if network_analyst_tool_calls >= 5:
+            return "medium", "has_warnings"
         return "low", "has_warnings"
 
     # Layer 3: normal citation matching
@@ -298,9 +316,11 @@ def validate(
     inv_zero_calls = inv_tool_count == 0
 
     inv_citation_count = len(inv_checks)
+    na_tool_count = len(na_tools)
     confidence, verdict = _determine_confidence_and_verdict(
         investigator_tool_calls=inv_tool_count,
         investigator_citations=inv_citation_count,
+        network_analyst_tool_calls=na_tool_count,
         total_citations=total,
         unmatched=unmatched,
     )
@@ -324,13 +344,32 @@ def validate(
         f"Investigator: {inv_citation_count} citations from {inv_tool_count} tool calls."
     )
     lines.append(f"Verdict: {verdict}. Investigator confidence: {confidence}.")
+
+    # List all tools called per phase and their citation status
+    lines.append("")
+    lines.append("Tool calls vs. citations:")
+    for phase_name in ["NetworkAnalystAgent", "InvestigatorAgent"]:
+        tools_called = sorted(tools_per_phase.get(phase_name, set()))
+        if not tools_called:
+            continue
+        phase_claims = na_checks if phase_name == "NetworkAnalystAgent" else inv_checks
+        cited_tools = {c.claimed_tool for c in phase_claims}
+        lines.append(f"  {phase_name}:")
+        for t in tools_called:
+            if t in cited_tools:
+                matched_claims = [c for c in phase_claims if c.claimed_tool == t]
+                lines.append(f"    ✓ {t} — called AND cited ({len(matched_claims)}x)")
+            else:
+                lines.append(f"    ✗ {t} — called but NOT cited in output")
+
     if unmatched > 0:
-        unmatched_examples = [c for c in (na_checks + inv_checks) if not c.matched][:3]
-        lines.append("Unmatched citations (sample):")
-        for c in unmatched_examples:
-            lines.append(
-                f"  - [{c.source_phase}] claimed '{c.claimed_tool}' — {c.match_reason}"
-            )
+        lines.append("")
+        lines.append("Fabricated citations (claimed but tool never called):")
+        for c in (na_checks + inv_checks):
+            if not c.matched:
+                lines.append(
+                    f"  - [{c.source_phase}] '{c.claimed_tool}' — {c.match_reason}"
+                )
 
     summary = "\n".join(lines)
 

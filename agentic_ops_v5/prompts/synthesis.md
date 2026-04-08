@@ -65,17 +65,20 @@ The `recommendation` field should describe what the operator should **investigat
 
 ## Output Format
 
-Produce your response as a structured diagnosis with these fields:
+Produce your response in **plain markdown** (NOT JSON, NOT wrapped in code blocks). Use this exact structure:
 
 ### causes
-For each root cause (rank by probability, most likely first):
-
 - **summary**: One sentence.
-- **timeline**: Chronological steps showing how the failure propagated.
+- **timeline**:
+    1. First event...
+    2. Second event...
 - **root_cause**: The definitive first cause and causal chain.
-- **affected_components**: Which containers/NFs are involved.
+- **affected_components**:
+    - `component_name`: role (Root Cause / Symptomatic / Secondary)
 - **recommendation**: What the operator should investigate or verify next to confirm this diagnosis. Do NOT include remediation commands.
 - **confidence**: high / medium / low — MUST match the Evidence Validation verdict.
 - **explanation**: 3-5 sentences for a NOC engineer. Explain WHY this happened, not just WHAT happened. If the validation verdict is not `clean`, the explanation MUST include the validation-based caveat described above.
+
+**Do NOT wrap your output in ```json``` code blocks. Do NOT produce JSON. Use plain markdown only.**
 
 Be concise. Lead with the root cause. Do not pad with background information the NOC engineer already knows.

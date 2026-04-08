@@ -48,6 +48,8 @@ def create_network_analyst() -> LlmAgent:
             tools.get_network_status,
             tools.get_nf_metrics,
             tools.get_dp_quality_gauges,
+            # Transport probing (Step 1b — probe screener-flagged components)
+            tools.measure_rtt,
             # Ontology comparison (Step 2)
             tools.compare_to_baseline,
             tools.check_stack_rules,

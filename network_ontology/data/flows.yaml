@@ -869,7 +869,9 @@ flows:
           the N4 interface. This installs Packet Detection Rules (PDRs) and
           Forwarding Action Rules (FARs) that tell the UPF how to handle
           packets for this session — which GTP-U tunnel to use, which QFI
-          to apply, and where to forward uplink/downlink traffic.
+          to apply, and where to forward uplink/downlink traffic. The UPF
+          allocates its N3 GTP-U endpoint (IP address and TEID) and returns
+          them in the PFCP Session Establishment Response.
         failure_modes:
           - "UPF unreachable → PFCP timeout, session creation fails"
           - "PFCP association lost → all sessions on that UPF fail"
@@ -878,17 +880,34 @@ flows:
           - "pfcp_sessions_active"
 
       - order: 5
+        from: smf
+        to: amf
+        protocol: SBI
+        interface: Nsmf
+        label: "Session Create Response"
+        description: "SMF returns N2 tunnel info (UPF's TEID and IP) to the AMF."
+        detail: |
+          The SMF sends the Nsmf_PDUSession_CreateSMContext response back
+          to the AMF. This response carries the N2 SM Information —
+          including the UPF's GTP-U tunnel endpoint (IP and TEID) and the
+          QoS flow parameters. The AMF needs this information to instruct
+          the gNB to set up its end of the N3 GTP-U tunnel in the next step.
+        failure_modes:
+          - "SBI timeout → AMF never receives tunnel info, session stalls"
+
+      - order: 6
         from: amf
         to: nr_gnb
         protocol: NGAP
         interface: N2
         label: "N2 PDU Session Resource Setup"
-        description: "AMF sends N2 PDU Session Resource Setup Request to gNB with tunnel info."
+        description: "AMF sends PDU Session Resource Setup Request to gNB with UPF tunnel info."
         detail: |
-          The AMF sends the gNB the GTP-U tunnel endpoint information
-          (UPF's TEID and IP) so the gNB can establish the N3 GTP-U tunnel
-          to the UPF. The gNB allocates radio resources (DRBs) for the
-          PDU session and responds with its own GTP-U endpoint.
+          The AMF sends an NGAP PDU Session Resource Setup Request to the
+          gNB, containing the UPF's GTP-U endpoint (TEID and IP address).
+          The gNB allocates radio resources — a Data Radio Bearer (DRB) —
+          for the PDU session and establishes its end of the N3 GTP-U
+          tunnel toward the UPF.
         failure_modes:
           - "gNB resource exhaustion → session setup rejected"
           - "N2 link flap → NGAP transaction timeout"
@@ -896,7 +915,38 @@ flows:
           - "ran_ue"
           - "gnb"
 
-      - order: 6
+      - order: 7
+        from: nr_gnb
+        to: amf
+        protocol: NGAP
+        interface: N2
+        label: "N2 PDU Session Resource Setup Response"
+        description: "gNB returns its own GTP-U endpoint (TEID and IP) to the AMF."
+        detail: |
+          The gNB responds with an NGAP PDU Session Resource Setup Response
+          containing its own N3 GTP-U tunnel endpoint (IP and TEID). The AMF
+          forwards this information to the SMF so the SMF can complete the
+          bidirectional tunnel by updating the UPF.
+        failure_modes:
+          - "gNB DRB setup failure → response carries failure cause"
+
+      - order: 8
+        from: amf
+        to: smf
+        protocol: SBI
+        interface: Nsmf
+        label: "N2 Info to SMF (gNB tunnel)"
+        description: "AMF forwards the gNB's GTP-U endpoint to the SMF."
+        detail: |
+          The AMF sends Nsmf_PDUSession_UpdateSMContext to the SMF with
+          the N2 SM Information received from the gNB — specifically the
+          gNB's GTP-U tunnel endpoint. The SMF now has both ends of the
+          N3 tunnel (UPF endpoint from step 4, gNB endpoint from this step)
+          and can finalize the user plane path.
+        failure_modes:
+          - "SBI timeout → SMF never receives gNB endpoint, tunnel incomplete"
+
+      - order: 9
         from: smf
         to: upf
         protocol: PFCP
@@ -904,15 +954,15 @@ flows:
         label: "PFCP Session Modification (gNB tunnel)"
         description: "SMF updates the UPF with the gNB's GTP-U endpoint to complete the N3 tunnel."
         detail: |
-          After receiving the gNB's GTP-U endpoint from the AMF, the SMF
-          sends a PFCP Session Modification Request to the UPF. This updates
-          the FARs with the gNB's tunnel info, completing the bidirectional
-          N3 GTP-U tunnel: gNB ←→ UPF. Data can now flow.
+          The SMF sends a PFCP Session Modification Request to the UPF. This
+          updates the FARs with the gNB's tunnel info (IP and TEID), completing
+          the bidirectional N3 GTP-U tunnel: gNB ←→ UPF. Data can now flow
+          end-to-end between the UE and the data network.
         metrics_to_watch:
           - "fivegs_ep_n3_gtp_indatapktn3upf"
           - "fivegs_ep_n3_gtp_outdatapktn3upf"
 
-      - order: 7
+      - order: 10
         from: amf
         to: e2e_ue1
         via: [nr_gnb]

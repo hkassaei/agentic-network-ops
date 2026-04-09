@@ -635,7 +635,7 @@ class OntologyClient:
                 MATCH (f:Flow)
                 OPTIONAL MATCH (f)-[:HAS_STEP]->(fs:FlowStep)
                 RETURN f, count(fs) AS step_count
-                ORDER BY f.name
+                ORDER BY coalesce(f.display_order, 99), f.name
             """)
             return [
                 {**dict(record["f"]), "step_count": record["step_count"]}

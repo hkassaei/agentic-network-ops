@@ -477,6 +477,7 @@ def load_flows(tx):
                 f.description = $description,
                 f.use_case = $use_case,
                 f.trigger = $trigger,
+                f.display_order = $display_order,
                 f.preconditions = $preconditions,
                 f.outcome_success = $outcome_success,
                 f.outcome_metrics = $outcome_metrics
@@ -486,6 +487,7 @@ def load_flows(tx):
             description=flow.get("description", ""),
             use_case=flow.get("use_case", ""),
             trigger=flow.get("trigger", ""),
+            display_order=flow.get("display_order", 99),
             preconditions=flow.get("preconditions", []),
             outcome_success=flow.get("outcome", {}).get("success", ""),
             outcome_metrics=flow.get("outcome", {}).get("observable_metrics", []),

@@ -13,11 +13,236 @@
 flows:
 
   # =========================================================================
+  # 5G UE Registration (NAS)
+  # =========================================================================
+
+  ue_registration:
+    name: "UE Registration"
+    display_order: 1
+    description: "UE registers with the 5G core network. Establishes NAS security, authenticates via AUSF/UDM, and receives a 5G-GUTI for subsequent procedures."
+    use_case: 5g_core
+    trigger: "UE powers on, enters coverage, or re-registration timer fires"
+    preconditions:
+      - "gNB connected to AMF (N2/SCTP active)"
+      - "USIM provisioned with SUPI in UDR/MongoDB"
+
+    steps:
+      - order: 1
+        from: e2e_ue1
+        to: nr_gnb
+        protocol: NR-Uu
+        interface: Uu
+        label: "RRC Connection Setup"
+        description: "UE establishes radio connection with the gNB over the NR air interface."
+        detail: |
+          The UE performs cell search, synchronizes to the gNB's SSB
+          (Synchronization Signal Block), and initiates the Random Access
+          procedure (RACH). After the 4-step RACH completes, the gNB
+          sends RRCSetup and the UE responds with RRCSetupComplete,
+          which piggybacks the NAS Registration Request.
+        failure_modes:
+          - "No radio coverage → UE stays in RRC_IDLE, never attempts registration"
+          - "RACH failure → UE retries with backoff, ran_ue stays at 0"
+          - "gNB overloaded → RRC reject with wait timer"
+        metrics_to_watch: [ran_ue, gnb]
+
+      - order: 2
+        from: nr_gnb
+        to: amf
+        protocol: NGAP
+        interface: N2
+        label: "Initial UE Message"
+        description: "gNB forwards the NAS Registration Request to the AMF over NGAP."
+        detail: |
+          The gNB wraps the NAS Registration Request in an NGAP
+          InitialUEMessage and sends it to the AMF over the N2 (SCTP)
+          interface. The message includes the UE's NAS identity (SUCI —
+          the encrypted form of the SUPI) and the registration type
+          (initial, mobility, or periodic). The AMF selects itself as
+          the serving AMF based on the GUAMI and tracking area.
+        failure_modes:
+          - "N2 SCTP link down → gNB cannot reach AMF, logs 'SCTP connection refused'"
+          - "AMF overloaded → NGAP reject with congestion cause"
+          - "Wrong PLMN → AMF rejects with 'PLMN not allowed'"
+        metrics_to_watch: [amf_session, ran_ue]
+
+      - order: 3
+        from: amf
+        to: ausf
+        via: [scp]
+        protocol: SBI
+        interface: Nausf
+        label: "Authentication Request"
+        description: "AMF initiates 5G-AKA authentication by requesting auth vectors from AUSF."
+        detail: |
+          The AMF sends an Nausf_UEAuthentication_Authenticate request
+          to the AUSF via the SCP. The request carries the SUCI (or SUPI
+          if already resolved). The AUSF is the authentication anchor —
+          it orchestrates the 5G-AKA protocol and ensures the UE is who
+          it claims to be. The SCP routes the SBI request based on NRF
+          service discovery.
+        failure_modes:
+          - "AUSF unreachable → AMF auth timeout, registration fails"
+          - "SCP routing failure → SBI request never reaches AUSF"
+        metrics_to_watch: [amf_session, fivegs_amffunction_amf_authfail]
+
+      - order: 4
+        from: ausf
+        to: udm
+        via: [scp]
+        protocol: SBI
+        interface: Nudm
+        label: "Get Authentication Data"
+        description: "AUSF requests authentication vectors from UDM."
+        detail: |
+          The AUSF sends Nudm_UEAuthentication_Get to the UDM. The UDM
+          retrieves the subscriber's authentication credentials from the
+          UDR (which reads from MongoDB) and generates the 5G-AKA
+          authentication vector (RAND, AUTN, XRES*, KAUSF).
+        failure_modes:
+          - "UDM unreachable → AUSF returns auth failure to AMF"
+          - "Subscriber not found in UDR/MongoDB → auth rejected"
+          - "MongoDB down → UDR cannot retrieve credentials"
+        metrics_to_watch: [fivegs_amffunction_amf_authfail]
+
+      - order: 5
+        from: ausf
+        to: amf
+        via: [scp]
+        protocol: SBI
+        interface: Nausf
+        label: "Authentication Vector Response"
+        description: "AUSF returns the auth challenge (RAND, AUTN) to the AMF."
+        detail: |
+          The AUSF stores the expected response (XRES*) locally and
+          returns the authentication vector — RAND (random challenge)
+          and AUTN (authentication token) — to the AMF in the
+          Nausf_UEAuthentication_Authenticate response. The AMF will
+          relay this challenge to the UE in the next step.
+        failure_modes:
+          - "SCP timeout on the return path → AMF never receives the vector"
+
+      - order: 6
+        from: amf
+        to: e2e_ue1
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "Authentication Challenge"
+        description: "AMF sends NAS Authentication Request with RAND and AUTN to the UE."
+        detail: |
+          The AMF sends a NAS Authentication Request containing the
+          random challenge (RAND) and authentication token (AUTN) to
+          the UE via the gNB. The UE must verify AUTN to prove the
+          network is legitimate (mutual authentication) and compute
+          its response (RES*).
+        failure_modes:
+          - "Radio link lost during delivery → procedure aborted, UE retries"
+        metrics_to_watch: [fivegs_amffunction_amf_authfail]
+
+      - order: 7
+        from: e2e_ue1
+        to: amf
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "Authentication Response"
+        description: "UE sends NAS Authentication Response with RES* back to AMF."
+        detail: |
+          The UE's USIM verifies AUTN — this proves the network is
+          legitimate (mutual authentication). It then computes the
+          response RES* from RAND using the shared secret K, and
+          derives the NAS security keys (KAMF). The UE sends back a
+          NAS Authentication Response containing RES* via the gNB.
+        failure_modes:
+          - "AUTN verification fails at UE → UE sends Authentication Failure (MAC failure)"
+          - "USIM not provisioned → UE cannot compute response"
+          - "Sync failure → UE sends Authentication Failure with AUTS for re-synchronization"
+        metrics_to_watch: [fivegs_amffunction_amf_authfail]
+
+      - order: 8
+        from: amf
+        to: ausf
+        via: [scp]
+        protocol: SBI
+        interface: Nausf
+        label: "Authentication Confirmation"
+        description: "AMF forwards the UE's RES* to AUSF for verification."
+        detail: |
+          The AMF sends Nausf_UEAuthentication_Authenticate with the
+          UE's response (RES*) to the AUSF. The AUSF compares RES*
+          against the stored XRES*. If they match, authentication
+          succeeds and the AUSF derives the anchor key KSEAF, which
+          is returned to the AMF. The AMF then derives KAMF and
+          initiates NAS Security Mode Command to activate encryption
+          and integrity protection on the NAS signaling.
+        failure_modes:
+          - "RES* mismatch → AUSF returns auth failure, fivegs_amffunction_amf_authfail increments"
+          - "Sync failure → UE sends AUTS for re-synchronization"
+        metrics_to_watch: [fivegs_amffunction_amf_authfail, amf_session]
+
+      - order: 9
+        from: amf
+        to: udm
+        via: [scp]
+        protocol: SBI
+        interface: Nudm
+        label: "Registration Context Update"
+        description: "AMF registers itself as the serving AMF for this UE at the UDM."
+        detail: |
+          The AMF sends Nudm_UECM_Registration to the UDM to record
+          that this AMF is now serving this UE. The UDM stores the
+          AMF address in the UE's context (in UDR/MongoDB). If the UE
+          was previously registered at a different AMF, the UDM
+          notifies the old AMF to release its context. The AMF also
+          retrieves the UE's subscription data (Access and Mobility
+          Subscription Data) via Nudm_SDM_Get.
+        failure_modes:
+          - "UDM unreachable → AMF cannot complete registration"
+          - "MongoDB write failure → context not persisted, stale on failover"
+        metrics_to_watch: [amf_session]
+
+      - order: 10
+        from: amf
+        to: e2e_ue1
+        via: [nr_gnb]
+        protocol: NAS
+        interface: N1
+        label: "Registration Accept"
+        description: "AMF sends NAS Registration Accept with 5G-GUTI to the UE."
+        detail: |
+          The AMF sends a NAS Registration Accept message to the UE,
+          containing the assigned 5G-GUTI (Globally Unique Temporary
+          Identifier), the allowed NSSAI (network slices), the
+          registration area (list of tracking areas), and the periodic
+          registration timer (T3512). The UE stores the 5G-GUTI and
+          responds with Registration Complete. At this point, the UE is
+          fully registered with the 5G core and can request PDU sessions.
+
+          After registration, amf_session and ran_ue counters increment
+          — these are the primary indicators of a successful registration.
+        failure_modes:
+          - "Radio link failure before Accept delivered → UE must retry"
+          - "AMF crash between auth and accept → UE times out and re-registers"
+        metrics_to_watch:
+          - amf_session
+          - ran_ue
+          - gnb
+
+    outcome:
+      success: "UE is 5G-registered with a 5G-GUTI. NAS security is active. AMF and UDM hold the UE's context."
+      observable_metrics:
+        - "ran_ue increases by 1"
+        - "amf_session increases by 1 (per PDN)"
+        - "gnb stays at 1 (gNB remains connected)"
+
+  # =========================================================================
   # IMS Registration
   # =========================================================================
 
   ims_registration:
     name: "IMS Registration"
+    display_order: 3
     description: "UE registers with the IMS network for voice services. Establishes SIP identity, authenticates via HSS, and sets up QoS policy."
     use_case: vonr
     trigger: "UE powers on, or re-registration timer fires"
@@ -240,6 +465,7 @@ flows:
 
   vonr_call_setup:
     name: "VoNR Call Setup"
+    display_order: 5
     description: "UE1 initiates a voice call to UE2 over the IMS network. Establishes SIP dialog, allocates RTP media path, and sets up dedicated QoS bearers."
     use_case: vonr
     trigger: "User initiates a voice call (pjsua 'm' command)"
@@ -446,6 +672,7 @@ flows:
 
   vonr_call_teardown:
     name: "VoNR Call Teardown"
+    display_order: 6
     description: "One party hangs up, terminating the VoNR voice call. Releases SIP dialog, RTP media, and dedicated QoS bearers."
     use_case: vonr
     trigger: "User hangs up (pjsua 'h' command or BYE from remote)"
@@ -565,6 +792,7 @@ flows:
 
   pdu_session_establishment:
     name: "PDU Session Establishment"
+    display_order: 2
     description: "UE requests a PDU session (data connection) from the 5G core. AMF orchestrates session creation through SMF and UPF, establishing the GTP-U tunnel for user data."
     use_case: 5g_core
     trigger: "UE sends PDU Session Establishment Request (after NAS registration)"
@@ -716,6 +944,7 @@ flows:
 
   ue_deregistration:
     name: "UE Deregistration"
+    display_order: 7
     description: "UE deregisters from the 5G network, releasing all resources: NAS registration, PDU sessions, IMS registration, and associated bearers."
     use_case: 5g_core
     trigger: "UE powers off, or network-initiated deregistration"
@@ -822,6 +1051,7 @@ flows:
 
   diameter_cx_authentication:
     name: "Diameter Cx Authentication"
+    display_order: 4
     description: "Detailed view of the Diameter Cx exchanges between I-CSCF/S-CSCF and HSS during IMS registration. Shows UAR, MAR, and SAR message flows."
     use_case: ims
     trigger: "IMS REGISTER arrives at I-CSCF (part of IMS Registration flow)"

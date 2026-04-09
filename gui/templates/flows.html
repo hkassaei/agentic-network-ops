@@ -7,8 +7,8 @@
 <link rel="stylesheet" href="/static/css/style.css?v=2">
 <script src="/static/lib/d3.v7.min.js"></script>
 <script src="/static/js/common.js?v=2"></script>
-<script src="/static/js/topology.js"></script>
-<script src="/static/js/flow-viewer.js"></script>
+<script src="/static/js/topology.js?v=20260409"></script>
+<script src="/static/js/flow-viewer.js?v=20260409c"></script>
 <style>
   /* Flow-page specific styles */
   .container { display: flex; height: calc(100vh - 49px); }
@@ -36,8 +36,8 @@
   .step-label { color: var(--text); font-weight: 500; }
   .step-proto { color: var(--text-dim); font-size: 11px; }
 
-  .topo-container { flex: 1; position: relative; }
-  .topo-container svg { width: 100%; height: 100%; }
+  .topo-container { flex: 1; position: relative; min-height: 0; overflow: hidden; }
+  .topo-container svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 
   .detail-panel { height: 280px; background: var(--surface); border-top: 1px solid var(--border); padding: 16px 24px; overflow-y: auto; flex-shrink: 0; }
   .detail-panel h3 { font-size: 15px; color: var(--text); margin-bottom: 8px; }
@@ -60,6 +60,24 @@
   .node rect { rx: 6; ry: 6; stroke-width: 2; }
   .node text { font-size: 11px; fill: var(--text); text-anchor: middle; pointer-events: none; }
   .flow-dot { fill: var(--accent); }
+
+  /* View mode toggle */
+  .view-toggle { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 2px; margin-left: 12px; }
+  .vt-btn { font-size: 12px; padding: 4px 12px; border: none; border-radius: 4px; cursor: pointer; background: transparent; color: var(--text-dim); transition: all 0.15s; }
+  .vt-btn:hover { color: var(--text); background: var(--surface2); }
+  .vt-btn.active { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+
+  /* Sequence diagram */
+  .seq-lifeline { stroke: var(--border); stroke-width: 1; stroke-dasharray: 4,4; }
+  .seq-header rect { rx: 6; ry: 6; }
+  .seq-header text { fill: var(--text); font-size: 11px; font-weight: 600; text-anchor: middle; }
+  .seq-arrow-label { font-size: 10px; pointer-events: none; }
+  .seq-step-num { fill: var(--text-dim); font-size: 10px; text-anchor: end; }
+
+  /* Focused topology */
+  .node-hidden { opacity: 0 !important; pointer-events: none; transition: opacity 0.3s; }
+  .node-dimmed { opacity: 0.15 !important; transition: opacity 0.3s; }
+  .node-spotlight { opacity: 1 !important; transition: opacity 0.3s; }
 </style>
 </head>
 <body>
@@ -98,6 +116,11 @@
       <button class="primary" id="btn-play" onclick="togglePlay()">&#9654; Play</button>
       <button id="btn-prev" onclick="stepPrev()">&#9664; Prev</button>
       <button id="btn-next" onclick="stepNext()">Next &#9654;</button>
+      <div class="view-toggle">
+        <button class="vt-btn active" data-mode="topology" onclick="setViewMode('topology')">Topology</button>
+        <button class="vt-btn" data-mode="sequence" onclick="setViewMode('sequence')">Sequence</button>
+        <button class="vt-btn" data-mode="focused" onclick="setViewMode('focused')">Focused</button>
+      </div>
       <span class="spacer"></span>
       <span class="step-counter" id="step-counter">Step 0 / 0</span>
     </div>

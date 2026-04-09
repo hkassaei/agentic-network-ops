@@ -70,16 +70,6 @@ class ChallengeAgent(BaseAgent):
         scenario = ctx.session.state.get("scenario", {})
         agent_version = ctx.session.state.get("agent_version", "v1.5")
 
-        # Check if challenge mode is enabled for this scenario
-        if not scenario.get("challenge_mode", False):
-            yield Event(
-                author=self.name,
-                content=types.Content(
-                    parts=[types.Part(text="Challenge Mode: skipped (not enabled for this scenario)")],
-                ),
-            )
-            return
-
         # Skip if --abort-on-unpropagated was set and the verifier
         # reported the fault didn't manifest. The Healer and Recorder
         # still run after this; only the expensive agent call is skipped.

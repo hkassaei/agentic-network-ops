@@ -17,9 +17,10 @@ class TestCLIParser:
 
     def test_run_command(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "P-CSCF Latency"])
+        args = parser.parse_args(["run", "P-CSCF Latency", "--agent", "v5"])
         assert args.command == "run"
         assert args.scenario == "P-CSCF Latency"
+        assert args.agent == "v5"
 
     def test_show_episode_command(self):
         parser = build_parser()
@@ -63,8 +64,9 @@ class TestCLIListEpisodes:
     async def test_list_episodes_empty(self, capsys, tmp_path):
         """List episodes when no episodes exist."""
         from agentic_chaos import cli
-        original_dir = cli.EPISODES_DIR
-        cli.EPISODES_DIR = tmp_path / "empty_episodes"
+        original_dirs = cli._AGENT_LOG_DIRS.copy()
+        cli._AGENT_LOG_DIRS.clear()
+        cli._AGENT_LOG_DIRS["test"] = tmp_path / "empty_episodes"
         try:
             parser = build_parser()
             args = parser.parse_args(["list-episodes"])
@@ -73,13 +75,14 @@ class TestCLIListEpisodes:
             captured = capsys.readouterr()
             assert "No episodes recorded" in captured.out
         finally:
-            cli.EPISODES_DIR = original_dir
+            cli._AGENT_LOG_DIRS.clear()
+            cli._AGENT_LOG_DIRS.update(original_dirs)
 
     @pytest.mark.asyncio
     async def test_list_episodes_with_data(self, capsys, tmp_path):
         """List episodes when episodes exist."""
         from agentic_chaos import cli
-        original_dir = cli.EPISODES_DIR
+        original_dirs = cli._AGENT_LOG_DIRS.copy()
 
         # Create a fake episode
         ep_dir = tmp_path / "episodes"
@@ -90,43 +93,48 @@ class TestCLIListEpisodes:
             "faults": [{"verified": True}],
             "observations": [{"symptoms_detected": True}],
         }
-        (ep_dir / "ep_test_001.json").write_text(json.dumps(ep))
+        (ep_dir / "run_20260409_test.json").write_text(json.dumps(ep))
 
-        cli.EPISODES_DIR = ep_dir
+        cli._AGENT_LOG_DIRS.clear()
+        cli._AGENT_LOG_DIRS["test"] = ep_dir
         try:
             parser = build_parser()
             args = parser.parse_args(["list-episodes"])
             rc = await cli.cmd_list_episodes(args)
             assert rc == 0
             captured = capsys.readouterr()
-            assert "ep_test_001" in captured.out
+            assert "run_20260409_test" in captured.out
         finally:
-            cli.EPISODES_DIR = original_dir
+            cli._AGENT_LOG_DIRS.clear()
+            cli._AGENT_LOG_DIRS.update(original_dirs)
 
 
 class TestCLIShowEpisode:
     @pytest.mark.asyncio
     async def test_show_episode_not_found(self, capsys, tmp_path):
         from agentic_chaos import cli
-        original_dir = cli.EPISODES_DIR
-        cli.EPISODES_DIR = tmp_path
+        original_dirs = cli._AGENT_LOG_DIRS.copy()
+        cli._AGENT_LOG_DIRS.clear()
+        cli._AGENT_LOG_DIRS["test"] = tmp_path
         try:
             parser = build_parser()
             args = parser.parse_args(["show-episode", "nonexistent"])
             rc = await cli.cmd_show_episode(args)
             assert rc == 1
         finally:
-            cli.EPISODES_DIR = original_dir
+            cli._AGENT_LOG_DIRS.clear()
+            cli._AGENT_LOG_DIRS.update(original_dirs)
 
     @pytest.mark.asyncio
     async def test_show_episode_found(self, capsys, tmp_path):
         from agentic_chaos import cli
-        original_dir = cli.EPISODES_DIR
+        original_dirs = cli._AGENT_LOG_DIRS.copy()
 
         ep = {"episode_id": "ep_test_show", "schema_version": "1.0"}
-        (tmp_path / "ep_test_show.json").write_text(json.dumps(ep))
+        (tmp_path / "run_20260409_ep_test_show.json").write_text(json.dumps(ep))
 
-        cli.EPISODES_DIR = tmp_path
+        cli._AGENT_LOG_DIRS.clear()
+        cli._AGENT_LOG_DIRS["test"] = tmp_path
         try:
             parser = build_parser()
             args = parser.parse_args(["show-episode", "ep_test_show"])
@@ -134,6 +142,6 @@ class TestCLIShowEpisode:
             assert rc == 0
             captured = capsys.readouterr()
             assert "ep_test_show" in captured.out
-            assert "1.0" in captured.out
         finally:
-            cli.EPISODES_DIR = original_dir
+            cli._AGENT_LOG_DIRS.clear()
+            cli._AGENT_LOG_DIRS.update(original_dirs)

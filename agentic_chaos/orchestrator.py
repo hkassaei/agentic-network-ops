@@ -8,8 +8,7 @@ Wires together all Phase agents into a SequentialAgent:
   4. FaultPropagationVerifier    → verifies fault manifested in metrics
   5. ChallengeAgent              → invokes the RCA agent (v1.5/v3/v4/v5)
   6. Healer                      → reverses all faults
-  7. CallTeardownAgent           → hangs up any active VoNR call
-  8. EpisodeRecorder             → writes episode JSON
+  7. EpisodeRecorder             → writes episode JSON
 
 Usage:
     from agentic_chaos.orchestrator import run_scenario
@@ -39,7 +38,6 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from .agents.baseline import BaselineCollector
-from .agents.call_setup import CallTeardownAgent
 from .agents.challenger import ChallengeAgent
 from .agents.fault_injector import FaultInjector
 from .agents.observation_traffic import ObservationTrafficAgent
@@ -82,10 +80,9 @@ def create_chaos_director(
     fault_verifier = create_fault_propagation_verifier()
     challenge_agent = ChallengeAgent()
     healer = Healer(registry=reg)
-    call_teardown = CallTeardownAgent()
     episode_recorder = EpisodeRecorder()
 
-    # Pipeline: baseline → inject → observation_traffic → verify → challenge → heal → [call_teardown] → record
+    # Pipeline: baseline → inject → observation_traffic → verify → challenge → heal → record
     #
     # ObservationTrafficAgent runs BEFORE the verifier: it generates 2+ minutes
     # of randomized IMS traffic (REGISTER, VoNR calls) while collecting metric
@@ -97,7 +94,7 @@ def create_chaos_director(
         description=(
             "Orchestrates a complete chaos episode: "
             "baseline → inject → observation_traffic → verify → "
-            "challenge → heal → [call_teardown] → record."
+            "challenge → heal → record."
         ),
         sub_agents=[
             baseline_collector,
@@ -106,7 +103,6 @@ def create_chaos_director(
             fault_verifier,
             challenge_agent,
             healer,
-            call_teardown,
             episode_recorder,
         ],
     )
@@ -171,9 +167,6 @@ async def run_scenario(
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     slug = scenario.name.lower().replace(" ", "_").replace("-", "_")[:30]
     episode_id = f"ep_{ts}_{slug}"
-
-    # Force challenge mode on — the whole point is agent evaluation
-    scenario = scenario.model_copy(update={"challenge_mode": True})
 
     from .agents.fault_propagation_verifier import FAULT_PROPAGATION_TIME_SECONDS
     log.info(

@@ -109,7 +109,6 @@ class TestScenario:
         assert s.name == "P-CSCF Latency"
         assert len(s.faults) == 1
         assert s.escalation is False
-        assert s.challenge_mode is False
 
     def test_compound_scenario(self):
         s = Scenario(
@@ -123,10 +122,8 @@ class TestScenario:
                           params={"delay_ms": 2000}),
             ],
             expected_symptoms=["Diameter timeout", "IMS registration failure"],
-            challenge_mode=True,
         )
         assert len(s.faults) == 2
-        assert s.challenge_mode is True
 
     def test_json_roundtrip(self):
         s = Scenario(

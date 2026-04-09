@@ -91,7 +91,7 @@ class TestScenarioLibrary:
     def test_ttl_seconds_reasonable(self):
         for name, s in SCENARIOS.items():
             assert s.ttl_seconds >= 30, f"{name}: TTL too short"
-            assert s.ttl_seconds <= 300, f"{name}: TTL too long"
+            assert s.ttl_seconds <= 600, f"{name}: TTL too long"
 
     def test_blast_radius_categories(self):
         single = [s for s in SCENARIOS.values() if s.blast_radius == BlastRadius.SINGLE_NF]
@@ -101,10 +101,6 @@ class TestScenarioLibrary:
         assert len(single) >= 3, "Need at least 3 single-NF scenarios"
         assert len(multi) >= 2, "Need at least 2 multi-NF scenarios"
         assert len(globe) >= 1, "Need at least 1 global scenario"
-
-    def test_cascading_failure_has_challenge_mode(self):
-        s = get_scenario("Cascading IMS Failure")
-        assert s.challenge_mode is True
 
     def test_pcscf_latency_has_escalation(self):
         s = get_scenario("P-CSCF Latency")

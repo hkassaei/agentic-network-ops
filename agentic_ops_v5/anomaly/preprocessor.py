@@ -100,13 +100,18 @@ _DIAGNOSTIC_METRICS = {
     "ims_registrar_scscf:rejected_regs",  # counter → rate
     "ims_auth:mar_timeouts",
     "cdp:replies_received",               # counter → rate
-    # RTPEngine (only the key quality metrics, not all 46 stats)
+    # RTPEngine
     "average_mos",
     "packets_per_second_(total)",
     "average_packet_loss",
     "average_jitter_(reported)",
     "total_sessions",
     "owned_sessions",
+    "packets_lost",
+    "total_number_of_1_way_streams",
+    "total_relayed_packet_errors",
+    "errors_per_second_(total)",
+    "packet_loss_standard_deviation",
     # PyHSS
     "ims_subscribers",
     # MongoDB

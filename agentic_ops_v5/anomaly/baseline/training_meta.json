@@ -1,8 +1,8 @@
 {
-  "trained_at": "2026-04-06T21:30:40.479347+00:00",
-  "duration_seconds": 344,
-  "n_samples": 50,
-  "n_features": 44,
+  "trained_at": "2026-04-10T04:12:37.123993+00:00",
+  "duration_seconds": 368,
+  "n_samples": 51,
+  "n_features": 48,
   "feature_keys": [
     "amf.amf_session",
     "amf.gnb",
@@ -30,6 +30,10 @@
     "rtpengine.average_mos",
     "rtpengine.average_packet_loss",
     "rtpengine.owned_sessions",
+    "rtpengine.packet_loss_standard_deviation",
+    "rtpengine.packets_lost",
+    "rtpengine.total_number_of_1_way_streams",
+    "rtpengine.total_relayed_packet_errors",
     "rtpengine.total_sessions",
     "scscf.cdp:average_response_time",
     "scscf.cdp:replies_received_rate",
@@ -50,5 +54,5 @@
     "upf.fivegs_upffunction_upf_sessionnbr"
   ],
   "model_ready": true,
-  "training_samples": 50
+  "training_samples": 51
 }

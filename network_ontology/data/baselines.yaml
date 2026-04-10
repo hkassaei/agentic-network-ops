@@ -154,6 +154,18 @@ baselines:
       rtpengine_packets_lost:
         description: "Absolute count of RTP packets currently reported as lost by RTPEngine. Resets when sessions end. Non-zero indicates active packet loss."
         type: gauge
+      rtpengine_1way_streams:
+        description: "Number of RTP streams where only one direction has traffic. Indicates severe packet loss or network asymmetry — one side of the call is effectively deaf."
+        type: gauge
+      rtpengine_relay_errors:
+        description: "Total packet relay errors since RTPEngine started. Increments when RTPEngine fails to forward an RTP packet. High values indicate network or resource issues on the media path."
+        type: counter
+      rtpengine_errors_per_sec:
+        description: "Real-time rate of RTP relay errors per second. Non-zero during a call signals active data plane problems. Unlike cumulative counters, this shows the current error rate."
+        type: gauge
+      rtpengine_loss_stddev:
+        description: "Standard deviation of packet loss across RTP sessions. High values indicate bursty, uneven loss (e.g., a network fault) vs. low values indicating steady background loss."
+        type: gauge
       rtpengine_active_sessions:
         description: "Number of RTP sessions currently being relayed by RTPEngine. Each call creates one session with two media streams (one per direction)."
         type: gauge

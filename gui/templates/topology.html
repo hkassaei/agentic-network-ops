@@ -165,17 +165,30 @@ function buildGaugeRows(nodeId) {
     const loss = g.rtpengine_loss_pct || 0;
     const jitter = g.rtpengine_jitter || 0;
     const lost = g.rtpengine_packets_lost || 0;
+    const oneWay = g.rtpengine_1way_streams || 0;
+    const relayErr = g.rtpengine_relay_errors || 0;
+    const errSec = g.rtpengine_errors_per_sec || 0;
+    const lossStd = g.rtpengine_loss_stddev || 0;
     const active = g.rtpengine_active_sessions || 0;
     const managed = g.rtpengine_total_managed || 0;
     const ppsClass = pps > 0 ? 'good' : 'idle';
     const mosClass = mos >= 4.0 ? 'good' : mos >= 3.5 ? 'warn' : mos > 0 ? 'crit' : 'idle';
     const lostClass = lost > 0 ? 'crit' : 'good';
+    const oneWayClass = oneWay > 0 ? 'crit' : 'good';
+    const errSecClass = errSec > 0 ? 'crit' : 'good';
     return `
       <div class="detail-section">
         <h4>Real-time</h4>
         <div class="metric-row"><span class="metric-name">Packets/s ${tip('rtpengine_pps')}</span><span class="metric-value gauge-val ${ppsClass}" style="font-size:16px">${Math.round(pps)}</span></div>
         <div class="metric-row"><span class="metric-name">Active sessions ${tip('rtpengine_active_sessions')}</span><span class="metric-value">${Math.round(active)}</span></div>
+        <div class="metric-row"><span class="metric-name">Errors/s ${tip('rtpengine_errors_per_sec')}</span><span class="metric-value gauge-val ${errSecClass}">${errSec.toFixed(1)}</span></div>
+      </div>
+      <div class="detail-section">
+        <h4>Data Plane Health</h4>
         <div class="metric-row"><span class="metric-name">Packets lost ${tip('rtpengine_packets_lost')}</span><span class="metric-value gauge-val ${lostClass}">${Math.round(lost)}</span></div>
+        <div class="metric-row"><span class="metric-name">1-way streams ${tip('rtpengine_1way_streams')}</span><span class="metric-value gauge-val ${oneWayClass}">${Math.round(oneWay)}</span></div>
+        <div class="metric-row"><span class="metric-name">Relay errors ${tip('rtpengine_relay_errors')}</span><span class="metric-value">${Math.round(relayErr)}</span></div>
+        <div class="metric-row"><span class="metric-name">Loss std dev ${tip('rtpengine_loss_stddev')}</span><span class="metric-value">${lossStd.toFixed(1)}</span></div>
       </div>
       <div class="detail-section">
         <h4>Cumulative Averages <span style="font-size:9px;text-transform:none;letter-spacing:0">(across ${Math.round(managed)} sessions)</span></h4>

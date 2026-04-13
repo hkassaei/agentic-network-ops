@@ -1,12 +1,13 @@
 {
-  "trained_at": "2026-04-10T04:12:37.123993+00:00",
-  "duration_seconds": 368,
-  "n_samples": 51,
-  "n_features": 48,
+  "trained_at": "2026-04-13T19:56:39.440895+00:00",
+  "duration_seconds": 383,
+  "n_samples": 50,
+  "n_features": 49,
   "feature_keys": [
     "amf.amf_session",
     "amf.gnb",
     "amf.ran_ue",
+    "derived.upf_activity_during_calls",
     "icscf.cdp:average_response_time",
     "icscf.cdp:replies_received_rate",
     "icscf.cdp:timeout",
@@ -54,5 +55,5 @@
     "upf.fivegs_upffunction_upf_sessionnbr"
   ],
   "model_ready": true,
-  "training_samples": 51
+  "training_samples": 50
 }

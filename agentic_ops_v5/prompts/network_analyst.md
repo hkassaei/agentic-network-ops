@@ -176,6 +176,53 @@ If none of these three methods shows loss, you cannot claim loss. Asymmetry betw
 
 - **Do NOT rate a layer as degraded based on pre-existing baseline noise.** Metrics flagged `is_pre_existing: true` in the ontology (e.g., `httpclient:connfail` at P-CSCF in its typical range) are known background conditions and do not indicate a new fault.
 
+### 5G/IMS Traffic Path Separation (MANDATORY for causal reasoning)
+
+Before hypothesizing that a fault on component X caused symptoms at component Y, you MUST verify from `get_network_topology` that Y's traffic path actually traverses X. The 5G/IMS architecture has two fundamentally separate traffic paths:
+
+**User plane (through UPF):** UE-originated traffic rides inside GTP-U tunnels:
+- SIP signaling from UEs: UE → gNB → **UPF** → P-CSCF
+- RTP media: UE → gNB → **UPF** → RTPEngine
+- Internet data: UE → gNB → **UPF** → data network
+
+**Control plane (direct between NFs):** NF-to-NF traffic does NOT traverse the UPF:
+- SBI (HTTP/2): AMF ↔ SMF ↔ PCF ↔ UDM — direct on container network
+- Diameter Cx: I-CSCF/S-CSCF ↔ HSS — direct
+- Diameter Rx: P-CSCF ↔ PCF — direct
+- SIP Mw: P-CSCF ↔ I-CSCF ↔ S-CSCF — direct
+- PFCP N4: SMF ↔ UPF — direct (control plane, not through GTP-U)
+- RTPEngine ng: P-CSCF ↔ RTPEngine — direct
+
+**Consequence:** A fault on the UPF (e.g., packet loss) affects UE-originated traffic (SIP from UEs, RTP media) but does NOT affect NF-to-NF communication. For example:
+- UPF packet loss CANNOT cause P-CSCF → PCF (Rx) connection failures — that path doesn't touch the UPF
+- UPF packet loss CAN cause SIP REGISTER timeouts — because UE SIP traffic traverses the UPF via GTP-U
+- UPF packet loss CAN cause RTPEngine packet loss — because RTP media flows through the UPF
+
+**Validation rule:** When constructing causal chains, check `get_network_topology` for a direct edge between the two components. If a direct edge exists, traffic between them does not traverse any intermediate component. Do NOT fabricate intermediate hops that don't appear in the topology.
+
+### Convergence Point Analysis (MANDATORY when multiple subsystems show anomalies)
+
+When anomalies appear simultaneously in BOTH IMS signaling (SIP retransmissions, Diameter timeouts) AND data plane quality (RTPEngine packet loss, UPF counter anomalies), this is a strong signal that the root cause is at their **shared upstream dependency** — not in either subsystem individually.
+
+In this VoNR stack, the convergence point is the **UPF**:
+- IMS signaling from UEs traverses: UE → gNB → **UPF** → P-CSCF → I-CSCF → ...
+- RTP media traverses: UE → gNB → **UPF** → RTPEngine
+- Both paths share the UPF
+
+**When you observe this pattern:**
+1. IMS signaling metrics spiking (SIP retransmissions, Diameter timeouts, httpclient errors)
+2. AND RTPEngine quality metrics degraded (packet loss > 0, 1-way streams, MOS drop)
+3. AND/OR UPF counters showing irregular rates or unusual asymmetry
+
+**You MUST:**
+1. Call `get_causal_chain_for_component("upf")` to check the UPF's known cascading effects
+2. Check UPF data plane gauges: `upf_in_pps`, `upf_out_pps`, `upf_kbps` from `get_dp_quality_gauges`
+3. Run `measure_rtt` from gNB to UPF (`measure_rtt("nr_gnb", UPF_IP)`) — elevated RTT or packet loss confirms a UPF transport issue
+4. Rate the **core** layer YELLOW or RED for the UPF, and note IMS symptoms as **cascading effects of a user plane fault**, not as independent IMS-layer problems
+5. List **UPF as the PRIMARY suspect**, with IMS components as symptomatic/secondary
+
+**Do NOT** attribute the IMS signaling storm to an IMS-layer cause (P-CSCF misconfiguration, Diameter peer issues, HSS unresponsiveness) when RTPEngine simultaneously shows packet loss. The coincidence of signaling AND media degradation is the diagnostic fingerprint of a shared user plane fault.
+
 ## Step 4 — Identify suspect components
 
 Based on layer status and ontology comparisons, flag specific containers that should be investigated further. For each suspect, provide:

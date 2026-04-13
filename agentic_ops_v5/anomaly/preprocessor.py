@@ -183,6 +183,33 @@ class MetricPreprocessor:
                     features[fkey] = float(value)
 
         self._prev_time = now
+
+        # Derived feature: UPF activity ratio during active calls.
+        # When calls are active (dialog_ng:active > 0 at any CSCF), the UPF
+        # MUST have non-zero GTP-U rates. If UPF rate is near-zero during an
+        # active call, that's a strong signal of user plane degradation.
+        # This feature is 0 when idle (normal) and should be >0 during calls
+        # (normal). A value of 0 during calls is anomalous.
+        active_calls = max(
+            features.get("pcscf.dialog_ng:active", 0),
+            features.get("scscf.dialog_ng:active", 0),
+        )
+        upf_in_rate = features.get("upf.fivegs_ep_n3_gtp_indatapktn3upf_rate", 0)
+        upf_out_rate = features.get("upf.fivegs_ep_n3_gtp_outdatapktn3upf_rate", 0)
+        upf_total_rate = upf_in_rate + upf_out_rate
+
+        if active_calls > 0:
+            # During active calls: ratio of actual UPF traffic to expected.
+            # Expected ~50 pps per direction per G.711 call = ~100 pps total.
+            # Normalize to [0, 1] — 1.0 = healthy, 0.0 = no traffic despite active call.
+            expected_pps = active_calls * 100
+            features["derived.upf_activity_during_calls"] = min(
+                1.0, upf_total_rate / expected_pps if expected_pps > 0 else 0
+            )
+        else:
+            # No active calls — UPF idle is normal, mark as 1.0 (healthy)
+            features["derived.upf_activity_during_calls"] = 1.0
+
         return features
 
     def reset(self) -> None:

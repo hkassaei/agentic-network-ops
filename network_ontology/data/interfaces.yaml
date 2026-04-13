@@ -269,7 +269,7 @@ interfaces:
     target: pcf
     protocol: Diameter
     transport: TCP/3871
-    plane: control
+    plane: signaling
     label: "Rx (Diameter)"
     description: "Diameter Rx interface. P-CSCF requests QoS/dedicated bearers from PCF for voice calls."
 
@@ -290,7 +290,7 @@ interfaces:
     target: rtpengine
     protocol: ng
     transport: UDP
-    plane: control
+    plane: signaling
     label: "RTPEngine Control"
     description: "P-CSCF controls RTPEngine media relay via ng protocol"
 

@@ -124,35 +124,56 @@ causal_chains:
           effect: "RTP media degradation, jitter buffer resets on UE, audible quality issues"
           lag: "<2s"
           description: "Voice call quality degrades proportionally to packet loss"
-        - condition: "SIP re-INVITE or UPDATE in flight"
-          effect: "May timeout if SIP signaling traverses the degraded data plane"
-          lag: "depends on SIP timer"
+        - condition: "UE SIP signaling (REGISTER, INVITE) in flight"
+          effect: "SIP messages from UEs are dropped/delayed, causing retransmissions that appear as an IMS signaling storm at all CSCFs (P-CSCF, I-CSCF, S-CSCF)"
+          lag: "<1s"
+          description: "UE SIP traffic rides inside GTP-U tunnels through the UPF. Packet loss on the UPF causes SIP retransmissions that look like an IMS-layer problem but are actually a user plane problem."
         - condition: "PFCP heartbeat between SMF and UPF"
           effect: "May fail if loss is severe (>50%), causing session teardown"
           lag: "10-30s"
 
+    convergence_point:
+      description: "The UPF is the convergence point for both UE signaling and media paths. When UPF is degraded, BOTH IMS signaling (SIP from UEs) AND RTP media quality degrade simultaneously. This is the diagnostic fingerprint of a UPF fault."
+      paths_through_upf:
+        - "UE SIP signaling: UE → gNB → UPF → P-CSCF (SIP REGISTER, INVITE)"
+        - "RTP media: UE → gNB → UPF → RTPEngine (voice audio)"
+      paths_NOT_through_upf:
+        - "P-CSCF → PCF (Rx Diameter): direct on container network"
+        - "P-CSCF → I-CSCF (Mw SIP): direct on container network"
+        - "I-CSCF → HSS (Cx Diameter): direct on container network"
+        - "S-CSCF → HSS (Cx Diameter): direct on container network"
+        - "SMF → UPF (N4 PFCP): direct on container network (control plane, not GTP-U)"
+        - "All SBI traffic between 5G core NFs: direct via SCP"
+      diagnostic_pattern: "If RTPEngine shows packet loss AND IMS CSCFs show elevated SIP rates/timeouts simultaneously, the UPF is the common upstream cause — not the IMS layer."
+
     does_NOT_mean:
-      - "IMS signaling issue — jitter buffer resets look like SIP problems but are data plane"
-      - "P-CSCF config issue — cascading metric changes in IMS nodes are SECONDARY effects"
+      - "IMS signaling issue — SIP retransmissions from UEs look like IMS problems but are caused by UE SIP traffic being dropped at the UPF"
+      - "P-CSCF config issue — cascading metric changes in IMS nodes are SECONDARY effects of UPF loss"
+      - "P-CSCF → PCF (Rx) failure — the Rx interface is direct between P-CSCF and PCF, not through the UPF"
       - "httpclient:connfail increase — this is pre-existing noise, unrelated to data plane"
+      - "Diameter peer issue at I-CSCF or S-CSCF — Cx interface is direct to HSS, not through UPF"
 
     diagnostic_approach:
       - tool: measure_rtt
         args: {container: "nr_gnb", target_ip: "172.22.0.8"}
         purpose: "Measure RTT and packet loss from gNB to UPF — elevated values confirm transport issue"
         priority: 1
+      - tool: get_dp_quality_gauges
+        purpose: "Check RTPEngine packet loss and UPF throughput — simultaneous degradation confirms UPF convergence point fault"
+        priority: 2
       - tool: get_nf_metrics
         purpose: "Check GTP-U counters at UPF — compare rate to baseline"
-        priority: 2
+        priority: 3
       - tool: read_container_logs
         args: {container: "upf", grep: "error"}
         purpose: "Check for interface errors, PFCP issues, or forwarding plane errors"
-        priority: 3
+        priority: 4
 
     key_diagnostic_signal:
+      - "SIMULTANEOUS IMS signaling storm AND RTPEngine packet loss = UPF convergence point fault"
       - "GTP counters still incrementing (not zero) distinguishes degradation from total outage"
-      - "UE jitter buffer resets are a textbook data plane quality symptom"
       - "Elevated RTT or packet loss between gNB and UPF confirms transport-level issue"
+      - "NF-to-NF control plane (Rx, Cx, Mw, SBI) is NOT affected by UPF faults — only UE-originated traffic is"
 
   n3_data_plane_outage:
     description: "Complete loss of N3 (GTP-U) data plane — no user traffic flowing."

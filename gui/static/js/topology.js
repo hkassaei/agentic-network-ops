@@ -195,6 +195,24 @@ function renderTopology(svgSelector, topo, opts = {}) {
         .attr('stroke-dasharray', style.dash || null).attr('opacity', e.active ? 0.6 : 0.15)
         .style('pointer-events', 'none');
     }
+    // Edge interface label (only for 3GPP/telecom interfaces, not infra)
+    const _LABEL_INTERFACES = new Set(['N2','N3','N4','Cx','Mw','Gm','Rx','Uu','ng','RTP']);
+    if (_LABEL_INTERFACES.has(e.interface) && e.active) {
+      const midX = (src.cx + tgt.cx) / 2;
+      const midY = (src.cy + tgt.cy) / 2;
+      // Offset label perpendicular to the edge to avoid overlapping the line
+      const dx = tgt.cx - src.cx, dy = tgt.cy - src.cy;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      const offsetX = (-dy / len) * 10;
+      const offsetY = (dx / len) * 10;
+      g.append('text')
+        .attr('x', midX + offsetX).attr('y', midY + offsetY)
+        .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
+        .attr('fill', style.stroke).attr('font-size', 8).attr('opacity', 0.7)
+        .attr('font-weight', 600).style('pointer-events', 'none')
+        .text(e.interface);
+    }
+
     g.on('mouseenter', (ev) => _showEdgeTooltip(ev, e, tooltipId)).on('mouseleave', () => _hideTooltip(tooltipId))
      .on('click', (ev) => { ev.stopPropagation(); onEdgeClick(e); });
   }

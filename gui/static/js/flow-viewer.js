@@ -277,12 +277,12 @@ function renderFlowTopology() {
 
   svg.attr('viewBox', `0 0 ${width} ${height}`);
 
-  const rows = 5, slots = 12;
   const nodeMap = {};
 
   topoData.nodes.forEach(n => {
-    const x = (n.slot + 0.5) / slots * width;
-    const y = (n.row + 0.5) / rows * height;
+    const pos = gridToSvg(n.row, n.slot);
+    const x = pos.x / TOPO_SVG_W * width;
+    const y = pos.y / TOPO_SVG_H * height;
     nodeMap[n.id] = { ...n, x, y };
   });
 
@@ -360,7 +360,6 @@ function highlightFlow() {
 
   const width = _topoW;
   const height = _topoH;
-  const rows = 5, slots = 12;
   const halfW = NODE_W / 2, halfH = NODE_H / 2;
 
   function edgePoint(center, toward) {
@@ -376,10 +375,8 @@ function highlightFlow() {
   function getPos(id) {
     const n = topoData.nodes.find(n => n.id === id);
     if (!n) return null;
-    return {
-      x: (n.slot + 0.5) / slots * width,
-      y: (n.row + 0.5) / rows * height,
-    };
+    const pos = gridToSvg(n.row, n.slot);
+    return { x: pos.x / TOPO_SVG_W * width, y: pos.y / TOPO_SVG_H * height };
   }
 
   // Highlight all steps up to current
@@ -733,13 +730,13 @@ function highlightFlowFocused() {
 
   const width = _topoW;
   const height = _topoH;
-  const rows = 5, slots = 12;
   const halfW = NODE_W / 2, halfH = NODE_H / 2;
 
   function getPos(id) {
     const n = topoData.nodes.find(n => n.id === id);
     if (!n) return null;
-    return { x: (n.slot + 0.5) / slots * width, y: (n.row + 0.5) / rows * height };
+    const pos = gridToSvg(n.row, n.slot);
+    return { x: pos.x / TOPO_SVG_W * width, y: pos.y / TOPO_SVG_H * height };
   }
 
   function edgePoint(center, toward) {

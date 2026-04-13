@@ -12,32 +12,44 @@
 
 deployment:
 
-  # --- Infrastructure ---
-  mongo:
-    ip_env_key: MONGO_IP
-    container_name: mongo
+  # --- IMS Application (Row 0) ---
+  pcscf:
+    ip_env_key: PCSCF_IP
+    container_name: pcscf
     grid_position: [0, 1]
     sublabel: ""
 
-  mysql:
-    ip_env_key: MYSQL_IP
-    container_name: mysql
+  icscf:
+    ip_env_key: ICSCF_IP
+    container_name: icscf
     grid_position: [0, 3]
     sublabel: ""
 
-  dns:
-    ip_env_key: DNS_IP
-    container_name: dns
+  scscf:
+    ip_env_key: SCSCF_IP
+    container_name: scscf
+    grid_position: [0, 4]
+    sublabel: ""
+
+  smsc:
+    ip_env_key: SMSC_IP
+    container_name: smsc
     grid_position: [0, 5]
     sublabel: ""
 
-  webui:
-    ip_env_key: WEBUI_IP
-    container_name: webui
-    grid_position: [0, 0]
+  rtpengine:
+    ip_env_key: RTPENGINE_IP
+    container_name: rtpengine
+    grid_position: [0, 7]
     sublabel: ""
 
-  # --- 5G Core Control Plane ---
+  pyhss:
+    ip_env_key: PYHSS_IP
+    container_name: pyhss
+    grid_position: [0, 8]
+    sublabel: ""
+
+  # --- 5G Core Interior (Row 1) — SBI-connected NFs ---
   nrf:
     ip_env_key: NRF_IP
     container_name: nrf
@@ -68,116 +80,101 @@ deployment:
     grid_position: [1, 4]
     sublabel: ""
 
+  pcf:
+    ip_env_key: PCF_IP
+    container_name: pcf
+    metrics_port: 9091
+    grid_position: [1, 5]
+    sublabel: ""
+
+  nssf:
+    ip_env_key: NSSF_IP
+    container_name: nssf
+    grid_position: [1, 6]
+    sublabel: ""
+
+  bsf:
+    ip_env_key: BSF_IP
+    container_name: bsf
+    grid_position: [1, 8]
+    sublabel: ""
+
+  # --- 5G Core Edge-Facing (Row 2) — RAN/UE-facing NFs ---
   amf:
     ip_env_key: AMF_IP
     container_name: amf
     metrics_port: 9091
-    grid_position: [1, 5]
+    grid_position: [2, 3]
     sublabel: ""
 
   smf:
     ip_env_key: SMF_IP
     container_name: smf
     metrics_port: 9091
-    grid_position: [1, 6]
+    grid_position: [2, 5]
     sublabel: ""
 
-  pcf:
-    ip_env_key: PCF_IP
-    container_name: pcf
-    metrics_port: 9091
-    grid_position: [1, 8]
-    sublabel: ""
-
-  # --- 5G Core User Plane ---
   upf:
     ip_env_key: UPF_IP
     container_name: upf
     metrics_port: 9091
-    grid_position: [1, 7]
-    sublabel: ""
-
-  # --- 5G Core Service Plane ---
-  nssf:
-    ip_env_key: NSSF_IP
-    container_name: nssf
-    grid_position: [1, 9]
-    sublabel: ""
-
-  bsf:
-    ip_env_key: BSF_IP
-    container_name: bsf
-    grid_position: [1, 10]
-    sublabel: ""
-
-  # --- IMS SIP Layer ---
-  pcscf:
-    ip_env_key: PCSCF_IP
-    container_name: pcscf
-    grid_position: [2, 2]
-    sublabel: ""
-
-  icscf:
-    ip_env_key: ICSCF_IP
-    container_name: icscf
-    grid_position: [2, 4]
-    sublabel: ""
-
-  scscf:
-    ip_env_key: SCSCF_IP
-    container_name: scscf
-    grid_position: [2, 5]
-    sublabel: ""
-
-  smsc:
-    ip_env_key: SMSC_IP
-    container_name: smsc
-    grid_position: [2, 6]
-    sublabel: ""
-
-  # --- IMS Subscriber DB ---
-  pyhss:
-    ip_env_key: PYHSS_IP
-    container_name: pyhss
     grid_position: [2, 7]
     sublabel: ""
 
-  # --- IMS Media ---
-  rtpengine:
-    ip_env_key: RTPENGINE_IP
-    container_name: rtpengine
-    grid_position: [2, 3]
-    sublabel: ""
-
-  # --- RAN ---
+  # --- RAN (Row 3) ---
   nr_gnb:
     ip_env_key: NR_GNB_IP
     container_name: nr_gnb
-    grid_position: [3, 5]
+    grid_position: [3, 4]
     sublabel: ""
 
-  # --- UEs ---
+  # --- UEs (Row 4) ---
   e2e_ue1:
     ip_env_key: UE1_IP
     container_name: e2e_ue1
-    grid_position: [4, 4]
+    grid_position: [4, 3]
     sublabel: ""
 
   e2e_ue2:
     ip_env_key: UE2_IP
     container_name: e2e_ue2
-    grid_position: [4, 6]
+    grid_position: [4, 5]
     sublabel: ""
 
-  # --- Observability ---
+  # --- Infrastructure (Sidebar) ---
+  mysql:
+    ip_env_key: MYSQL_IP
+    container_name: mysql
+    grid_position: [0, 10]
+    sublabel: ""
+
+  dns:
+    ip_env_key: DNS_IP
+    container_name: dns
+    grid_position: [0, 11]
+    sublabel: ""
+
+  mongo:
+    ip_env_key: MONGO_IP
+    container_name: mongo
+    grid_position: [1, 10]
+    sublabel: ""
+
+  webui:
+    ip_env_key: WEBUI_IP
+    container_name: webui
+    grid_position: [1, 11]
+    sublabel: ""
+
+  # --- Observability (Sidebar) ---
   metrics:
     ip_env_key: METRICS_IP
     container_name: metrics
-    grid_position: [0, 7]
+    grid_position: [2, 10]
     sublabel: ""
 
   grafana:
     ip_env_key: GRAFANA_IP
     container_name: grafana
-    grid_position: [0, 8]
+    grid_position: [2, 11]
     sublabel: ""

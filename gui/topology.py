@@ -22,9 +22,9 @@ log = logging.getLogger("vonr-topology")
 # -------------------------------------------------------------------------
 # Grid row constants
 # -------------------------------------------------------------------------
-ROW_DATA = 0
-ROW_CORE = 1
-ROW_IMS = 2
+ROW_IMS = 0              # IMS application layer (top)
+ROW_CORE_INTERIOR = 1    # SBI-connected NFs (NRF, SCP, AUSF, UDM, UDR, PCF, NSSF, BSF)
+ROW_CORE_EDGE = 2        # RAN/UE-facing NFs (AMF, SMF, UPF)
 ROW_RAN = 3
 ROW_UE = 4
 
@@ -126,43 +126,45 @@ class NetworkTopology:
 # Maps container name → (label, layer, role, ip_env_key, protocols, (row, slot), sublabel)
 # -------------------------------------------------------------------------
 _KNOWN_NF_TYPES: dict[str, tuple[str, str, str, str, list[str], tuple[int, int], str]] = {
-    # Infrastructure (Row 0)
-    "mongo":     ("MongoDB",     "infrastructure", "document-store",     "MONGO_IP",     ["MongoDB"],             (ROW_DATA, 1), ""),
-    "mysql":     ("MySQL",       "infrastructure", "relational-store",   "MYSQL_IP",     ["SQL"],                 (ROW_DATA, 3), ""),
-    "dns":       ("DNS",         "infrastructure", "name-resolution",    "DNS_IP",       ["DNS"],                 (ROW_DATA, 5), ""),
-    "webui":     ("WebUI",       "infrastructure", "web-management",     "WEBUI_IP",     ["HTTP"],                (ROW_DATA, 0), ""),
+    # IMS Application (Row 0)
+    "pcscf":     ("P-CSCF",      "ims",  "sip-edge-proxy",    "PCSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 1), ""),
+    "icscf":     ("I-CSCF",      "ims",  "sip-interrogating", "ICSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 3), ""),
+    "scscf":     ("S-CSCF",      "ims",  "sip-serving",       "SCSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 4), ""),
+    "smsc":      ("SMSC",        "ims",  "sms-center",        "SMSC_IP",      ["SIP"],                 (ROW_IMS, 5), ""),
+    "rtpengine": ("RTPEngine",   "ims",  "media-relay",       "RTPENGINE_IP", ["RTP", "ng"],           (ROW_IMS, 7), ""),
+    "pyhss":     ("HSS",         "ims",  "subscriber-db",     "PYHSS_IP",     ["Diameter"],            (ROW_IMS, 8), ""),
 
-    # 5G Core (Row 1)
-    "nrf":       ("NRF",         "core", "nf-discovery",       "NRF_IP",       ["SBI"],                 (ROW_CORE, 0), ""),
-    "scp":       ("SCP",         "core", "service-proxy",      "SCP_IP",       ["SBI"],                 (ROW_CORE, 1), ""),
-    "ausf":      ("AUSF",        "core", "authentication",     "AUSF_IP",      ["SBI"],                 (ROW_CORE, 2), ""),
-    "udm":       ("UDM",         "core", "data-management",    "UDM_IP",       ["SBI"],                 (ROW_CORE, 3), ""),
-    "udr":       ("UDR",         "core", "data-repository",    "UDR_IP",       ["SBI"],                 (ROW_CORE, 4), ""),
-    "amf":       ("AMF",         "core", "access-mobility",    "AMF_IP",       ["SBI", "NGAP"],         (ROW_CORE, 5), ""),
-    "smf":       ("SMF",         "core", "session-management", "SMF_IP",       ["SBI", "PFCP"],         (ROW_CORE, 6), ""),
-    "upf":       ("UPF",         "core", "user-plane-anchor",  "UPF_IP",       ["PFCP", "GTP-U"],       (ROW_CORE, 7), ""),
-    "pcf":       ("PCF",         "core", "policy-control",     "PCF_IP",       ["SBI", "Diameter"],     (ROW_CORE, 8), ""),
-    "nssf":      ("NSSF",        "core", "slice-selection",    "NSSF_IP",      ["SBI"],                 (ROW_CORE, 9), ""),
-    "bsf":       ("BSF",         "core", "binding-support",    "BSF_IP",       ["SBI"],                 (ROW_CORE, 10), ""),
+    # 5G Core Interior (Row 1) — SBI-connected NFs
+    "nrf":       ("NRF",         "core", "nf-discovery",       "NRF_IP",       ["SBI"],                 (ROW_CORE_INTERIOR, 0), ""),
+    "scp":       ("SCP",         "core", "service-proxy",      "SCP_IP",       ["SBI"],                 (ROW_CORE_INTERIOR, 1), ""),
+    "ausf":      ("AUSF",        "core", "authentication",     "AUSF_IP",      ["SBI"],                 (ROW_CORE_INTERIOR, 2), ""),
+    "udm":       ("UDM",         "core", "data-management",    "UDM_IP",       ["SBI"],                 (ROW_CORE_INTERIOR, 3), ""),
+    "udr":       ("UDR",         "core", "data-repository",    "UDR_IP",       ["SBI"],                 (ROW_CORE_INTERIOR, 4), ""),
+    "pcf":       ("PCF",         "core", "policy-control",     "PCF_IP",       ["SBI", "Diameter"],     (ROW_CORE_INTERIOR, 5), ""),
+    "nssf":      ("NSSF",        "core", "slice-selection",    "NSSF_IP",      ["SBI"],                 (ROW_CORE_INTERIOR, 6), ""),
+    "bsf":       ("BSF",         "core", "binding-support",    "BSF_IP",       ["SBI"],                 (ROW_CORE_INTERIOR, 8), ""),
 
-    # IMS (Row 2)
-    "pcscf":     ("P-CSCF",      "ims",  "sip-edge-proxy",    "PCSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 2), ""),
-    "rtpengine": ("RTPEngine",   "ims",  "media-relay",       "RTPENGINE_IP", ["RTP", "ng"],           (ROW_IMS, 3), ""),
-    "icscf":     ("I-CSCF",      "ims",  "sip-interrogating", "ICSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 4), ""),
-    "scscf":     ("S-CSCF",      "ims",  "sip-serving",       "SCSCF_IP",     ["SIP", "Diameter"],     (ROW_IMS, 5), ""),
-    "smsc":      ("SMSC",        "ims",  "sms-center",        "SMSC_IP",      ["SIP"],                 (ROW_IMS, 6), ""),
-    "pyhss":     ("HSS",         "ims",  "subscriber-db",     "PYHSS_IP",     ["Diameter"],            (ROW_IMS, 7), ""),
+    # 5G Core Edge-Facing (Row 2) — RAN/UE-facing NFs
+    "amf":       ("AMF",         "core", "access-mobility",    "AMF_IP",       ["SBI", "NGAP"],         (ROW_CORE_EDGE, 3), ""),
+    "smf":       ("SMF",         "core", "session-management", "SMF_IP",       ["SBI", "PFCP"],         (ROW_CORE_EDGE, 5), ""),
+    "upf":       ("UPF",         "core", "user-plane-anchor",  "UPF_IP",       ["PFCP", "GTP-U"],       (ROW_CORE_EDGE, 7), ""),
 
     # RAN (Row 3)
-    "nr_gnb":    ("gNB",         "ran",  "radio-access",      "NR_GNB_IP",    ["NGAP", "GTP-U"],       (ROW_RAN, 5), ""),
+    "nr_gnb":    ("gNB",         "ran",  "radio-access",      "NR_GNB_IP",    ["NGAP", "GTP-U"],       (ROW_RAN, 4), ""),
 
     # UEs (Row 4)
-    "e2e_ue1":   ("UE1",         "ue",   "subscriber",        "UE1_IP",       ["NAS", "SIP"],          (ROW_UE, 4), ""),
-    "e2e_ue2":   ("UE2",         "ue",   "subscriber",        "UE2_IP",       ["NAS", "SIP"],          (ROW_UE, 6), ""),
+    "e2e_ue1":   ("UE1",         "ue",   "subscriber",        "UE1_IP",       ["NAS", "SIP"],          (ROW_UE, 3), ""),
+    "e2e_ue2":   ("UE2",         "ue",   "subscriber",        "UE2_IP",       ["NAS", "SIP"],          (ROW_UE, 5), ""),
 
-    # Observability (Row 0)
-    "metrics":   ("Prometheus",  "observability", "metrics-collection",  "METRICS_IP",   ["HTTP"],      (ROW_DATA, 7), ""),
-    "grafana":   ("Grafana",     "observability", "metrics-visualization", "GRAFANA_IP", ["HTTP"],      (ROW_DATA, 8), ""),
+    # Infrastructure (Sidebar — slots 10-11)
+    "mysql":     ("MySQL",       "infrastructure", "relational-store",   "MYSQL_IP",     ["SQL"],                 (ROW_IMS, 10), ""),
+    "dns":       ("DNS",         "infrastructure", "name-resolution",    "DNS_IP",       ["DNS"],                 (ROW_IMS, 11), ""),
+    "mongo":     ("MongoDB",     "infrastructure", "document-store",     "MONGO_IP",     ["MongoDB"],             (ROW_CORE_INTERIOR, 10), ""),
+    "webui":     ("WebUI",       "infrastructure", "web-management",     "WEBUI_IP",     ["HTTP"],                (ROW_CORE_INTERIOR, 11), ""),
+
+    # Observability (Sidebar — slots 10-11)
+    "metrics":   ("Prometheus",  "observability", "metrics-collection",  "METRICS_IP",   ["HTTP"],      (ROW_CORE_EDGE, 10), ""),
+    "grafana":   ("Grafana",     "observability", "metrics-visualization", "GRAFANA_IP", ["HTTP"],      (ROW_CORE_EDGE, 11), ""),
 }
 
 # -------------------------------------------------------------------------

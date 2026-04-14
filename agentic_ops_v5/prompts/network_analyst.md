@@ -200,28 +200,36 @@ Before hypothesizing that a fault on component X caused symptoms at component Y,
 
 **Validation rule:** When constructing causal chains, check `get_network_topology` for a direct edge between the two components. If a direct edge exists, traffic between them does not traverse any intermediate component. Do NOT fabricate intermediate hops that don't appear in the topology.
 
-### Convergence Point Analysis (MANDATORY when multiple subsystems show anomalies)
+### Fault Localization via measure_rtt (MANDATORY when packet loss is suspected)
 
-When anomalies appear simultaneously in BOTH IMS signaling (SIP retransmissions, Diameter timeouts) AND data plane quality (RTPEngine packet loss, UPF counter anomalies), this is a strong signal that the root cause is at their **shared upstream dependency** — not in either subsystem individually.
+When RTPEngine reports packet loss or any component shows transport-level issues, you MUST localize the fault by running `measure_rtt` TO the suspected component from multiple neighbors. This is the single most important diagnostic step for network-level faults.
 
-In this VoNR stack, the convergence point is the **UPF**:
-- IMS signaling from UEs traverses: UE → gNB → **UPF** → P-CSCF → I-CSCF → ...
-- RTP media traverses: UE → gNB → **UPF** → RTPEngine
-- Both paths share the UPF
+**The principle:** `measure_rtt` sends ICMP pings FROM source TO target. If the target's network interface has packet loss (e.g., tc netem), the ping REQUEST arrives fine but the RESPONSE is dropped on the target's egress. This means:
+- If `measure_rtt(A, target)` shows loss AND `measure_rtt(B, target)` also shows loss → **the target's own interface is degraded** (the fault is AT the target)
+- If `measure_rtt(A, target)` shows loss BUT `measure_rtt(B, target)` is clean → the fault is on A's interface or the path between A and target, not at the target
 
-**When you observe this pattern:**
-1. IMS signaling metrics spiking (SIP retransmissions, Diameter timeouts, httpclient errors)
-2. AND RTPEngine quality metrics degraded (packet loss > 0, 1-way streams, MOS drop)
-3. AND/OR UPF counters showing irregular rates or unusual asymmetry
+**When RTPEngine shows packet loss, ALWAYS run:**
+1. `measure_rtt("pcscf", RTPENGINE_IP)` — P-CSCF to RTPEngine
+2. `measure_rtt("upf", RTPENGINE_IP)` — UPF to RTPEngine
+3. `measure_rtt("nr_gnb", UPF_IP)` — gNB to UPF (to check if UPF is also affected)
 
-**You MUST:**
-1. Call `get_causal_chain_for_component("upf")` to check the UPF's known cascading effects
-2. Check UPF data plane gauges: `upf_in_pps`, `upf_out_pps`, `upf_kbps` from `get_dp_quality_gauges`
-3. Run `measure_rtt` from gNB to UPF (`measure_rtt("nr_gnb", UPF_IP)`) — elevated RTT or packet loss confirms a UPF transport issue
-4. Rate the **core** layer YELLOW or RED for the UPF, and note IMS symptoms as **cascading effects of a user plane fault**, not as independent IMS-layer problems
-5. List **UPF as the PRIMARY suspect**, with IMS components as symptomatic/secondary
+**Interpreting the results:**
+- If BOTH pcscf→rtpengine AND upf→rtpengine show packet loss → **RTPEngine's own interface is the problem**. The fault is at RTPEngine, not upstream.
+- If upf→rtpengine shows loss but pcscf→rtpengine is clean → the issue is on the UPF's interface (UPF is dropping outbound packets that should reach RTPEngine)
+- If gnb→upf shows loss → the issue is on the UPF's interface, and RTPEngine packet loss is a downstream effect
+- If all paths to all components are clean → the issue is at the application layer, not transport
 
-**Do NOT** attribute the IMS signaling storm to an IMS-layer cause (P-CSCF misconfiguration, Diameter peer issues, HSS unresponsiveness) when RTPEngine simultaneously shows packet loss. The coincidence of signaling AND media degradation is the diagnostic fingerprint of a shared user plane fault.
+**Critical rule:** Do NOT assume a component is "symptomatic" or "downstream" without first verifying with `measure_rtt`. A component that shows packet loss from multiple independent sources has a fault on its own network interface — it is the root cause, not a victim.
+
+### Multi-Subsystem Anomaly Analysis (when multiple layers show issues)
+
+When anomalies appear in multiple subsystems simultaneously (e.g., IMS signaling AND RTPEngine quality), there are two possible explanations:
+
+**Possibility 1: Shared upstream dependency (convergence point).** In VoNR, the UPF is where UE signaling and media paths converge. If UPF is degraded, both IMS signaling (SIP from UEs traverses UPF) and RTP media (also traverses UPF) degrade simultaneously. Use `measure_rtt` to verify: if gnb→upf shows loss, UPF is the convergence point cause.
+
+**Possibility 2: Direct fault on one component causing localized effects.** For example, packet loss on RTPEngine's interface degrades media quality AND can cause SIP BYE/re-INVITE retransmissions when calls fail, creating some IMS signaling noise. Use `measure_rtt` to verify: if multiple sources→rtpengine show loss but gnb→upf is clean, the fault is at RTPEngine itself.
+
+**How to distinguish:** Run `measure_rtt` from multiple sources to EACH suspected component. The component where multiple independent `measure_rtt` probes show loss is the one with the network-level fault. Do NOT jump to a convergence point conclusion without RTT evidence.
 
 ## Step 4 — Identify suspect components
 

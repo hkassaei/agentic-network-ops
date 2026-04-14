@@ -320,21 +320,23 @@ async def investigate(
                 # {component: {metrics: {key: value}, badge: ..., source: ...}}
                 # We need {component: {key: value}} for the preprocessor.
                 raw_metrics = {}
+                snap_timestamp = snap.get("_timestamp")
                 for comp, data in snap.items():
                     if comp.startswith("_"):
-                        # Already parsed format
-                        raw_metrics = snap["_parsed"]
-                        break
+                        if comp == "_parsed":
+                            raw_metrics = snap["_parsed"]
+                            break
+                        continue
                     if isinstance(data, dict) and "metrics" in data:
                         raw_metrics[comp] = data["metrics"]
                     elif isinstance(data, dict):
                         raw_metrics[comp] = data
 
-                features = pp.process(raw_metrics)
+                features = pp.process(raw_metrics, timestamp=snap_timestamp)
 
-                # Only score snapshots after the preprocessor has built
-                # counter state (need ≥2 snapshots for meaningful rates)
-                if i >= 2 and features:
+                # Only score after the sliding window has enough samples
+                # for smooth rates (window size = 6, so start scoring at 6+)
+                if i >= 6 and features:
                     report = screener.score(features)
                     if best_report is None or report.overall_score > best_report.overall_score:
                         best_report = report

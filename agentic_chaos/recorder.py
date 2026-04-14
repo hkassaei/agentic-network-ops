@@ -649,11 +649,14 @@ def _infer_failure_domain(scenario: dict) -> str:
     for f in scenario.get("faults", []):
         targets.add(f.get("target", ""))
 
-    ims_nfs = {"pcscf", "icscf", "scscf", "pyhss", "rtpengine"}
+    ims_signaling_nfs = {"pcscf", "icscf", "scscf", "pyhss"}
+    media_nfs = {"rtpengine"}
     core_nfs = {"amf", "smf", "upf", "nrf", "scp", "ausf", "udm", "udr", "pcf"}
     data_nfs = {"mongo", "mysql", "dns"}
 
-    if targets & ims_nfs:
+    if targets & media_nfs:
+        return "ims_media"
+    if targets & ims_signaling_nfs:
         return "ims_signaling"
     if targets & {"upf", "nr_gnb"}:
         return "data_plane"
@@ -670,6 +673,8 @@ def _infer_protocol_impact(scenario: dict) -> str:
     for f in scenario.get("faults", []):
         targets.add(f.get("target", ""))
 
+    if targets & {"rtpengine"}:
+        return "RTP"
     if targets & {"pcscf", "icscf", "scscf"}:
         return "SIP"
     if targets & {"pyhss"}:

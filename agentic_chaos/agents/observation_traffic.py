@@ -222,6 +222,7 @@ class ObservationTrafficAgent(BaseAgent):
             try:
                 metrics = await snapshot_metrics()
                 if metrics:
+                    metrics["_timestamp"] = time.time()
                     snapshots.append(metrics)
             except Exception as e:
                 log.warning("Metric collection error: %s", e)

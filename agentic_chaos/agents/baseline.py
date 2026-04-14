@@ -2,8 +2,9 @@
 BaselineCollector — captures a pre-fault snapshot of the stack.
 
 No LLM needed — purely deterministic. Calls observation tools to capture
-metrics, container statuses, and stack phase. Writes result to
-session.state["baseline"].
+metrics, container statuses, and stack phase. Clears any residual tc rules
+from all containers before capturing the baseline to ensure a pristine state.
+Writes result to session.state["baseline"].
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
 from google.genai import types
 
+from ..tools.network_tools import clear_tc_rules
 from ..tools.observation_tools import (
     determine_phase,
     snapshot_container_status,
@@ -27,6 +29,12 @@ from ..tools.observation_tools import (
 log = logging.getLogger("chaos-agent.baseline")
 
 _BASELINE_TIMEOUT = 20  # seconds for entire baseline capture
+
+# Containers that could have residual tc rules from previous runs
+_TC_CLEANUP_TARGETS = [
+    "upf", "pcscf", "icscf", "scscf", "pyhss", "rtpengine",
+    "amf", "smf", "nr_gnb", "dns", "mongo", "mysql",
+]
 
 
 class BaselineCollector(BaseAgent):
@@ -38,6 +46,19 @@ class BaselineCollector(BaseAgent):
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
+        # Clear residual tc rules from all containers before baseline capture.
+        # Previous runs may have left tc netem rules if healing failed or the
+        # process was interrupted. A clean baseline requires no tc rules.
+        cleaned = 0
+        for target in _TC_CLEANUP_TARGETS:
+            try:
+                await clear_tc_rules(target)
+                cleaned += 1
+            except Exception:
+                pass  # container may not be running
+        log.info("Pre-baseline tc cleanup: cleared %d/%d containers",
+                 cleaned, len(_TC_CLEANUP_TARGETS))
+
         log.info("Capturing baseline snapshot...")
 
         metrics = await snapshot_metrics()

@@ -164,6 +164,40 @@ data_plane_degradation = Scenario(
     ttl_seconds=600,
 )
 
+call_quality_degradation = Scenario(
+    name="Call Quality Degradation",
+    description=(
+        "Inject 30% packet loss on RTPEngine — the media relay for VoNR "
+        "voice calls. RTP packets are dropped after RTPEngine receives them, "
+        "degrading voice quality (MOS drop, jitter increase, audible "
+        "artifacts). SIP signaling and 5G core are completely unaffected "
+        "because they don't traverse RTPEngine. Tests whether the agent can "
+        "diagnose a pure media-path fault without IMS signaling noise."
+    ),
+    category=FaultCategory.NETWORK,
+    blast_radius=BlastRadius.SINGLE_NF,
+    faults=[
+        FaultSpec(
+            fault_type="network_loss",
+            target="rtpengine",
+            params={"loss_pct": 30},
+            ttl_seconds=600,
+        ),
+    ],
+    expected_symptoms=[
+        "RTPEngine packets_lost increases",
+        "RTPEngine average_packet_loss rises",
+        "RTPEngine average_mos drops below 3.5",
+        "RTPEngine packet_loss_standard_deviation spikes",
+        "RTPEngine 1-way streams may appear",
+        "UPF GTP-U counters unaffected",
+        "IMS signaling (SIP, Diameter) unaffected",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=600,
+)
+
 
 # -------------------------------------------------------------------------
 # Global scenarios
@@ -324,6 +358,7 @@ SCENARIOS: dict[str, Scenario] = {
         scscf_crash,
         hss_unresponsive,
         data_plane_degradation,
+        call_quality_degradation,
         mongodb_gone,
         dns_failure,
         ims_network_partition,

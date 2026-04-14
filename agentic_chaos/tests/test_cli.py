@@ -56,7 +56,7 @@ class TestCLIListScenarios:
         captured = capsys.readouterr()
         assert "P-CSCF Latency" in captured.out
         assert "gNB Radio Link Failure" in captured.out
-        assert "10 scenarios available" in captured.out
+        assert "11 scenarios available" in captured.out
 
 
 class TestCLIListEpisodes:

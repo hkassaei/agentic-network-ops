@@ -11,8 +11,8 @@ from agentic_chaos.scenarios.library import (
 
 
 class TestScenarioLibrary:
-    def test_has_10_scenarios(self):
-        assert len(SCENARIOS) == 10
+    def test_has_11_scenarios(self):
+        assert len(SCENARIOS) == 11
 
     def test_all_names_unique(self):
         names = list(SCENARIOS.keys())
@@ -29,7 +29,7 @@ class TestScenarioLibrary:
 
     def test_list_scenarios_returns_all(self):
         items = list_scenarios()
-        assert len(items) == 10
+        assert len(items) == 11
         assert all("name" in s for s in items)
         assert all("category" in s for s in items)
 

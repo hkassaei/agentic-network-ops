@@ -437,6 +437,37 @@ def _health_from_status(status: str) -> str:
     return "down"
 
 
+def build_static_topology(env: dict[str, str]) -> NetworkTopology:
+    """Build a structural topology from ontology data — no Docker required.
+
+    Returns all known NFs and edges with status 'unknown'. Used by the
+    flows page which only needs the graph structure, not live state.
+    """
+    nf_types, static_edges = _get_topology_data()
+
+    nodes: list[NFNode] = []
+    node_ids: set[str] = set()
+    for name, nf_def in nf_types.items():
+        label, layer, role, ip_key, protocols, (row, slot), sublabel = nf_def
+        ip = env.get(ip_key, "")
+        nodes.append(NFNode(
+            id=name, label=label, layer=layer, role=role, ip=ip,
+            status="running", health="healthy",
+            protocols=list(protocols), row=row, slot=slot, sublabel=sublabel,
+        ))
+        node_ids.add(name)
+
+    edges: list[NFEdge] = []
+    for src, tgt, proto, iface, plane, lbl, logical in static_edges:
+        if src in node_ids and tgt in node_ids:
+            edges.append(NFEdge(
+                source=src, target=tgt, protocol=proto, interface=iface,
+                plane=plane, label=lbl, active=True, logical=logical,
+            ))
+
+    return NetworkTopology(nodes=nodes, edges=edges, phase="static", timestamp=time.time())
+
+
 async def build_topology(env: dict[str, str]) -> NetworkTopology:
     """Build a complete topology snapshot from Docker state.
 

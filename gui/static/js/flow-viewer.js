@@ -77,7 +77,7 @@ function highlightForCurrentMode() {
 // =============================================================================
 async function initFlowViewer() {
   const [topoResp, flowsResp] = await Promise.all([
-    fetch(`${API_BASE}/topology`),
+    fetch(`${API_BASE}/topology/static`),
     fetch(`${API_BASE}/flows`),
   ]);
   topoData = await topoResp.json();

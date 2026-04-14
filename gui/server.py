@@ -221,7 +221,40 @@ async def _ws_run_script(request: web.Request, script_name: str, label: str, sta
 
 
 async def handle_deploy(request: web.Request) -> web.WebSocketResponse:
-    return await _ws_run_script(request, "e2e-vonr-test.sh", "deploy", "Starting full stack deployment...")
+    """Deploy stack, then run post-deploy verification (Diameter fix, health check, UPF counters)."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    if _deploy_lock.locked():
+        await _ws_send(ws, {"type": "error", "message": "Another operation is in progress"})
+        await ws.close()
+        return ws
+
+    async with _deploy_lock:
+        # Phase 1: Deploy the stack
+        script = str(SCRIPTS / "e2e-vonr-test.sh")
+        await _ws_send(ws, {"type": "progress", "label": "deploy", "line": "Starting full stack deployment..."})
+        rc = await _run_stream(f"bash {script}", ws, "deploy")
+
+        if rc != 0:
+            await _ws_send(ws, {"type": "done", "success": False, "message": f"Deploy failed (exit {rc})"})
+            await ws.close()
+            return ws
+
+        # Phase 2: Post-deploy verification
+        verify_script = str(SCRIPTS / "post-deploy-verify.sh")
+        await _ws_send(ws, {"type": "progress", "label": "deploy", "line": ""})
+        await _ws_send(ws, {"type": "progress", "label": "deploy", "line": "Running post-deploy verification..."})
+        rc2 = await _run_stream(f"bash {verify_script}", ws, "deploy")
+
+        if rc2 == 0:
+            await _ws_send(ws, {"type": "done", "success": True})
+        else:
+            await _ws_send(ws, {"type": "done", "success": False,
+                                "message": "Deploy succeeded but post-deploy verification failed. Check logs."})
+
+    await ws.close()
+    return ws
 
 async def handle_deploy_ues(request: web.Request) -> web.WebSocketResponse:
     return await _ws_run_script(request, "deploy-ues.sh", "deploy-ues", "Deploying UEs...")
@@ -281,6 +314,13 @@ async def handle_topology(request: web.Request) -> web.Response:
     """Return the live network topology as a JSON graph."""
     from topology import build_topology
     topo = await build_topology(_env)
+    return web.json_response(topo.to_dict())
+
+
+async def handle_topology_static(request: web.Request) -> web.Response:
+    """Return the structural topology from ontology — no Docker required."""
+    from topology import build_static_topology
+    topo = build_static_topology(_env)
     return web.json_response(topo.to_dict())
 
 
@@ -1017,6 +1057,7 @@ def create_app() -> web.Application:
     # API routes
     app.router.add_get("/api/status", handle_status)
     app.router.add_get("/api/topology", handle_topology)
+    app.router.add_get("/api/topology/static", handle_topology_static)
     app.router.add_get("/api/metrics", handle_metrics)
     app.router.add_get("/api/metrics/history/{node_id}", handle_metrics_history)
     app.router.add_get("/api/data-plane-gauges", handle_data_plane_gauges)

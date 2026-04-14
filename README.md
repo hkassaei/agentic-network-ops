@@ -101,37 +101,188 @@ All pages share a common nav bar with active page highlighting and a live `N/N R
 | v4 | Google ADK (Gemini 2.5) | Topology-aware, context-isolated multi-phase with dynamic specialist dispatch |
 | v5 | Google ADK (Gemini 2.5) | 7-phase ontology-powered pipeline: **Anomaly Screener (ML)** → NetworkAnalyst → Pattern Matcher (deterministic) → Instruction Generator → Investigator (with nested OntologyConsultation sub-agent) → Evidence Validator → Synthesis |
 
+## Building and Deploying the Stack
+
+### Critical: Build from source, do NOT pull pre-built images
+
+The Open5GS base image **must be built from source** using the Dockerfile in `network/base/`. This Dockerfile applies a critical patch that re-enables GTP-U data plane packet counters in the UPF. Upstream Open5GS disabled these counters (`#if 0` in `src/upf/gtp-path.c`) due to malloc contention at multi-Gbps rates (Issue #2210, PR #2219) — irrelevant for our lab traffic levels. Our Dockerfile patches `#if 0` → `#if 1` via `sed` to restore them.
+
+The pre-built images on ghcr.io (`ghcr.io/herlesupreeth/docker_open5gs:master`) do NOT have this patch. If you pull the pre-built image instead of building from source, the UPF will forward packets correctly but its Prometheus counters (`fivegs_ep_n3_gtp_indatapktn3upf`, `fivegs_ep_n3_gtp_outdatapktn3upf`) will stay at zero permanently. This breaks the anomaly detection model, the chaos scoring, and the Ops agent's data plane diagnostics.
+
+### Step 1: Build Docker images from source
+
+```bash
+# Build the Open5GS base image (compiles from source, ~10-15 minutes first time)
+docker build -t docker_open5gs ./network/base
+
+# Build IMS (Kamailio) base image
+docker build -t docker_kamailio ./network/ims_base
+
+# Build UERANSIM base image
+docker build -t docker_ueransim ./network/ueransim
+
+# Build supporting images
+docker build -t docker_dns ./network/dns
+docker build -t docker_rtpengine ./network/rtpengine
+docker build -t docker_mysql ./network/mysql
+docker build -t docker_metrics ./network/metrics
+
+# Build the pjsua-enabled UERANSIM image (for e2e voice testing)
+docker build -t docker_ueransim_pjsua ./network/operate/ueransim
+```
+
+You can pull these images from ghcr.io instead of building (faster but may have metric issues):
+- `docker_kamailio` — safe to pull (no metric dependency)
+- `docker_pyhss` — safe to pull
+- `docker_ueransim` — safe to pull
+- `docker_open5gs` — **DO NOT pull, build from source**
+
+### Step 2: Start the operations layer
+
+```bash
+cp ops.env.example ops.env  # Edit with your GCP project + API keys
+docker compose -f network-ops.yaml up -d   # Neo4j + ontology loader
+python3 gui/server.py &                     # Start the GUI
+```
+
+### Step 3: Deploy the network
+
+**Option A: Via GUI (recommended)**
+Open http://localhost:8073 → **Stack** page → **Build & Deploy Stack**
+
+**Option B: Manual deployment**
+```bash
+# Start core + IMS stack
+cd network && docker compose -f sa-vonr-deploy.yaml up -d && cd ..
+
+# Start gNB
+cd network && docker compose -f nr-gnb.yaml up -d && cd ..
+
+# Deploy UEs (source env vars for compose variable interpolation)
+set -a; source network/.env; source e2e.env; set +a
+docker compose -f e2e-vonr.yaml up -d
+```
+
+### Step 4: Fix Diameter peer state (required after fresh deploy)
+
+After a fresh stack deploy, the I-CSCF and S-CSCF Diameter connections to the HSS often get stuck in `I_Open` state because the CSCFs start before PyHSS's Diameter service is ready. This causes SIP REGISTER to fail with 408 timeout.
+
+```bash
+# Restart CSCFs to re-establish Diameter connections
+docker restart icscf scscf pcscf
+
+# Wait 15 seconds, then restart UEs to force fresh registration
+sleep 15
+docker restart e2e_ue1 e2e_ue2
+
+# Verify UE1 registration (should show "registration success, status=200")
+sleep 30
+docker logs --tail 5 e2e_ue1 2>&1 | grep "regist"
+```
+
+### Step 5: Verify stack health
+
+```bash
+# Check all critical metrics
+.venv/bin/python -c "
+import asyncio, sys
+sys.path.insert(0, 'gui')
+sys.path.insert(0, '.')
+from common.stack_health import collect_health_metrics, HEALTH_CHECKS
+async def main():
+    health = await collect_health_metrics()
+    for metric, check in HEALTH_CHECKS.items():
+        actual = health.get(metric)
+        status = '✓' if actual == check['expected'] else '✗'
+        print(f'  {status} {metric}: {actual} (expected {check[\"expected\"]})')
+asyncio.run(main())
+"
+```
+
+All six metrics must match:
+
+| Metric | Expected | Meaning |
+|---|---|---|
+| `ran_ue` | 2.0 | Both UEs attached to 5G |
+| `gnb` | 1.0 | gNB connected to AMF |
+| `amf_session` | 4.0 | 4 PDU sessions (2 UEs x 2 APNs) |
+| `fivegs_smffunction_sm_sessionnbr` | 4.0 | SMF confirms 4 PDU sessions |
+| `ims_usrloc_pcscf:registered_contacts` | 2.0 | Both UEs IMS-registered at P-CSCF |
+| `ims_usrloc_scscf:active_contacts` | 2.0 | Both UEs IMS-registered at S-CSCF |
+
+### Step 6: Verify UPF GTP-U counters (critical for anomaly detection)
+
+Place a test call and verify the UPF packet counters increment:
+
+```bash
+# Check counters before call
+curl -s http://$(grep UPF_IP network/.env | cut -d= -f2):9091/metrics | grep "gtp_indatapkt\|gtp_outdatapkt"
+
+# Place a test call (UE1 calls UE2, hold 10 seconds)
+.venv/bin/python -c "
+import asyncio, sys
+sys.path.insert(0, '.')
+from agentic_chaos.tools.application_tools import establish_vonr_call, hangup_call
+async def main():
+    r = await establish_vonr_call('ims.mnc001.mcc001.3gppnetwork.org', '001011234567892')
+    print(f'Call: {r.get(\"success\")}')
+    if r.get('success'):
+        await asyncio.sleep(10)
+        await hangup_call()
+asyncio.run(main())
+"
+
+# Check counters after call — they MUST have incremented
+curl -s http://$(grep UPF_IP network/.env | cut -d= -f2):9091/metrics | grep "gtp_indatapkt\|gtp_outdatapkt"
+```
+
+If the counters stay at 0 after a successful call, the `docker_open5gs` image was pulled from ghcr.io instead of built from source. Rebuild it:
+
+```bash
+docker build -t docker_open5gs ./network/base
+# Then redeploy the stack
+```
+
+### Step 7: Train the anomaly detection model
+
+The anomaly model must be trained on a healthy stack with active traffic. The trainer generates randomized IMS traffic (SIP REGISTER + VoNR calls) for the specified duration while collecting metric snapshots.
+
+```bash
+.venv/bin/python -m anomaly_trainer --duration 600
+```
+
+The trained model is saved to `agentic_ops_v5/anomaly/baseline/` and loaded automatically by the v5 agent pipeline. Retrain after:
+- Rebuilding the stack
+- Changing the number of UEs
+- Modifying network topology or configuration
+- Adding new metrics to the anomaly preprocessor
+
+### Teardown
+
+```bash
+# Tear down everything (UEs + gNB + core + IMS)
+./scripts/teardown-stack.sh
+
+# Or tear down just the UEs
+./scripts/teardown-ues.sh
+
+# Or tear down everything including the ops layer
+./scripts/teardown.sh
+```
+
 ## E2E VoNR Voice Test
 
 End-to-end voice call testing using UERANSIM (5G UE + gNB) with pjsua (PJSIP) for SIP/voice. Kamailio IMS authentication is relaxed from IMS-AKA to SIP Digest auth for testability.
 
-### Quick Start (manual)
+### Quick Start
 
 ```bash
-# 0. Build base images (one-time)
-docker build -t docker_open5gs ./network/base
-docker build -t docker_kamailio ./network/ims_base
-docker build -t docker_ueransim ./network/ueransim
-
-# 1. Start the ops layer, then deploy the network from the GUI
-cp ops.env.example ops.env  # Edit with your GCP project + API keys
-docker compose -f network-ops.yaml up -d
-python3 gui/server.py &
-# Open http://localhost:8073 → Stack page → Build & Deploy Stack
-# Or start the network manually:
-docker compose -p vonr -f network/sa-vonr-deploy.yaml -f grafana-dashboards.yaml up -d
-
-# 2. Build the pjsua-enabled UERANSIM image
-./scripts/build.sh
-
-# 3. Run the full e2e test (provisions, configures, deploys UEs, waits for registration)
+# Build all images from source (see "Building and Deploying the Stack" above)
+# Then run the full e2e test:
 ./scripts/e2e-vonr-test.sh
 
-# 4. Tear down everything
-./scripts/teardown.sh
+# Or use the GUI: http://localhost:8073 → Stack → Build & Deploy Stack
 ```
-
-Or just use the GUI — the **Build & Deploy Stack** button on the `/stack` page runs the same flow.
 
 ### What the Deploy Script Does
 

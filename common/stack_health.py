@@ -59,47 +59,249 @@ async def collect_health_metrics() -> dict[str, float]:
     return health
 
 
-async def auto_heal_stack() -> bool:
-    """Attempt to auto-heal the stack by redeploying UEs."""
-    log.info("Auto-heal: redeploying UEs...")
+async def _shell(cmd: str, timeout: int = 60) -> tuple[int, str]:
+    """Run a shell command, return (rc, output)."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "bash", "scripts/deploy-ues.sh",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(_REPO_ROOT),
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-
-        if proc.returncode == 0:
-            log.info("Auto-heal: UEs redeployed successfully")
-            log.info("Auto-heal: waiting 60s for 5G attachment + IMS registration...")
-            await asyncio.sleep(60)
-
-            # Force a fresh re-register from both UEs to ensure P-CSCF/S-CSCF
-            # usrloc databases have the contacts. deploy-ues.sh confirms
-            # registration from the UE side, but the IMS server side may have
-            # stale/expired contacts from a previous fault.
-            log.info("Auto-heal: forcing SIP re-register from both UEs...")
-            for ue in ("e2e_ue1", "e2e_ue2"):
-                await asyncio.create_subprocess_shell(
-                    f'docker exec {ue} bash -c "echo rr >> /tmp/pjsua_cmd"',
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-            await asyncio.sleep(10)  # allow REGISTER transactions to complete
-
-            return True
-        else:
-            log.error("Auto-heal: deploy-ues.sh failed (exit %d): %s",
-                      proc.returncode, stderr.decode(errors="replace")[-200:])
-            return False
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return proc.returncode or 0, stdout.decode(errors="replace").strip()
     except asyncio.TimeoutError:
-        log.error("Auto-heal: deploy-ues.sh timed out after 180s")
+        log.warning("Command timed out after %ds: %s", timeout, cmd[:80])
+        return 1, "timeout"
+
+
+async def auto_heal_stack() -> bool:
+    """Diagnose and fix stack health issues.
+
+    Instead of blindly redeploying UEs, this analyzes which metrics are
+    unhealthy and applies targeted fixes:
+
+    1. CSCF stale cache (registered_contacts/active_contacts wrong):
+       Restart CSCFs to clear usrloc, then re-register UEs.
+
+    2. PDU session mismatch (amf_session/smf_sessionnbr wrong):
+       Restart UEs to re-establish PDU sessions from scratch.
+
+    3. Diameter peer issues (I_Open state):
+       Restart CSCFs to re-establish Diameter connections to HSS,
+       then restart UEs.
+
+    4. Missing containers:
+       Redeploy via deploy-ues.sh.
+    """
+    log.info("Auto-heal: diagnosing issues...")
+
+    health = await collect_health_metrics()
+    issues: set[str] = set()
+
+    # Classify the failures
+    for metric, check in HEALTH_CHECKS.items():
+        actual = health.get(metric)
+        expected = check["expected"]
+        if actual is None or actual != expected:
+            issues.add(metric)
+
+    ims_stale = bool(issues & {
+        "ims_usrloc_pcscf:registered_contacts",
+        "ims_usrloc_scscf:active_contacts",
+    })
+    pdu_broken = bool(issues & {
+        "amf_session",
+        "fivegs_smffunction_sm_sessionnbr",
+    })
+    ue_missing = bool(issues & {"ran_ue"})
+
+    # Step 1: Clear tc rules from all containers (residual from previous runs)
+    log.info("Auto-heal: clearing residual tc rules...")
+    for c in ["upf", "rtpengine", "pcscf", "icscf", "scscf", "pyhss",
+               "amf", "smf", "nr_gnb"]:
+        await _shell(f"docker exec {c} tc qdisc del dev eth0 root 2>/dev/null", timeout=10)
+
+    # Step 2: If IMS contacts are stale, restart CSCFs to clear usrloc
+    if ims_stale:
+        log.info("Auto-heal: restarting CSCFs to clear stale IMS contacts...")
+        # Restart one at a time to avoid the combined timeout
+        for cscf in ["pcscf", "icscf", "scscf"]:
+            await _shell(f"docker restart {cscf}", timeout=30)
+        await asyncio.sleep(10)
+
+        # Check if Diameter peers need fixing (I_Open → restart PyHSS too)
+        rc, output = await _shell(
+            'docker exec icscf kamcmd cdp.list_peers 2>/dev/null | grep State',
+            timeout=15,
+        )
+        if "I_Open" in output or "Closed" in output:
+            log.info("Auto-heal: Diameter peer not established, restarting PyHSS + CSCFs...")
+            await _shell("docker restart pyhss", timeout=30)
+            await asyncio.sleep(10)
+            for cscf in ["icscf", "scscf", "pcscf"]:
+                await _shell(f"docker restart {cscf}", timeout=30)
+            await asyncio.sleep(15)
+
+    # Step 3: If PDU sessions are broken or UEs missing, restart UEs
+    if pdu_broken or ue_missing or ims_stale:
+        log.info("Auto-heal: restarting UEs to re-establish sessions...")
+        await _shell("docker restart e2e_ue1 e2e_ue2", timeout=60)
+        log.info("Auto-heal: waiting 30s for 5G attachment + PDU sessions...")
+        await asyncio.sleep(30)
+
+    # Step 4: Force SIP re-registration
+    log.info("Auto-heal: forcing SIP re-register from both UEs...")
+    for ue in ("e2e_ue1", "e2e_ue2"):
+        await _shell(f'docker exec {ue} bash -c "echo rr >> /tmp/pjsua_cmd"', timeout=10)
+    log.info("Auto-heal: waiting 15s for IMS registration...")
+    await asyncio.sleep(15)
+
+    # Step 5: If still not registered, try once more with a longer wait
+    health2 = await collect_health_metrics()
+    ims_ok = (
+        health2.get("ims_usrloc_pcscf:registered_contacts") == 2.0
+        and health2.get("ims_usrloc_scscf:active_contacts") == 2.0
+    )
+    if not ims_ok:
+        log.info("Auto-heal: IMS not yet registered, retrying re-register...")
+        for ue in ("e2e_ue1", "e2e_ue2"):
+            await _shell(f'docker exec {ue} bash -c "echo rr >> /tmp/pjsua_cmd"', timeout=10)
+        await asyncio.sleep(20)
+
+    return True
+
+
+async def verify_upf_gtp_counters() -> bool:
+    """Verify UPF GTP-U counters increment during an active call.
+
+    Places a short test call and checks that the UPF packet counters
+    change. Returns False if counters stay at 0 (broken metrics exporter).
+    """
+    log.info("UPF verify: checking GTP-U counters...")
+
+    # Get counter before call
+    rc, before_out = await _shell(
+        "curl -s http://172.22.0.8:9091/metrics 2>/dev/null | grep '^fivegs_ep_n3_gtp_indatapktn3upf '",
+        timeout=10,
+    )
+    before_val = 0
+    if before_out and not before_out.startswith("timeout"):
+        try:
+            before_val = int(float(before_out.split()[-1]))
+        except (ValueError, IndexError):
+            pass
+
+    # Place a short test call
+    log.info("UPF verify: placing test call...")
+    rc, call_out = await _shell(
+        '.venv/bin/python -c "'
+        'import asyncio, sys; sys.path.insert(0, \".\");'
+        'from agentic_chaos.tools.application_tools import establish_vonr_call, hangup_call;'
+        'async def m():\n'
+        '    r = await establish_vonr_call(\"ims.mnc001.mcc001.3gppnetwork.org\", \"001011234567892\")\n'
+        '    if r.get(\"success\"): await asyncio.sleep(5); await hangup_call()\n'
+        '    return r.get(\"success\", False)\n'
+        'print(asyncio.run(m()))"',
+        timeout=60,
+    )
+
+    if "True" not in call_out:
+        log.warning("UPF verify: test call failed — cannot verify counters")
         return False
-    except Exception as e:
-        log.error("Auto-heal failed: %s", e)
+
+    await asyncio.sleep(6)  # wait for Prometheus scrape
+
+    # Get counter after call
+    rc, after_out = await _shell(
+        "curl -s http://172.22.0.8:9091/metrics 2>/dev/null | grep '^fivegs_ep_n3_gtp_indatapktn3upf '",
+        timeout=10,
+    )
+    after_val = 0
+    if after_out and not after_out.startswith("timeout"):
+        try:
+            after_val = int(float(after_out.split()[-1]))
+        except (ValueError, IndexError):
+            pass
+
+    delta = after_val - before_val
+    if delta > 0:
+        log.info("UPF verify: GTP-U counters working (indatapkt +%d)", delta)
+        return True
+    else:
+        log.error("UPF verify: GTP-U counters NOT incrementing (before=%d, after=%d). "
+                   "The docker_open5gs image may have been pulled from ghcr.io instead of built from source.",
+                   before_val, after_val)
         return False
+
+
+async def post_deploy_verify(max_attempts: int = 3) -> bool:
+    """Full post-deploy verification: Diameter fix, health check, UPF counters.
+
+    Called after stack deployment (from GUI or scripts). Runs non-interactively
+    with auto-heal. Returns True if all checks pass.
+    """
+    log.info("Post-deploy: starting verification...")
+
+    for attempt in range(1, max_attempts + 1):
+        log.info("Post-deploy: attempt %d/%d", attempt, max_attempts)
+
+        # Step 1: Fix Diameter peer state
+        log.info("Post-deploy: fixing Diameter peer state...")
+        for cscf in ["icscf", "scscf", "pcscf"]:
+            await _shell(f"docker restart {cscf}", timeout=30)
+        await asyncio.sleep(10)
+
+        # Check Diameter peer
+        rc, output = await _shell(
+            'docker exec icscf kamcmd cdp.list_peers 2>/dev/null | grep State',
+            timeout=15,
+        )
+        if "I_Open" in output or "Closed" in output:
+            log.info("Post-deploy: Diameter peer stuck, restarting PyHSS + CSCFs...")
+            await _shell("docker restart pyhss", timeout=30)
+            await asyncio.sleep(10)
+            for cscf in ["icscf", "scscf", "pcscf"]:
+                await _shell(f"docker restart {cscf}", timeout=30)
+            await asyncio.sleep(15)
+
+        # Step 2: Restart UEs for fresh registration
+        log.info("Post-deploy: restarting UEs...")
+        await _shell("docker restart e2e_ue1 e2e_ue2", timeout=60)
+        await asyncio.sleep(30)
+
+        # Step 3: Force SIP re-register
+        log.info("Post-deploy: forcing SIP re-register...")
+        for ue in ("e2e_ue1", "e2e_ue2"):
+            await _shell(f'docker exec {ue} bash -c "echo rr >> /tmp/pjsua_cmd"', timeout=10)
+        await asyncio.sleep(15)
+
+        # Step 4: Check health metrics
+        health = await collect_health_metrics()
+        failures = []
+        for metric, check in HEALTH_CHECKS.items():
+            actual = health.get(metric)
+            if actual != check["expected"]:
+                failures.append(f"{metric}: {actual} (expected {check['expected']})")
+
+        if failures:
+            log.warning("Post-deploy: health check failed on attempt %d: %s",
+                        attempt, "; ".join(failures))
+            if attempt < max_attempts:
+                continue
+            else:
+                log.error("Post-deploy: health check failed after %d attempts", max_attempts)
+                return False
+
+        log.info("Post-deploy: all health metrics OK")
+
+        # Step 5: Verify UPF GTP-U counters
+        gtp_ok = await verify_upf_gtp_counters()
+        if not gtp_ok:
+            log.error("Post-deploy: UPF GTP-U counters broken — rebuild docker_open5gs from source")
+            return False
+
+        log.info("Post-deploy: all verification passed")
+        return True
+
+    return False
 
 
 async def check_stack_health(purpose: str = "operation") -> bool:

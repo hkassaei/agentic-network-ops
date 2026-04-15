@@ -455,7 +455,39 @@ async def investigate(
             for ls in layers.values()
         )
 
-        if has_high_suspect and has_red_layer:
+        # Check if Pattern Matcher disagrees with the NA's suspects.
+        # If the Pattern Matcher found a different root cause (e.g., MongoDB)
+        # that isn't in the NA's suspect list, run the Investigator to
+        # resolve the conflict.
+        pattern_match = state.get("pattern_match")
+        pm = {}
+        if isinstance(pattern_match, dict):
+            pm = pattern_match
+        elif isinstance(pattern_match, str):
+            try:
+                pm = json.loads(pattern_match)
+            except (json.JSONDecodeError, TypeError):
+                pm = {}
+
+        pm_matched = pm.get("matched", False)
+        pm_confidence = pm.get("confidence", "").lower()
+        pm_disagrees = False
+
+        if pm_matched and pm_confidence in ("high", "very_high"):
+            # Check if the PM's failure domain differs from the NA's suspects
+            pm_domain = pm.get("failure_domain", "")
+            na_suspect_names = {
+                s.get("name", "").lower()
+                for s in suspects
+                if isinstance(s, dict) and s.get("confidence", "").lower() == "high"
+            }
+            # If PM says infrastructure but NA suspects are all IMS, they disagree
+            if pm_domain == "infrastructure" and not na_suspect_names & {"mongo", "mysql", "dns"}:
+                pm_disagrees = True
+                log.info("Pattern Matcher disagrees with NA: PM says '%s' but NA suspects %s",
+                         pm_domain, na_suspect_names)
+
+        if has_high_suspect and has_red_layer and not pm_disagrees:
             investigator_skipped = True
 
     if investigator_skipped:

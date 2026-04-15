@@ -119,7 +119,7 @@ Produce a rating for EVERY layer. Use:
 - **RED** — failed (zero sessions, disconnected, no traffic flowing, containers exited)
 
 You MUST assess all four layers, **considering only the containers returned by `get_vonr_components` in Step 0**. Group each in-scope container by its `layer` field:
-- **infrastructure** — data stores and support services in scope (typically MongoDB, MySQL, DNS)
+- **infrastructure** — data stores and support services in scope (typically MongoDB, MySQL, DNS). **These are critical VoNR dependencies.** MongoDB is the backend for UDR (5G subscriber data) and PyHSS (IMS subscriber data). MySQL is the backend for Kamailio IMS. DNS provides IMS domain resolution. If ANY infrastructure container is exited or unreachable, rate this layer RED — it will cascade to core and IMS.
 - **ran** — gNB, radio link simulation, UE attachment at AMF
 - **core** — 5G control and user plane NFs in scope (typically AMF, SMF, UPF, PCF, NRF, SCP, AUSF, UDM, UDR)
 - **ims** — IMS functions in scope (typically P-CSCF, I-CSCF, S-CSCF, HSS, RTPEngine)

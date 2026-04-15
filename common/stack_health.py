@@ -112,6 +112,7 @@ async def auto_heal_stack() -> bool:
         "fivegs_smffunction_sm_sessionnbr",
     })
     ue_missing = bool(issues & {"ran_ue"})
+    gnb_missing = bool(issues & {"gnb"})
 
     # Step 1: Clear tc rules from all containers (residual from previous runs)
     log.info("Auto-heal: clearing residual tc rules...")
@@ -119,10 +120,18 @@ async def auto_heal_stack() -> bool:
                "amf", "smf", "nr_gnb"]:
         await _shell(f"docker exec {c} tc qdisc del dev eth0 root 2>/dev/null", timeout=10)
 
-    # Step 2: If IMS contacts are stale, restart CSCFs to clear usrloc
+    # Step 2: If gNB is disconnected from AMF, restart gNB to re-establish
+    # the NGAP/SCTP association. This must happen BEFORE restarting UEs
+    # because UEs can't attach without a connected gNB.
+    if gnb_missing:
+        log.info("Auto-heal: gNB not connected to AMF, restarting gNB...")
+        await _shell("docker restart nr_gnb", timeout=30)
+        log.info("Auto-heal: waiting 15s for gNB NGAP association...")
+        await asyncio.sleep(15)
+
+    # Step 3: If IMS contacts are stale, restart CSCFs to clear usrloc
     if ims_stale:
         log.info("Auto-heal: restarting CSCFs to clear stale IMS contacts...")
-        # Restart one at a time to avoid the combined timeout
         for cscf in ["pcscf", "icscf", "scscf"]:
             await _shell(f"docker restart {cscf}", timeout=30)
         await asyncio.sleep(10)
@@ -140,21 +149,39 @@ async def auto_heal_stack() -> bool:
                 await _shell(f"docker restart {cscf}", timeout=30)
             await asyncio.sleep(15)
 
-    # Step 3: If PDU sessions are broken or UEs missing, restart UEs
-    if pdu_broken or ue_missing or ims_stale:
+    # Step 4: If PDU sessions are broken, UEs missing, or gNB was restarted,
+    # restart UEs to force fresh 5G attach + PDU session establishment
+    if pdu_broken or ue_missing or ims_stale or gnb_missing:
         log.info("Auto-heal: restarting UEs to re-establish sessions...")
         await _shell("docker restart e2e_ue1 e2e_ue2", timeout=60)
         log.info("Auto-heal: waiting 30s for 5G attachment + PDU sessions...")
         await asyncio.sleep(30)
 
-    # Step 4: Force SIP re-registration
+    # Step 5: Check for stale IMS contacts (can happen after gNB/UE restart
+    # when old contacts persist in CSCF usrloc alongside new ones)
+    health_mid = await collect_health_metrics()
+    contacts_stale = (
+        health_mid.get("ims_usrloc_pcscf:registered_contacts", 0) > 2.0
+        or health_mid.get("ims_usrloc_scscf:active_contacts", 0) > 2.0
+    )
+    if contacts_stale:
+        log.info("Auto-heal: IMS contacts stale (doubled), restarting CSCFs...")
+        for cscf in ["pcscf", "icscf", "scscf"]:
+            await _shell(f"docker restart {cscf}", timeout=30)
+        await asyncio.sleep(10)
+        # Restart UEs again for fresh registration on clean CSCFs
+        await _shell("docker restart e2e_ue1 e2e_ue2", timeout=60)
+        log.info("Auto-heal: waiting 30s for re-registration...")
+        await asyncio.sleep(30)
+
+    # Step 6: Force SIP re-registration
     log.info("Auto-heal: forcing SIP re-register from both UEs...")
     for ue in ("e2e_ue1", "e2e_ue2"):
         await _shell(f'docker exec {ue} bash -c "echo rr >> /tmp/pjsua_cmd"', timeout=10)
     log.info("Auto-heal: waiting 15s for IMS registration...")
     await asyncio.sleep(15)
 
-    # Step 5: If still not registered, try once more with a longer wait
+    # Step 7: If still not registered, try once more with a longer wait
     health2 = await collect_health_metrics()
     ims_ok = (
         health2.get("ims_usrloc_pcscf:registered_contacts") == 2.0

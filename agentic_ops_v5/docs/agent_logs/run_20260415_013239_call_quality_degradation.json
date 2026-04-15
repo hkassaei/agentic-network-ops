@@ -1,0 +1,1376 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260415_012845_call_quality_degradation",
+  "timestamp": "2026-04-15T01:28:46.783825+00:00",
+  "duration_seconds": 232.125614,
+  "scenario": {
+    "name": "Call Quality Degradation",
+    "description": "Inject 30% packet loss on RTPEngine \u2014 the media relay for VoNR voice calls. RTP packets are dropped after RTPEngine receives them, degrading voice quality (MOS drop, jitter increase, audible artifacts). SIP signaling and 5G core are completely unaffected because they don't traverse RTPEngine. Tests whether the agent can diagnose a pure media-path fault without IMS signaling noise.",
+    "category": "network",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "network_loss",
+        "target": "rtpengine",
+        "params": {
+          "loss_pct": 30
+        },
+        "ttl_seconds": 600
+      }
+    ],
+    "expected_symptoms": [
+      "RTPEngine packets_lost increases",
+      "RTPEngine average_packet_loss rises",
+      "RTPEngine average_mos drops below 3.5",
+      "RTPEngine packet_loss_standard_deviation spikes",
+      "RTPEngine 1-way streams may appear",
+      "UPF GTP-U counters unaffected",
+      "IMS signaling (SIP, Diameter) unaffected"
+    ],
+    "escalation": false,
+    "observation_traffic_seconds": 120,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 600
+  },
+  "baseline": {
+    "timestamp": "2026-04-15T01:28:46.783825+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 66.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 32.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 15410.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 21072.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 4.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 4.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 8.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 8.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 51.0,
+          "core:rcv_requests_register": 12.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 52.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 6.0,
+          "script:register_time": 1916.0,
+          "sl:1xx_replies": 12.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 73.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 6.0,
+          "cdp:replies_response_time": 440.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 12.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 73.0,
+          "ims_icscf:uar_replies_received": 6.0,
+          "ims_icscf:uar_replies_response_time": 440.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "12 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 114.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 12.0,
+          "cdp:replies_response_time": 1377.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 12.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 128.0,
+          "ims_auth:mar_replies_received": 6.0,
+          "ims_auth:mar_replies_response_time": 772.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 6.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 100.0,
+          "ims_registrar_scscf:sar_replies_received": 6.0,
+          "ims_registrar_scscf:sar_replies_response_time": 605.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 0.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 0.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 0.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 0.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 0.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 0.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 0.0,
+          "total_number_of_streams_with_no_relayed_packets": 0.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 0.0,
+          "sum_of_all_mos_square_values_sampled": 0.0,
+          "total_number_of_mos_samples": 0.0,
+          "average_mos": 0.0,
+          "mos_standard_deviation": 0.0,
+          "sum_of_all_jitter_(reported)_values_sampled": 0.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(reported)_samples": 0.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 0.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 0.0,
+          "average_end_to_end_round_trip_time": 0.0,
+          "end_to_end_round_trip_time_standard_deviation": 0.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 0.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 0.0,
+          "total_number_of_discrete_round_trip_time_samples": 0.0,
+          "average_discrete_round_trip_time": 0.0,
+          "discrete_round_trip_time_standard_deviation": 0.0,
+          "sum_of_all_packet_loss_values_sampled": 0.0,
+          "sum_of_all_packet_loss_square_values_sampled": 0.0,
+          "total_number_of_packet_loss_samples": 0.0,
+          "average_packet_loss": 0.0,
+          "packet_loss_standard_deviation": 0.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_8d77eecb",
+      "fault_type": "network_loss",
+      "target": "rtpengine",
+      "params": {
+        "loss_pct": 30
+      },
+      "mechanism": "sudo nsenter -t 2726741 -n tc qdisc add dev eth0 root netem loss 30.0%",
+      "heal_command": "sudo nsenter -t 2726741 -n tc qdisc del dev eth0 root",
+      "injected_at": "2026-04-15T01:28:46.784532+00:00",
+      "ttl_seconds": 600,
+      "expires_at": "2026-04-15T01:38:46.784532+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "qdisc netem 80fd: root refcnt 9 limit 1000 loss 30%"
+    }
+  ],
+  "fault_verification": {
+    "verdict": "confirmed",
+    "wait_seconds": 0,
+    "elapsed_seconds": 0.0,
+    "verified_at": "2026-04-15T01:30:50.209622+00:00",
+    "filtered_deltas": {
+      "pcscf": {
+        "script:register_success": {
+          "baseline": 6.0,
+          "current": 11.0,
+          "delta": 5.0
+        },
+        "script:register_time": {
+          "baseline": 1916.0,
+          "current": 3191.0,
+          "delta": 1275.0
+        },
+        "core:rcv_requests_register": {
+          "baseline": 12.0,
+          "current": 22.0,
+          "delta": 10.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 0.0,
+          "current": 8.0,
+          "delta": 8.0
+        },
+        "core:rcv_requests_bye": {
+          "baseline": 0.0,
+          "current": 16.0,
+          "delta": 16.0
+        },
+        "core:rcv_requests_options": {
+          "baseline": 51.0,
+          "current": 76.0,
+          "delta": 25.0
+        },
+        "dialog_ng:processed": {
+          "baseline": 0.0,
+          "current": 8.0,
+          "delta": 8.0
+        },
+        "httpclient:connok": {
+          "baseline": 0.0,
+          "current": 8.0,
+          "delta": 8.0
+        },
+        "sl:1xx_replies": {
+          "baseline": 12.0,
+          "current": 30.0,
+          "delta": 18.0
+        },
+        "httpclient:connfail": {
+          "baseline": 52.0,
+          "current": 93.0,
+          "delta": 41.0
+        }
+      },
+      "icscf": {
+        "ims_icscf:lir_avg_response_time": {
+          "baseline": 0.0,
+          "current": 37.0,
+          "delta": 37.0
+        },
+        "cdp:replies_response_time": {
+          "baseline": 440.0,
+          "current": 861.0,
+          "delta": 421.0
+        },
+        "ims_icscf:uar_replies_response_time": {
+          "baseline": 440.0,
+          "current": 710.0,
+          "delta": 270.0
+        },
+        "ims_icscf:uar_replies_received": {
+          "baseline": 6.0,
+          "current": 11.0,
+          "delta": 5.0
+        },
+        "core:rcv_requests_register": {
+          "baseline": 12.0,
+          "current": 22.0,
+          "delta": 10.0
+        },
+        "cdp:average_response_time": {
+          "baseline": 73.0,
+          "current": 57.0,
+          "delta": -16.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 0.0,
+          "current": 4.0,
+          "delta": 4.0
+        },
+        "ims_icscf:lir_replies_response_time": {
+          "baseline": 0.0,
+          "current": 151.0,
+          "delta": 151.0
+        },
+        "cdp:replies_received": {
+          "baseline": 6.0,
+          "current": 15.0,
+          "delta": 9.0
+        },
+        "ims_icscf:lir_replies_received": {
+          "baseline": 0.0,
+          "current": 4.0,
+          "delta": 4.0
+        }
+      },
+      "upf": {
+        "fivegs_ep_n3_gtp_indatapktn3upf": {
+          "baseline": 66.0,
+          "current": 802.0,
+          "delta": 736.0
+        },
+        "fivegs_ep_n3_gtp_outdatapktn3upf": {
+          "baseline": 32.0,
+          "current": 641.0,
+          "delta": 609.0
+        },
+        "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": {
+          "baseline": 21072.0,
+          "current": 115936.0,
+          "delta": 94864.0
+        },
+        "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": {
+          "baseline": 15410.0,
+          "current": 112744.0,
+          "delta": 97334.0
+        }
+      },
+      "scscf": {
+        "cdp:replies_response_time": {
+          "baseline": 1377.0,
+          "current": 2312.0,
+          "delta": 935.0
+        },
+        "core:rcv_requests_register": {
+          "baseline": 12.0,
+          "current": 22.0,
+          "delta": 10.0
+        },
+        "ims_registrar_scscf:sar_replies_response_time": {
+          "baseline": 605.0,
+          "current": 1088.0,
+          "delta": 483.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 0.0,
+          "current": 8.0,
+          "delta": 8.0
+        },
+        "ims_auth:mar_replies_response_time": {
+          "baseline": 772.0,
+          "current": 1224.0,
+          "delta": 452.0
+        },
+        "ims_auth:mar_replies_received": {
+          "baseline": 6.0,
+          "current": 11.0,
+          "delta": 5.0
+        },
+        "dialog_ng:processed": {
+          "baseline": 0.0,
+          "current": 8.0,
+          "delta": 8.0
+        },
+        "ims_registrar_scscf:accepted_regs": {
+          "baseline": 6.0,
+          "current": 11.0,
+          "delta": 5.0
+        },
+        "ims_registrar_scscf:sar_replies_received": {
+          "baseline": 6.0,
+          "current": 11.0,
+          "delta": 5.0
+        },
+        "cdp:replies_received": {
+          "baseline": 12.0,
+          "current": 22.0,
+          "delta": 10.0
+        }
+      },
+      "rtpengine": {
+        "sum_of_all_packet_loss_values_sampled": {
+          "baseline": 0.0,
+          "current": 475.0,
+          "delta": 475.0
+        },
+        "average_jitter_(reported)": {
+          "baseline": 0.0,
+          "current": 6.0,
+          "delta": 6.0
+        },
+        "total_relayed_packets_(userspace)": {
+          "baseline": 0.0,
+          "current": 341.0,
+          "delta": 341.0
+        },
+        "jitter_(reported)_standard_deviation": {
+          "baseline": 0.0,
+          "current": 7.0,
+          "delta": 7.0
+        },
+        "average_discrete_round_trip_time": {
+          "baseline": 0.0,
+          "current": 3055.0,
+          "delta": 3055.0
+        },
+        "discrete_round_trip_time_standard_deviation": {
+          "baseline": 0.0,
+          "current": 770.0,
+          "delta": 770.0
+        },
+        "sum_of_all_mos_values_sampled": {
+          "baseline": 0.0,
+          "current": 72.8,
+          "delta": 72.8
+        },
+        "end_to_end_round_trip_time_standard_deviation": {
+          "baseline": 0.0,
+          "current": 2486.0,
+          "delta": 2486.0
+        },
+        "sum_of_all_discrete_round_trip_time_square_values_sampled": {
+          "baseline": 0.0,
+          "current": 208565998.0,
+          "delta": 208565998.0
+        },
+        "total_number_of_discrete_round_trip_time_samples": {
+          "baseline": 0.0,
+          "current": 21.0,
+          "delta": 21.0
+        },
+        "sum_of_all_end_to_end_round_trip_time_values_sampled": {
+          "baseline": 0.0,
+          "current": 118055.0,
+          "delta": 118055.0
+        },
+        "sum_of_all_discrete_round_trip_time_values_sampled": {
+          "baseline": 0.0,
+          "current": 64172.0,
+          "delta": 64172.0
+        },
+        "total_number_of_jitter_(reported)_samples": {
+          "baseline": 0.0,
+          "current": 21.0,
+          "delta": 21.0
+        },
+        "total_number_of_packet_loss_samples": {
+          "baseline": 0.0,
+          "current": 21.0,
+          "delta": 21.0
+        },
+        "average_packet_loss": {
+          "baseline": 0.0,
+          "current": 22.0,
+          "delta": 22.0
+        },
+        "sum_of_all_jitter_(reported)_square_values_sampled": {
+          "baseline": 0.0,
+          "current": 2010.0,
+          "delta": 2010.0
+        },
+        "total_regular_terminated_sessions": {
+          "baseline": 0.0,
+          "current": 2.0,
+          "delta": 2.0
+        },
+        "average_end_to_end_round_trip_time": {
+          "baseline": 0.0,
+          "current": 5621.0,
+          "delta": 5621.0
+        },
+        "total_managed_sessions": {
+          "baseline": 0.0,
+          "current": 2.0,
+          "delta": 2.0
+        },
+        "average_mos": {
+          "baseline": 0.0,
+          "current": 4.0,
+          "delta": 4.0
+        },
+        "total_number_of_end_to_end_round_trip_time_samples": {
+          "baseline": 0.0,
+          "current": 21.0,
+          "delta": 21.0
+        },
+        "sum_of_all_mos_square_values_sampled": {
+          "baseline": 0.0,
+          "current": 301.72,
+          "delta": 301.72
+        },
+        "total_relayed_bytes_(userspace)": {
+          "baseline": 0.0,
+          "current": 16660.0,
+          "delta": 16660.0
+        },
+        "total_relayed_packets": {
+          "baseline": 0.0,
+          "current": 341.0,
+          "delta": 341.0
+        },
+        "sum_of_all_jitter_(reported)_values_sampled": {
+          "baseline": 0.0,
+          "current": 126.0,
+          "delta": 126.0
+        },
+        "packet_loss_standard_deviation": {
+          "baseline": 0.0,
+          "current": 18.0,
+          "delta": 18.0
+        },
+        "sum_of_all_packet_loss_square_values_sampled": {
+          "baseline": 0.0,
+          "current": 18065.0,
+          "delta": 18065.0
+        },
+        "sum_of_all_end_to_end_round_trip_time_square_values_sampled": {
+          "baseline": 0.0,
+          "current": 793484081.0,
+          "delta": 793484081.0
+        },
+        "total_number_of_mos_samples": {
+          "baseline": 0.0,
+          "current": 18.0,
+          "delta": 18.0
+        },
+        "total_relayed_bytes": {
+          "baseline": 0.0,
+          "current": 16660.0,
+          "delta": 16660.0
+        }
+      }
+    },
+    "raw_delta_node_count": 5
+  },
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-04-15T01:30:50.209622+00:00",
+      "elapsed_seconds": 0.0,
+      "metrics_delta": {
+        "pcscf": {
+          "script:register_success": {
+            "baseline": 6.0,
+            "current": 11.0,
+            "delta": 5.0
+          },
+          "script:register_time": {
+            "baseline": 1916.0,
+            "current": 3191.0,
+            "delta": 1275.0
+          },
+          "core:rcv_requests_register": {
+            "baseline": 12.0,
+            "current": 22.0,
+            "delta": 10.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 0.0,
+            "current": 8.0,
+            "delta": 8.0
+          },
+          "core:rcv_requests_bye": {
+            "baseline": 0.0,
+            "current": 16.0,
+            "delta": 16.0
+          },
+          "core:rcv_requests_options": {
+            "baseline": 51.0,
+            "current": 76.0,
+            "delta": 25.0
+          },
+          "dialog_ng:processed": {
+            "baseline": 0.0,
+            "current": 8.0,
+            "delta": 8.0
+          },
+          "httpclient:connok": {
+            "baseline": 0.0,
+            "current": 8.0,
+            "delta": 8.0
+          },
+          "sl:1xx_replies": {
+            "baseline": 12.0,
+            "current": 30.0,
+            "delta": 18.0
+          },
+          "httpclient:connfail": {
+            "baseline": 52.0,
+            "current": 93.0,
+            "delta": 41.0
+          }
+        },
+        "icscf": {
+          "ims_icscf:lir_avg_response_time": {
+            "baseline": 0.0,
+            "current": 37.0,
+            "delta": 37.0
+          },
+          "cdp:replies_response_time": {
+            "baseline": 440.0,
+            "current": 861.0,
+            "delta": 421.0
+          },
+          "ims_icscf:uar_replies_response_time": {
+            "baseline": 440.0,
+            "current": 710.0,
+            "delta": 270.0
+          },
+          "ims_icscf:uar_replies_received": {
+            "baseline": 6.0,
+            "current": 11.0,
+            "delta": 5.0
+          },
+          "core:rcv_requests_register": {
+            "baseline": 12.0,
+            "current": 22.0,
+            "delta": 10.0
+          },
+          "cdp:average_response_time": {
+            "baseline": 73.0,
+            "current": 57.0,
+            "delta": -16.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 0.0,
+            "current": 4.0,
+            "delta": 4.0
+          },
+          "ims_icscf:lir_replies_response_time": {
+            "baseline": 0.0,
+            "current": 151.0,
+            "delta": 151.0
+          },
+          "cdp:replies_received": {
+            "baseline": 6.0,
+            "current": 15.0,
+            "delta": 9.0
+          },
+          "ims_icscf:lir_replies_received": {
+            "baseline": 0.0,
+            "current": 4.0,
+            "delta": 4.0
+          }
+        },
+        "upf": {
+          "fivegs_ep_n3_gtp_indatapktn3upf": {
+            "baseline": 66.0,
+            "current": 802.0,
+            "delta": 736.0
+          },
+          "fivegs_ep_n3_gtp_outdatapktn3upf": {
+            "baseline": 32.0,
+            "current": 641.0,
+            "delta": 609.0
+          },
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": {
+            "baseline": 21072.0,
+            "current": 115936.0,
+            "delta": 94864.0
+          },
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": {
+            "baseline": 15410.0,
+            "current": 112744.0,
+            "delta": 97334.0
+          }
+        },
+        "scscf": {
+          "cdp:replies_response_time": {
+            "baseline": 1377.0,
+            "current": 2312.0,
+            "delta": 935.0
+          },
+          "core:rcv_requests_register": {
+            "baseline": 12.0,
+            "current": 22.0,
+            "delta": 10.0
+          },
+          "ims_registrar_scscf:sar_replies_response_time": {
+            "baseline": 605.0,
+            "current": 1088.0,
+            "delta": 483.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 0.0,
+            "current": 8.0,
+            "delta": 8.0
+          },
+          "ims_auth:mar_replies_response_time": {
+            "baseline": 772.0,
+            "current": 1224.0,
+            "delta": 452.0
+          },
+          "ims_auth:mar_replies_received": {
+            "baseline": 6.0,
+            "current": 11.0,
+            "delta": 5.0
+          },
+          "dialog_ng:processed": {
+            "baseline": 0.0,
+            "current": 8.0,
+            "delta": 8.0
+          },
+          "ims_registrar_scscf:accepted_regs": {
+            "baseline": 6.0,
+            "current": 11.0,
+            "delta": 5.0
+          },
+          "ims_registrar_scscf:sar_replies_received": {
+            "baseline": 6.0,
+            "current": 11.0,
+            "delta": 5.0
+          },
+          "cdp:replies_received": {
+            "baseline": 12.0,
+            "current": 22.0,
+            "delta": 10.0
+          }
+        },
+        "rtpengine": {
+          "sum_of_all_packet_loss_values_sampled": {
+            "baseline": 0.0,
+            "current": 475.0,
+            "delta": 475.0
+          },
+          "average_jitter_(reported)": {
+            "baseline": 0.0,
+            "current": 6.0,
+            "delta": 6.0
+          },
+          "total_relayed_packets_(userspace)": {
+            "baseline": 0.0,
+            "current": 341.0,
+            "delta": 341.0
+          },
+          "jitter_(reported)_standard_deviation": {
+            "baseline": 0.0,
+            "current": 7.0,
+            "delta": 7.0
+          },
+          "average_discrete_round_trip_time": {
+            "baseline": 0.0,
+            "current": 3055.0,
+            "delta": 3055.0
+          },
+          "discrete_round_trip_time_standard_deviation": {
+            "baseline": 0.0,
+            "current": 770.0,
+            "delta": 770.0
+          },
+          "sum_of_all_mos_values_sampled": {
+            "baseline": 0.0,
+            "current": 72.8,
+            "delta": 72.8
+          },
+          "end_to_end_round_trip_time_standard_deviation": {
+            "baseline": 0.0,
+            "current": 2486.0,
+            "delta": 2486.0
+          },
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": {
+            "baseline": 0.0,
+            "current": 208565998.0,
+            "delta": 208565998.0
+          },
+          "total_number_of_discrete_round_trip_time_samples": {
+            "baseline": 0.0,
+            "current": 21.0,
+            "delta": 21.0
+          },
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": {
+            "baseline": 0.0,
+            "current": 118055.0,
+            "delta": 118055.0
+          },
+          "sum_of_all_discrete_round_trip_time_values_sampled": {
+            "baseline": 0.0,
+            "current": 64172.0,
+            "delta": 64172.0
+          },
+          "total_number_of_jitter_(reported)_samples": {
+            "baseline": 0.0,
+            "current": 21.0,
+            "delta": 21.0
+          },
+          "total_number_of_packet_loss_samples": {
+            "baseline": 0.0,
+            "current": 21.0,
+            "delta": 21.0
+          },
+          "average_packet_loss": {
+            "baseline": 0.0,
+            "current": 22.0,
+            "delta": 22.0
+          },
+          "sum_of_all_jitter_(reported)_square_values_sampled": {
+            "baseline": 0.0,
+            "current": 2010.0,
+            "delta": 2010.0
+          },
+          "total_regular_terminated_sessions": {
+            "baseline": 0.0,
+            "current": 2.0,
+            "delta": 2.0
+          },
+          "average_end_to_end_round_trip_time": {
+            "baseline": 0.0,
+            "current": 5621.0,
+            "delta": 5621.0
+          },
+          "total_managed_sessions": {
+            "baseline": 0.0,
+            "current": 2.0,
+            "delta": 2.0
+          },
+          "average_mos": {
+            "baseline": 0.0,
+            "current": 4.0,
+            "delta": 4.0
+          },
+          "total_number_of_end_to_end_round_trip_time_samples": {
+            "baseline": 0.0,
+            "current": 21.0,
+            "delta": 21.0
+          },
+          "sum_of_all_mos_square_values_sampled": {
+            "baseline": 0.0,
+            "current": 301.72,
+            "delta": 301.72
+          },
+          "total_relayed_bytes_(userspace)": {
+            "baseline": 0.0,
+            "current": 16660.0,
+            "delta": 16660.0
+          },
+          "total_relayed_packets": {
+            "baseline": 0.0,
+            "current": 341.0,
+            "delta": 341.0
+          },
+          "sum_of_all_jitter_(reported)_values_sampled": {
+            "baseline": 0.0,
+            "current": 126.0,
+            "delta": 126.0
+          },
+          "packet_loss_standard_deviation": {
+            "baseline": 0.0,
+            "current": 18.0,
+            "delta": 18.0
+          },
+          "sum_of_all_packet_loss_square_values_sampled": {
+            "baseline": 0.0,
+            "current": 18065.0,
+            "delta": 18065.0
+          },
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": {
+            "baseline": 0.0,
+            "current": 793484081.0,
+            "delta": 793484081.0
+          },
+          "total_number_of_mos_samples": {
+            "baseline": 0.0,
+            "current": 18.0,
+            "delta": 18.0
+          },
+          "total_relayed_bytes": {
+            "baseline": 0.0,
+            "current": 16660.0,
+            "delta": 16660.0
+          }
+        }
+      },
+      "log_samples": {},
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-04-15T01:32:38.909439+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 819.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 641.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 113254.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 115936.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 4.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 4.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 8.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 8.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 16.0,
+          "core:rcv_requests_invite": 8.0,
+          "core:rcv_requests_options": 98.0,
+          "core:rcv_requests_register": 22.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 8.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 115.0,
+          "httpclient:connok": 8.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 11.0,
+          "script:register_time": 3191.0,
+          "sl:1xx_replies": 30.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 57.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 15.0,
+          "cdp:replies_response_time": 861.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 4.0,
+          "core:rcv_requests_register": 22.0,
+          "ims_icscf:lir_avg_response_time": 37.0,
+          "ims_icscf:lir_replies_received": 4.0,
+          "ims_icscf:lir_replies_response_time": 151.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 64.0,
+          "ims_icscf:uar_replies_received": 11.0,
+          "ims_icscf:uar_replies_response_time": 710.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "22 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 105.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 22.0,
+          "cdp:replies_response_time": 2312.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 8.0,
+          "core:rcv_requests_register": 22.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 8.0,
+          "ims_auth:mar_avg_response_time": 111.0,
+          "ims_auth:mar_replies_received": 11.0,
+          "ims_auth:mar_replies_response_time": 1224.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 11.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 98.0,
+          "ims_registrar_scscf:sar_replies_received": 11.0,
+          "ims_registrar_scscf:sar_replies_response_time": 1088.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 2.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 0.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 2.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 341.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 16660.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 341.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 16660.0,
+          "total_number_of_streams_with_no_relayed_packets": 0.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 72.8,
+          "sum_of_all_mos_square_values_sampled": 301.72,
+          "total_number_of_mos_samples": 18.0,
+          "average_mos": 4.0,
+          "mos_standard_deviation": 0.06,
+          "sum_of_all_jitter_(reported)_values_sampled": 126.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 2010.0,
+          "total_number_of_jitter_(reported)_samples": 21.0,
+          "average_jitter_(reported)": 6.0,
+          "jitter_(reported)_standard_deviation": 7.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 118055.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 793484081.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 21.0,
+          "average_end_to_end_round_trip_time": 5621.0,
+          "end_to_end_round_trip_time_standard_deviation": 2486.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 64172.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 208565998.0,
+          "total_number_of_discrete_round_trip_time_samples": 21.0,
+          "average_discrete_round_trip_time": 3055.0,
+          "discrete_round_trip_time_standard_deviation": 770.0,
+          "sum_of_all_packet_loss_values_sampled": 475.0,
+          "sum_of_all_packet_loss_square_values_sampled": 18065.0,
+          "total_number_of_packet_loss_samples": 21.0,
+          "average_packet_loss": 22.0,
+          "packet_loss_standard_deviation": 18.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 232.124907,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Inject 30% packet loss on RTPEngine \u2014 the media relay for VoNR voice calls. RTP packets are dropped after RTPEngine receives them, degrading voice quality (MOS drop, jitter increase, audible artifacts). SIP signaling and 5G core are completely unaffected because they don't traverse RTPEngine. Tests whether the agent can diagnose a pure media-path fault without IMS signaling noise.",
+    "affected_components": [
+      "rtpengine"
+    ],
+    "severity": "degraded",
+    "failure_domain": "ims_media",
+    "protocol_impact": "RTP"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v5-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: The network is experiencing a critical media plane failure due to severe packet loss localized to the RTPEngine's network interface, causing call quality degradation and secondary IMS signaling delays.\n- **timeline**:\n    1.  The RTPEngine begins experiencing severe packet loss (~22-33%) on its network interface.\n    2.  RTT measurements from both the UPF and P-CSCF confirm this packet loss is isolated to the RTPEngine.\n    3.  The loss of media packets disrupts active VoNR calls, leading to media plane failure.\n    4.  As a secondary effect, SIP session failures and timeouts cause high response time alarms in signaling components like the S-CSCF.\n- **root_cause**: The fault is localized to the `rtpengine` component, which is suffering from a high rate of packet loss on its own network interface. This is not an upstream network issue, as confirmed by clean RTT measurements to other components and simultaneous packet loss reports from two independent neighbors (UPF and P-CSCF) pointing specifically to `rtpengine`.\n- **affected_components**:\n    - `rtpengine`: Root Cause\n    - `scscf`: Symptomatic\n- **recommendation**: The investigation should focus exclusively on the `rtpengine` container. Verify kernel-level network statistics inside the container to identify interface errors, drops, or buffer overflows that would explain the observed packet loss.\n- **confidence**: high\n- **explanation**: The root cause is a media plane failure originating at the RTPEngine. Network analysis confirmed severe packet loss (22%) at this component. This was corroborated by active RTT probes from both the UPF and P-CSCF, which both reported ~33% packet loss when communicating with the RTPEngine. This isolates the fault to the RTPEngine itself. The elevated signaling delays seen at the S-CSCF are a secondary symptom caused by call failures resulting from this media plane collapse. The 5G core, RAN, and infrastructure layers are operating correctly.",
+    "score": {
+      "root_cause_correct": true,
+      "root_cause_rationale": "The agent correctly identified 'packet loss on the RTPEngine's network interface' as the root cause, which perfectly matches the simulated failure mode.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent correctly identified 'rtpengine' as the primary affected component (root cause). It also correctly identified 'scscf' as a symptomatic component, showing good causal reasoning.",
+      "severity_correct": true,
+      "severity_rationale": "The agent described the issue as 'call quality degradation' and 'severe packet loss (~22-33%)', which accurately reflects a degradation rather than a complete outage, matching the 30% packet loss simulation.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent explicitly identified 'packet loss' as the fault type, which is precisely what was simulated.",
+      "layer_accuracy": true,
+      "layer_accuracy_rationale": "The agent correctly attributed the RTPEngine failure to the 'ims' layer, rating it RED, which aligns with the ground truth that 'rtpengine' belongs to the IMS layer.",
+      "confidence_calibrated": true,
+      "confidence_rationale": "The agent stated 'high' confidence, which is appropriate given the accuracy and detail of its diagnosis, supported by multiple pieces of evidence.",
+      "ranking_position": 1,
+      "ranking_rationale": "The agent clearly identified 'rtpengine' as the 'Root Cause' and listed it as the primary suspect component.",
+      "total_score": 1.0,
+      "summary": "The agent provided an excellent and highly accurate diagnosis, correctly identifying the root cause, affected component, severity, fault type, and layer, with appropriate confidence."
+    },
+    "time_to_diagnosis_seconds": 101.5,
+    "token_usage": {
+      "input_tokens": 78854,
+      "output_tokens": 1956,
+      "thinking_tokens": 6186,
+      "total_tokens": 86996,
+      "per_phase": [
+        {
+          "agent": "AnomalyScreener",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 80190,
+          "tool_calls": 15,
+          "llm_calls": 5
+        },
+        {
+          "agent": "PatternMatcherAgent",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EvidenceValidatorAgent",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 6806,
+          "tool_calls": 0,
+          "llm_calls": 1
+        }
+      ]
+    },
+    "anomaly_report": "**ANOMALY DETECTED.** Overall anomaly score: 0.76 (threshold: 0.70, trained on 99 healthy snapshots). The current metric pattern is statistically different from the learned healthy baseline. Something in the network has changed.\n\nThe following specific metrics were flagged as the top contributors to the anomaly. These MUST be reflected in your layer ratings:\n\n| Component | Metric | Current | Learned Normal | Severity |\n|-----------|--------|---------|---------------|----------|\n| rtpengine | average_packet_loss | 22.00 | 0.00 | HIGH |\n| rtpengine | packet_loss_standard_deviation | 18.00 | 0.00 | HIGH |\n| scscf | ims_auth:mar_avg_response_time | 127.00 | 88.89 | HIGH |\n| scscf | ims_registrar_scscf:sar_avg_response_time | 102.00 | 119.92 | MEDIUM |\n| icscf | ims_icscf:uar_avg_response_time | 76.00 | 61.39 | MEDIUM |\n| normalized | upf.gtp_indatapktn3upf_per_ue | 3.79 | 2.58 | LOW |\n| icscf | cdp:average_response_time | 67.00 | 58.83 | LOW |\n| normalized | upf.gtp_outdatapktn3upf_per_ue | 3.56 | 2.50 | LOW |\n| normalized | pcscf.dialogs_per_ue | 0.00 | 0.65 | LOW |\n| derived | upf_activity_during_calls | 1.00 | 0.39 | LOW |",
+    "network_analysis": {
+      "summary": "The network is experiencing a critical media plane failure due to severe packet loss at the RTPEngine, with secondary impacts on IMS signaling.",
+      "layer_status": {
+        "infrastructure": {
+          "rating": "green",
+          "evidence": [],
+          "note": "All infrastructure components (mongo, mysql, dns) are running and responsive."
+        },
+        "ran": {
+          "rating": "green",
+          "evidence": [],
+          "note": "RAN components are stable, with 2 UEs connected to the gNB and AMF."
+        },
+        "core": {
+          "rating": "yellow",
+          "evidence": [
+            "upf.gtp_indatapktn3upf_per_ue = 3.79 (Learned Normal: 2.58) per AnomalyScreener",
+            "upf.gtp_outdatapktn3upf_per_ue = 3.56 (Learned Normal: 2.50) per AnomalyScreener"
+          ],
+          "note": "Minor anomalies detected in UPF throughput metrics, but the primary fault lies downstream in the IMS layer. The UPF is on the path to the failing component."
+        },
+        "ims": {
+          "rating": "red",
+          "evidence": [
+            "rtpengine: average_packet_loss = 22.00 (Screener flag: HIGH)",
+            "measure_rtt from pcscf to rtpengine shows 33.3% packet loss.",
+            "measure_rtt from upf to rtpengine shows 33.3% packet loss.",
+            "get_dp_quality_gauges shows recent packet loss of 20.62 at RTPEngine.",
+            "scscf: ims_auth:mar_avg_response_time = 127.00 (Screener flag: HIGH)"
+          ],
+          "note": "Critical failure at RTPEngine, which is experiencing severe packet loss on its network interface. This is causing media plane disruption and cascading IMS signaling delays."
+        }
+      },
+      "suspect_components": [
+        {
+          "name": "rtpengine",
+          "confidence": "high",
+          "reason": "The AnomalyScreener flagged rtpengine with HIGH severity for packet loss. This was confirmed by 'measure_rtt' from two independent neighbors (pcscf, upf), both showing 33% packet loss to rtpengine's IP. This indicates the fault is localized to rtpengine's own network interface."
+        },
+        {
+          "name": "scscf",
+          "confidence": "low",
+          "reason": "Flagged by the screener for high Diameter response times. However, RTT measurements to S-CSCF are clean, suggesting it is a victim of downstream issues (like media plane failure causing SIP session timeouts/retries) rather than the root cause."
+        }
+      ],
+      "investigation_hint": "The investigation should immediately focus on the 'rtpengine' container. The concurrent packet loss observed from both the UPF and P-CSCF strongly indicates a fault on the rtpengine container's own network interface, not an upstream issue. Examine kernel-level network statistics (e.g., using 'netstat -i' or 'tc -s qdisc') inside the rtpengine container to check for interface errors, drops, or buffer overflows. The elevated IMS response times are likely secondary symptoms of call failures caused by this media plane collapse.",
+      "tools_called": [
+        "get_vonr_components",
+        "get_network_topology",
+        "get_network_status",
+        "get_nf_metrics",
+        "get_dp_quality_gauges",
+        "read_env_config",
+        "measure_rtt",
+        "compare_to_baseline",
+        "check_stack_rules",
+        "get_causal_chain_for_component"
+      ]
+    },
+    "pattern_match": "{\"matched\": false, \"top_diagnosis\": \"No matching signature found\", \"confidence\": \"low\", \"failure_domain\": \"unknown\", \"matched_signatures\": [], \"baseline_anomalies\": {}, \"health_check_suggestions\": [], \"diagnostic_actions\": [], \"observations\": {\"amf_session\": 4.0, \"gnb\": 1.0, \"ran_ue\": 2.0, \"cdp:average_response_time\": 105.0, \"cdp:queuelength\": 0.0, \"cdp:replies_received\": 22.0, \"cdp:replies_response_time\": 2312.0, \"cdp:timeout\": 0.0, \"core:rcv_requests_invite\": 8.0, \"core:rcv_requests_register\": 22.0, \"ims_icscf:lir_avg_response_time\": 37.0, \"ims_icscf:lir_replies_received\": 4.0, \"ims_icscf:lir_replies_response_time\": 151.0, \"ims_icscf:lir_timeouts\": 0.0, \"ims_icscf:uar_avg_response_time\": 64.0, \"ims_icscf:uar_replies_received\": 11.0, \"ims_icscf:uar_replies_response_time\": 710.0, \"ims_icscf:uar_timeouts\": 0.0, \"tmx:active_transactions\": 0.0, \"subscribers\": 2.0, \"fivegs_pcffunction_pa_policyamassoreq\": 4.0, \"fivegs_pcffunction_pa_policyamassosucc\": 4.0, \"fivegs_pcffunction_pa_policysmassoreq\": 8.0, \"fivegs_pcffunction_pa_policysmassosucc\": 8.0, \"fivegs_pcffunction_pa_sessionnbr\": 4.0, \"core:rcv_requests_bye\": 16.0, \"core:rcv_requests_options\": 93.0, \"dialog_ng:active\": 0.0, \"dialog_ng:early\": 0.0, \"dialog_ng:expired\": 0.0, \"dialog_ng:processed\": 8.0, \"httpclient:connections\": 0.0, \"httpclient:connfail\": 110.0, \"httpclient:connok\": 8.0, \"ims_usrloc_pcscf:expired_contacts\": 0.0, \"ims_usrloc_pcscf:registered_contacts\": 2.0, \"ims_usrloc_pcscf:registered_impus\": 0.0, \"registrar:accepted_regs\": 0.0, \"registrar:default_expire\": 3600.0, \"registrar:default_expires_range\": 0.0, \"registrar:expires_range\": 0.0, \"registrar:max_contacts\": 0.0, \"registrar:max_expires\": 0.0, \"registrar:rejected_regs\": 0.0, \"script:register_failed\": 0.0, \"script:register_success\": 11.0, \"script:register_time\": 3191.0, \"sl:1xx_replies\": 30.0, \"sl:200_replies\": 0.0, \"sl:4xx_replies\": 0.0, \"sl:5xx_replies\": 0.0, \"ims_subscribers\": 2.0, \"average_discrete_round_trip_time\": 3055.0, \"average_end_to_end_round_trip_time\": 5621.0, \"average_mos\": 4.0, \"average_packet_loss\": 22.0, \"discrete_round_trip_time_standard_deviation\": 770.0, \"duplicate_rtp_packets\": 0.0, \"end_to_end_round_trip_time_standard_deviation\": 2486.0, \"foreign_sessions\": 0.0, \"_standard_deviation\": 7.0, \"kernel_only_media_streams\": 0.0, \"media_cache_size\": 0.0, \"userspace_media_streams\": 0.0, \"mos_standard_deviation\": 0.06, \"out_of_order_rtp_packets\": 0.0, \"owned_sessions\": 0.0, \"packet_loss_standard_deviation\": 18.0, \"packets_lost\": 0.0, \"player_cache_size\": 0.0, \"rtp_sequence_resets\": 0.0, \"rtp_sequence_skips\": 0.0, \"sum_of_all_discrete_round_trip_time_square_values_sampled\": 208565998.0, \"sum_of_all_discrete_round_trip_time_values_sampled\": 64172.0, \"sum_of_all_end_to_end_round_trip_time_square_values_sampled\": 793484081.0, \"sum_of_all_end_to_end_round_trip_time_values_sampled\": 118055.0, \"_square_values_sampled\": 2010.0, \"_values_sampled\": 126.0, \"sum_of_all_mos_square_values_sampled\": 301.72, \"sum_of_all_mos_values_sampled\": 72.8, \"sum_of_all_packet_loss_square_values_sampled\": 18065.0, \"sum_of_all_packet_loss_values_sampled\": 475.0, \"total_forced_terminated_sessions\": 0.0, \"total_managed_sessions\": 2.0, \"total_number_of_1_way_streams\": 0.0, \"total_number_of_discrete_round_trip_time_samples\": 21.0, \"total_number_of_end_to_end_round_trip_time_samples\": 21.0, \"_samples\": 21.0, \"total_number_of_mos_samples\": 18.0, \"total_number_of_packet_loss_samples\": 21.0, \"total_number_of_streams_with_no_relayed_packets\": 0.0, \"total_regular_terminated_sessions\": 2.0, \"total_rejected_sessions\": 0.0, \"total_relayed_bytes\": 16660.0, \"total_relayed_packet_errors\": 0.0, \"total_relayed_packets\": 341.0, \"total_sessions\": 0.0, \"total_timed_out_sessions_via_final_timeout\": 0.0, \"total_timed_out_sessions_via_offer_timeout\": 0.0, \"total_timed_out_sessions_via_silent_timeout\": 0.0, \"total_timed_out_sessions_via_timeout\": 0.0, \"transcoded_media\": 0.0, \"userspace_only_media_streams\": 0.0, \"ims_auth:mar_avg_response_time\": 111.0, \"ims_auth:mar_replies_received\": 11.0, \"ims_auth:mar_replies_response_time\": 1224.0, \"ims_auth:mar_timeouts\": 0.0, \"ims_registrar_scscf:accepted_regs\": 11.0, \"ims_registrar_scscf:default_expire\": 3600.0, \"ims_registrar_scscf:default_expires_range\": 0.0, \"ims_registrar_scscf:max_contacts\": 5.0, \"ims_registrar_scscf:max_expires\": 3600.0, \"ims_registrar_scscf:notifies_in_q\": 0.0, \"ims_registrar_scscf:rejected_regs\": 0.0, \"ims_registrar_scscf:sar_avg_response_time\": 98.0, \"ims_registrar_scscf:sar_replies_received\": 11.0, \"ims_registrar_scscf:sar_replies_response_time\": 1088.0, \"ims_registrar_scscf:sar_timeouts\": 0.0, \"ims_usrloc_scscf:active_contacts\": 2.0, \"ims_usrloc_scscf:active_impus\": 6.0, \"ims_usrloc_scscf:active_subscriptions\": 2.0, \"ims_usrloc_scscf:contact_collisions\": 1.0, \"ims_usrloc_scscf:impu_collisions\": 1.0, \"ims_usrloc_scscf:subscription_collisions\": 1.0, \"bearers_active\": 4.0, \"fivegs_smffunction_sm_sessionnbr\": 4.0, \"pfcp_sessions_active\": 4.0, \"ues_active\": 2.0, \"fivegs_ep_n3_gtp_indatapktn3upf\": 814.0, \"fivegs_ep_n3_gtp_indatavolumeqosleveln3upf\": 113104.0, \"fivegs_ep_n3_gtp_outdatapktn3upf\": 641.0, \"fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf\": 115936.0, \"fivegs_upffunction_upf_sessionnbr\": 4.0, \"container_status\": {\"mongo\": \"running\", \"nrf\": \"running\", \"scp\": \"running\", \"ausf\": \"running\", \"udr\": \"running\", \"udm\": \"running\", \"amf\": \"running\", \"smf\": \"running\", \"upf\": \"running\", \"pcf\": \"running\", \"dns\": \"running\", \"mysql\": \"running\", \"pyhss\": \"running\", \"icscf\": \"running\", \"scscf\": \"running\", \"pcscf\": \"running\", \"rtpengine\": \"running\"}}}",
+    "investigation_instruction": "Instruction generation skipped: Network Analyst diagnosis is definitive.",
+    "investigation": "Investigation skipped: Network Analyst produced a high-confidence diagnosis with definitive evidence (RED layer + high-confidence suspect). See Phase 1 analysis.",
+    "evidence_validation": {
+      "total_citations": 0,
+      "matched": 0,
+      "unmatched": 0,
+      "network_analyst_claims": [],
+      "investigator_claims": [],
+      "investigator_tool_call_count": 0,
+      "investigator_made_zero_calls": false,
+      "investigator_confidence": "high",
+      "verdict": "clean",
+      "summary": "Investigator was intentionally skipped (Network Analyst diagnosis was definitive). Validating Network Analyst evidence only.\nNetwork Analyst made 10 tool calls. Evidence validation: 0/0 NA citations verified.\nVerdict: clean. Confidence: high.\n\nTool calls vs. citations:\n  NetworkAnalystAgent:\n    \u2717 check_stack_rules \u2014 called but NOT cited in output\n    \u2717 compare_to_baseline \u2014 called but NOT cited in output\n    \u2717 get_causal_chain_for_component \u2014 called but NOT cited in output\n    \u2717 get_dp_quality_gauges \u2014 called but NOT cited in output\n    \u2717 get_network_status \u2014 called but NOT cited in output\n    \u2717 get_network_topology \u2014 called but NOT cited in output\n    \u2717 get_nf_metrics \u2014 called but NOT cited in output\n    \u2717 get_vonr_components \u2014 called but NOT cited in output\n    \u2717 measure_rtt \u2014 called but NOT cited in output\n    \u2717 read_env_config \u2014 called but NOT cited in output"
+    }
+  }
+}

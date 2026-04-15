@@ -1,7 +1,7 @@
 # ADR: Scale-Independent Anomaly Feature Engineering
 
 **Date:** 2026-04-13
-**Status:** Accepted
+**Status:** Superseded by [`anomaly_model_v2_improvements.md`](anomaly_model_v2_improvements.md) (2026-04-14)
 **Related episodes:**
 - [`docs/critical-observations/run_20260409_231143_data_plane_degradation.md`](../critical-observations/run_20260409_231143_data_plane_degradation.md) — first data plane degradation (0%, anomaly screener blind to UPF, all flags were IMS signaling noise)
 - [`agentic_ops_v5/docs/agent_logs/run_20260413_032529_data_plane_degradation.md`](../../agentic_ops_v5/docs/agent_logs/run_20260413_032529_data_plane_degradation.md) — third run (50%, screener flagged RTPEngine but IMS noise still dominated)

@@ -56,6 +56,8 @@ _COUNTER_PATTERNS = [
     "fivegs_pcffunction_pa_policysmassoreq",
     "fivegs_pcffunction_pa_policysmassosucc",
     # Kamailio — SIP counters
+    "script:register_time",
+    "script:register_success",
     "core:rcv_requests_register",
     "core:rcv_requests_invite",
     "core:rcv_requests_bye",
@@ -110,6 +112,8 @@ _COLLECT_METRICS = {
     "fivegs_ep_n3_gtp_outdatapktn3upf",
     # P-CSCF
     "ims_usrloc_pcscf:registered_contacts",
+    "script:register_time",
+    "script:register_success",
     "core:rcv_requests_register",
     "core:rcv_requests_invite",
     "core:rcv_requests_bye",
@@ -310,12 +314,10 @@ class MetricPreprocessor:
             rates.get("scscf.ims_registrar_scscf:rejected_regs", 0) + rates.get("scscf.ims_registrar_scscf:accepted_regs", 0),
         )
 
-        # P-CSCF HTTP client failure ratio
-        connfail_rate = rates.get("pcscf.httpclient:connfail", 0)
-        connok_rate = rates.get("pcscf.httpclient:connok", 0)
-        features["derived.pcscf_httpclient_failure_ratio"] = _safe_ratio(
-            connfail_rate, connfail_rate + connok_rate,
-        )
+        # P-CSCF HTTP client failure ratio — intentionally excluded.
+        # The P-CSCF's Rx/SCP connection has a baseline failure rate of ~84%
+        # (deployment-specific: SCP timeouts on Rx AAR). This pre-existing noise
+        # masks real faults. Calls still work without dedicated QoS bearers.
 
         # SIP error response ratio (4xx + 5xx vs total replies)
         for cscf in ["pcscf", "icscf", "scscf"]:
@@ -323,6 +325,19 @@ class MetricPreprocessor:
             ok_rate = rates.get(f"{cscf}.sl:200_replies", 0)
             total = err_rate + ok_rate + rates.get(f"{cscf}.sl:1xx_replies", 0)
             features[f"derived.{cscf}_sip_error_ratio"] = _safe_ratio(err_rate, total)
+
+        # P-CSCF average registration time (ms per registration)
+        # script:register_time is a CUMULATIVE counter (total ms across all
+        # registrations), not a gauge. We compute avg time per registration
+        # using the sliding window rates of both counters.
+        reg_time_rate = rates.get("pcscf.script:register_time", 0)
+        reg_success_rate = rates.get("pcscf.script:register_success", 0)
+        if reg_success_rate > 0:
+            features["derived.pcscf_avg_register_time_ms"] = round(
+                reg_time_rate / reg_success_rate, 1
+            )
+        else:
+            features["derived.pcscf_avg_register_time_ms"] = 0.0
 
         # --- Category 3: Per-UE normalized rates ---
 
@@ -348,13 +363,10 @@ class MetricPreprocessor:
                 round(rate / ran_ue_count, 4) if ran_ue_count >= 1 else 0.0
             )
 
-        # RTPEngine packets per session (if sessions active)
-        rtp_sessions = raw_features.get("rtpengine.owned_sessions", 0)
-        rtp_pps = raw_features.get("rtpengine.packets_per_second_(total)", 0)
-        if rtp_sessions >= 1:
-            features["normalized.rtpengine.pps_per_session"] = round(rtp_pps / rtp_sessions, 4)
-        else:
-            features["normalized.rtpengine.pps_per_session"] = 0.0
+        # RTPEngine pps_per_session — intentionally excluded.
+        # The packets_per_second_(total) gauge is a point-in-time value that
+        # resets to 0 between snapshots faster than the collection interval.
+        # It's always 0 in training data and provides no signal.
 
         # --- Category 4: Per-UE normalized gauges ---
 
@@ -395,10 +407,11 @@ class MetricPreprocessor:
             features["derived.upf_activity_during_calls"] = 1.0
 
         # Infrastructure health (binary-ish)
-        features["health.ran_ue"] = raw_features.get("amf.ran_ue", 0)
-        features["health.gnb"] = raw_features.get("amf.gnb", 0)
-        features["health.upf_sessions"] = raw_features.get("upf.fivegs_upffunction_upf_sessionnbr", 0)
-        features["health.ims_registered"] = ims_ue_count
+        # Note: health indicators (ran_ue, gnb, upf_sessions, ims_registered)
+        # are intentionally NOT included as features. They bake in assumptions
+        # about UE/gNB count that don't generalize — a production network has
+        # varying UE counts. These values are used internally for per-UE
+        # normalization but not fed to the anomaly model.
 
         return features
 

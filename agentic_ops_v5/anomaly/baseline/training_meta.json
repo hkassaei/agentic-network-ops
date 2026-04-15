@@ -1,23 +1,19 @@
 {
-  "trained_at": "2026-04-13T22:54:37.788348+00:00",
-  "duration_seconds": 708,
-  "n_samples": 104,
-  "n_features": 43,
+  "trained_at": "2026-04-14T21:38:09.815155+00:00",
+  "duration_seconds": 716,
+  "n_samples": 99,
+  "n_features": 38,
   "feature_keys": [
     "derived.icscf_lir_timeout_ratio",
     "derived.icscf_sip_error_ratio",
     "derived.icscf_uar_timeout_ratio",
-    "derived.pcscf_httpclient_failure_ratio",
+    "derived.pcscf_avg_register_time_ms",
     "derived.pcscf_sip_error_ratio",
     "derived.scscf_mar_timeout_ratio",
     "derived.scscf_registration_reject_ratio",
     "derived.scscf_sar_timeout_ratio",
     "derived.scscf_sip_error_ratio",
     "derived.upf_activity_during_calls",
-    "health.gnb",
-    "health.ims_registered",
-    "health.ran_ue",
-    "health.upf_sessions",
     "icscf.cdp:average_response_time",
     "icscf.cdp:timeout",
     "icscf.ims_icscf:lir_avg_response_time",
@@ -30,7 +26,6 @@
     "normalized.pcscf.core:rcv_requests_invite_per_ue",
     "normalized.pcscf.core:rcv_requests_register_per_ue",
     "normalized.pcscf.dialogs_per_ue",
-    "normalized.rtpengine.pps_per_session",
     "normalized.scscf.cdp_replies_per_ue",
     "normalized.scscf.core:rcv_requests_invite_per_ue",
     "normalized.scscf.core:rcv_requests_register_per_ue",
@@ -49,5 +44,5 @@
     "scscf.ims_registrar_scscf:sar_avg_response_time"
   ],
   "model_ready": true,
-  "training_samples": 104
+  "training_samples": 99
 }

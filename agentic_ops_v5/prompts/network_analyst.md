@@ -150,32 +150,6 @@ For any layer rated YELLOW or RED, the `evidence` field MUST contain specific va
 
 Evidence without specific values is not evidence.
 
-### UPF counter asymmetry gate (MANDATORY before claiming packet loss)
-
-If your `check_stack_rules` output in Step 2 includes the `upf_counters_are_directional` rule, you MUST honor its guidance before making any claim about packet loss from UPF counters.
-
-Read the rule's output fields:
-- `in_total`, `out_total` — the raw counter values
-- `asymmetry_pct` — the percentage asymmetry between them
-- `severity` — `informational` or `high_temptation`
-- `verdict` — plain-English explanation of why the asymmetry is structural
-- `correct_methods` — the list of valid techniques for actual loss detection
-
-**Forbidden inference:** You MUST NOT write evidence strings like *"UPF ingress packet total (3423) is more than double the egress total (1267), indicating massive packet loss"*. Any difference between these two counters is **structural**, determined by the historical traffic mix that has flowed through the container over its entire lifetime (TCP downloads produce more downlink, TCP uploads produce more uplink, idle SIP and VoNR voice produce roughly symmetric counts, mixed traffic produces arbitrary ratios). Subtracting uplink from downlink is never a valid loss calculation.
-
-**What you MAY cite:**
-- The raw values themselves as context: *"UPF cumulative counters: in=3423 (uplink), out=1267 (downlink)"*.
-- Loss evidence ONLY from one of the correct methods listed in the rule:
-  1. **Same-direction rate**: compare `rate(in[2m])` or `rate(out[2m])` against the expected rate for the current traffic type (e.g., during a G.711 voice call, expect ~50 pps per direction — significantly lower is loss).
-  2. **RTCP-based loss**: `rate(rtpengine_packetloss_total[2m]) / rate(rtpengine_packetloss_samples_total[2m])` is the sampled loss fraction from RTCP reports — ground truth for voice quality.
-  3. Interface-level drop counters on the tc qdisc (not currently exposed).
-
-If none of these three methods shows loss, you cannot claim loss. Asymmetry between cumulative counters alone is not evidence and MUST NOT appear in your `evidence` array as a loss claim.
-
-### Other forbidden inferences
-
-- **Do NOT rate a layer as degraded based on pre-existing baseline noise.** Metrics flagged `is_pre_existing: true` in the ontology (e.g., `httpclient:connfail` at P-CSCF in its typical range) are known background conditions and do not indicate a new fault.
-
 ### 5G/IMS Traffic Path Separation (MANDATORY for causal reasoning)
 
 Before hypothesizing that a fault on component X caused symptoms at component Y, you MUST verify from `get_network_topology` that Y's traffic path actually traverses X. The 5G/IMS architecture has two fundamentally separate traffic paths:
@@ -204,7 +178,7 @@ Before hypothesizing that a fault on component X caused symptoms at component Y,
 
 When RTPEngine reports packet loss or any component shows transport-level issues, you MUST localize the fault by running `measure_rtt` TO the suspected component from multiple neighbors. This is the single most important diagnostic step for network-level faults.
 
-**The principle:** `measure_rtt` sends ICMP pings FROM source TO target. If the target's network interface has packet loss (e.g., tc netem), the ping REQUEST arrives fine but the RESPONSE is dropped on the target's egress. This means:
+**The principle:** `measure_rtt` sends ICMP pings FROM source TO target. If the target's network interface has packet loss, the ping REQUEST arrives fine but the RESPONSE is dropped on the target's egress. This means:
 - If `measure_rtt(A, target)` shows loss AND `measure_rtt(B, target)` also shows loss → **the target's own interface is degraded** (the fault is AT the target)
 - If `measure_rtt(A, target)` shows loss BUT `measure_rtt(B, target)` is clean → the fault is on A's interface or the path between A and target, not at the target
 

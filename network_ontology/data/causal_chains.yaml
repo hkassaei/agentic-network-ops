@@ -133,7 +133,7 @@ causal_chains:
           lag: "10-30s"
 
     convergence_point:
-      description: "The UPF is the convergence point for both UE signaling and media paths. When UPF is degraded, BOTH IMS signaling (SIP from UEs) AND RTP media quality degrade simultaneously. This is the diagnostic fingerprint of a UPF fault."
+      description: "The UPF is the convergence point for both UE signaling and media paths. When UPF is degraded, BOTH IMS signaling (SIP from UEs) AND RTP media quality degrade simultaneously. However, RTPEngine itself can also cause packet loss independently — use measure_rtt to distinguish."
       paths_through_upf:
         - "UE SIP signaling: UE → gNB → UPF → P-CSCF (SIP REGISTER, INVITE)"
         - "RTP media: UE → gNB → UPF → RTPEngine (voice audio)"
@@ -144,7 +144,7 @@ causal_chains:
         - "S-CSCF → HSS (Cx Diameter): direct on container network"
         - "SMF → UPF (N4 PFCP): direct on container network (control plane, not GTP-U)"
         - "All SBI traffic between 5G core NFs: direct via SCP"
-      diagnostic_pattern: "If RTPEngine shows packet loss AND IMS CSCFs show elevated SIP rates/timeouts simultaneously, the UPF is the common upstream cause — not the IMS layer."
+      how_to_localize: "Run measure_rtt TO the suspected component from multiple neighbors. If multiple sources show packet loss TO rtpengine, the fault is at RTPEngine itself (its own interface is lossy). If multiple sources show packet loss TO upf, the fault is at UPF. Do NOT assume UPF is the cause without verifying with measure_rtt."
 
     does_NOT_mean:
       - "IMS signaling issue — SIP retransmissions from UEs look like IMS problems but are caused by UE SIP traffic being dropped at the UPF"

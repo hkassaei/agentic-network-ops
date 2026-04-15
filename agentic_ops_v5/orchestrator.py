@@ -414,33 +414,98 @@ async def investigate(
     _accumulate_phase_traces(state, traces)
 
     # =================================================================
-    # Phase 3: Instruction Generator (LLM)
+    # Decide: should we run Phases 3+4 (Instruction Generator + Investigator)?
+    #
+    # If the Network Analyst already has a HIGH-confidence suspect with
+    # definitive evidence (RED layer), running the Investigator adds no
+    # value — it either re-runs the same tools or fabricates citations
+    # from the upstream narrative. Skip both the Instruction Generator
+    # (no point generating instructions for a skipped Investigator) and
+    # the Investigator itself.
+    #
+    # Skip conditions (ALL must be true):
+    #   1. Network Analyst produced a structured output (not a failure string)
+    #   2. At least one suspect has "high" confidence
+    #   3. At least one layer is rated RED
+    #
+    # When skipped, the Evidence Validator still runs (validating the
+    # Network Analyst's evidence).
     # =================================================================
-    try:
-        state, traces = await _run_phase(
-            create_instruction_generator(), state, question, session_service, on_event)
-        all_phases.extend(traces)
-        invocation_order.extend(t.agent_name for t in traces)
-        _accumulate_phase_traces(state, traces)
-    except Exception as e:
-        log.error("InstructionGeneratorAgent failed: %s", e)
-        state["investigation_instruction"] = (
-            "Instruction generation failed. Perform a full bottom-up investigation: "
-            "transport first, then core, then application. Cite tool outputs."
+    investigator_skipped = False
+    network_analysis = state.get("network_analysis")
+
+    if isinstance(network_analysis, (dict, str)):
+        na = network_analysis if isinstance(network_analysis, dict) else {}
+        if isinstance(network_analysis, str):
+            try:
+                import json
+                na = json.loads(network_analysis)
+            except (json.JSONDecodeError, TypeError):
+                na = {}
+
+        suspects = na.get("suspect_components", [])
+        layers = na.get("layer_status", {})
+
+        has_high_suspect = any(
+            (s.get("confidence", "").lower() == "high" if isinstance(s, dict) else False)
+            for s in suspects
+        )
+        has_red_layer = any(
+            (ls.get("rating", "").lower() == "red" if isinstance(ls, dict) else False)
+            for ls in layers.values()
         )
 
-    # =================================================================
-    # Phase 4: Investigator (LLM)
-    # =================================================================
-    try:
-        state, traces = await _run_phase(
-            create_investigator_agent(), state, question, session_service, on_event)
-        all_phases.extend(traces)
-        invocation_order.extend(t.agent_name for t in traces)
-        _accumulate_phase_traces(state, traces)
-    except Exception as e:
-        log.error("InvestigatorAgent failed: %s", e)
-        state["investigation"] = f"Investigation failed: {e}"
+        if has_high_suspect and has_red_layer:
+            investigator_skipped = True
+
+    if investigator_skipped:
+        log.info("Phases 3+4 SKIPPED — Network Analyst has high-confidence "
+                 "suspect with RED layer. Investigation would be redundant.")
+        state["investigation_instruction"] = (
+            "Instruction generation skipped: Network Analyst diagnosis is definitive."
+        )
+        state["investigation"] = (
+            "Investigation skipped: Network Analyst produced a high-confidence "
+            "diagnosis with definitive evidence (RED layer + high-confidence suspect). "
+            "See Phase 1 analysis."
+        )
+        state["investigator_skipped"] = True
+        if on_event:
+            await on_event({
+                "type": "phase_skip",
+                "agent": "InstructionGeneratorAgent",
+                "reason": "High-confidence diagnosis — investigation not needed",
+            })
+            await on_event({
+                "type": "phase_skip",
+                "agent": "InvestigatorAgent",
+                "reason": "High-confidence diagnosis — investigation not needed",
+            })
+    else:
+        # Phase 3: Instruction Generator (LLM)
+        try:
+            state, traces = await _run_phase(
+                create_instruction_generator(), state, question, session_service, on_event)
+            all_phases.extend(traces)
+            invocation_order.extend(t.agent_name for t in traces)
+            _accumulate_phase_traces(state, traces)
+        except Exception as e:
+            log.error("InstructionGeneratorAgent failed: %s", e)
+            state["investigation_instruction"] = (
+                "Instruction generation failed. Perform a full bottom-up investigation: "
+                "transport first, then core, then application. Cite tool outputs."
+            )
+
+        # Phase 4: Investigator (LLM)
+        try:
+            state, traces = await _run_phase(
+                create_investigator_agent(), state, question, session_service, on_event)
+            all_phases.extend(traces)
+            invocation_order.extend(t.agent_name for t in traces)
+            _accumulate_phase_traces(state, traces)
+        except Exception as e:
+            log.error("InvestigatorAgent failed: %s", e)
+            state["investigation"] = f"Investigation failed: {e}"
 
     # =================================================================
     # Phase 5: Evidence Validator (deterministic BaseAgent)

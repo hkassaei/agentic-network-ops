@@ -278,6 +278,7 @@ def validate(
     network_analysis: Any,
     investigation_text: str,
     phase_traces: list[dict],
+    investigator_skipped: bool = False,
 ) -> EvidenceValidationResult:
     """Pure-function entry point. Validates LLM claims against phase traces.
 
@@ -287,9 +288,14 @@ def validate(
             for tool-name references.
         investigation_text: The InvestigatorAgent's free-form text output.
             Its [EVIDENCE: tool(args) -> "..."] citations are parsed.
+            Empty string when investigator was intentionally skipped.
         phase_traces: List of phase trace dicts (from the orchestrator's
             accumulated PhaseTrace list, serialized via .model_dump()).
             Each must contain agent_name and tool_calls.
+        investigator_skipped: True when the Investigator was intentionally
+            skipped because the Network Analyst already had a definitive
+            diagnosis. Changes confidence determination — zero investigator
+            tool calls is expected, not a failure.
 
     Returns:
         EvidenceValidationResult with per-claim outcomes and aggregate
@@ -313,21 +319,42 @@ def validate(
     unmatched = total - matched
 
     inv_tool_count = len(inv_tools)
-    inv_zero_calls = inv_tool_count == 0
+    inv_zero_calls = inv_tool_count == 0 and not investigator_skipped
 
     inv_citation_count = len(inv_checks)
     na_tool_count = len(na_tools)
-    confidence, verdict = _determine_confidence_and_verdict(
-        investigator_tool_calls=inv_tool_count,
-        investigator_citations=inv_citation_count,
-        network_analyst_tool_calls=na_tool_count,
-        total_citations=total,
-        unmatched=unmatched,
-    )
+
+    if investigator_skipped:
+        # Investigator was intentionally skipped — evaluate based on
+        # Network Analyst's evidence quality only
+        na_matched = sum(1 for c in na_checks if c.matched)
+        if na_tool_count >= 5 and len(na_checks) > 0 and na_matched == len(na_checks):
+            confidence, verdict = "high", "clean"
+        elif na_tool_count >= 5:
+            confidence, verdict = "high", "clean"
+        else:
+            confidence, verdict = "medium", "has_warnings"
+    else:
+        confidence, verdict = _determine_confidence_and_verdict(
+            investigator_tool_calls=inv_tool_count,
+            investigator_citations=inv_citation_count,
+            network_analyst_tool_calls=na_tool_count,
+            total_citations=total,
+            unmatched=unmatched,
+        )
 
     # Build human-readable summary
     lines = []
-    if inv_zero_calls:
+    if investigator_skipped:
+        lines.append(
+            f"Investigator was intentionally skipped (Network Analyst diagnosis "
+            f"was definitive). Validating Network Analyst evidence only."
+        )
+        lines.append(
+            f"Network Analyst made {na_tool_count} tool calls. "
+            f"Evidence validation: {matched}/{total} NA citations verified."
+        )
+    elif inv_zero_calls:
         lines.append(
             "⚠️ CRITICAL: InvestigatorAgent made ZERO tool calls — "
             "no actual verification was performed."
@@ -338,12 +365,13 @@ def validate(
             f"produced ZERO [EVIDENCE: ...] citations. The investigation narrative "
             f"is unverifiable — tool results exist but are not traceably referenced."
         )
-    lines.append(
-        f"Evidence validation: {matched}/{total} citations verified "
-        f"({unmatched} unmatched). "
-        f"Investigator: {inv_citation_count} citations from {inv_tool_count} tool calls."
-    )
-    lines.append(f"Verdict: {verdict}. Investigator confidence: {confidence}.")
+    if not investigator_skipped:
+        lines.append(
+            f"Evidence validation: {matched}/{total} citations verified "
+            f"({unmatched} unmatched). "
+            f"Investigator: {inv_citation_count} citations from {inv_tool_count} tool calls."
+        )
+    lines.append(f"Verdict: {verdict}. Confidence: {confidence}.")
 
     # List all tools called per phase and their citation status
     lines.append("")
@@ -380,7 +408,7 @@ def validate(
         network_analyst_claims=na_checks,
         investigator_claims=inv_checks,
         investigator_tool_call_count=inv_tool_count,
-        investigator_made_zero_calls=inv_zero_calls,
+        investigator_made_zero_calls=inv_zero_calls and not investigator_skipped,
         investigator_confidence=confidence,
         verdict=verdict,
         summary=summary,
@@ -409,13 +437,15 @@ class EvidenceValidatorAgent(BaseAgent):
         network_analysis = state.get("network_analysis")
         investigation_text = str(state.get("investigation", ""))
         phase_traces = state.get("phase_traces_so_far", []) or []
+        investigator_skipped = state.get("investigator_skipped", False)
 
         log.info(
             "Validating evidence: %d phase traces, investigation_text=%d chars, "
-            "network_analysis type=%s",
+            "network_analysis type=%s, investigator_skipped=%s",
             len(phase_traces),
             len(investigation_text),
             type(network_analysis).__name__,
+            investigator_skipped,
         )
         if phase_traces:
             for pt in phase_traces:
@@ -428,8 +458,9 @@ class EvidenceValidatorAgent(BaseAgent):
         try:
             result = validate(
                 network_analysis=network_analysis,
-                investigation_text=investigation_text,
+                investigation_text=investigation_text if not investigator_skipped else "",
                 phase_traces=phase_traces,
+                investigator_skipped=investigator_skipped,
             )
         except Exception as e:
             log.error("Evidence validation failed: %s", e)

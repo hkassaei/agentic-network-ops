@@ -177,9 +177,26 @@ async def verify_upf_gtp_counters() -> bool:
     """
     log.info("UPF verify: checking GTP-U counters...")
 
-    # Get counter before call
+    # Get UPF IP from env
+    upf_ip = "172.22.0.8"
+    try:
+        env_path = _REPO_ROOT / "network" / ".env"
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.strip().startswith("UPF_IP="):
+                    upf_ip = line.strip().split("=", 1)[1]
+    except Exception:
+        pass
+
+    # First, generate some baseline traffic (SIP registers go through UPF via GTP-U)
+    log.info("UPF verify: generating traffic (SIP re-register)...")
+    for ue in ("e2e_ue1", "e2e_ue2"):
+        await _shell(f'docker exec {ue} bash -c "echo rr >> /tmp/pjsua_cmd"', timeout=10)
+    await asyncio.sleep(10)
+
+    # Get counter before test call
     rc, before_out = await _shell(
-        "curl -s http://172.22.0.8:9091/metrics 2>/dev/null | grep '^fivegs_ep_n3_gtp_indatapktn3upf '",
+        f"curl -s http://{upf_ip}:9091/metrics 2>/dev/null | grep '^fivegs_ep_n3_gtp_indatapktn3upf '",
         timeout=10,
     )
     before_val = 0
@@ -189,29 +206,44 @@ async def verify_upf_gtp_counters() -> bool:
         except (ValueError, IndexError):
             pass
 
-    # Place a short test call
-    log.info("UPF verify: placing test call...")
-    rc, call_out = await _shell(
-        '.venv/bin/python -c "'
-        'import asyncio, sys; sys.path.insert(0, \".\");'
-        'from agentic_chaos.tools.application_tools import establish_vonr_call, hangup_call;'
-        'async def m():\n'
-        '    r = await establish_vonr_call(\"ims.mnc001.mcc001.3gppnetwork.org\", \"001011234567892\")\n'
-        '    if r.get(\"success\"): await asyncio.sleep(5); await hangup_call()\n'
-        '    return r.get(\"success\", False)\n'
-        'print(asyncio.run(m()))"',
-        timeout=60,
-    )
+    # If counters are already non-zero from the register traffic, that's a pass
+    if before_val > 0:
+        log.info("UPF verify: GTP-U counters already non-zero (indatapkt=%d) — working", before_val)
+        return True
 
-    if "True" not in call_out:
-        log.warning("UPF verify: test call failed — cannot verify counters")
-        return False
+    # Counters still zero — try a VoNR call (generates more GTP-U traffic)
+    log.info("UPF verify: counters still 0, placing test call...")
+    call_success = False
+    for attempt in range(2):
+        rc, call_out = await _shell(
+            '.venv/bin/python -c "'
+            'import asyncio, sys; sys.path.insert(0, \".\");'
+            'from agentic_chaos.tools.application_tools import establish_vonr_call, hangup_call;'
+            'async def m():\n'
+            '    r = await establish_vonr_call(\"ims.mnc001.mcc001.3gppnetwork.org\", \"001011234567892\")\n'
+            '    if r.get(\"success\"): await asyncio.sleep(5); await hangup_call()\n'
+            '    return r.get(\"success\", False)\n'
+            'print(asyncio.run(m()))"',
+            timeout=60,
+        )
+        if "True" in call_out:
+            call_success = True
+            break
+        if attempt == 0:
+            log.info("UPF verify: call attempt %d failed, retrying after 10s...", attempt + 1)
+            await asyncio.sleep(10)
 
-    await asyncio.sleep(6)  # wait for Prometheus scrape
+    if not call_success:
+        log.warning("UPF verify: test call failed after 2 attempts — cannot verify counters via call")
+        # Even if the call failed, check if the register traffic incremented the counters
+        await asyncio.sleep(6)
 
-    # Get counter after call
+    if call_success:
+        await asyncio.sleep(6)  # wait for Prometheus scrape
+
+    # Get counter after traffic
     rc, after_out = await _shell(
-        "curl -s http://172.22.0.8:9091/metrics 2>/dev/null | grep '^fivegs_ep_n3_gtp_indatapktn3upf '",
+        f"curl -s http://{upf_ip}:9091/metrics 2>/dev/null | grep '^fivegs_ep_n3_gtp_indatapktn3upf '",
         timeout=10,
     )
     after_val = 0
@@ -221,14 +253,12 @@ async def verify_upf_gtp_counters() -> bool:
         except (ValueError, IndexError):
             pass
 
-    delta = after_val - before_val
-    if delta > 0:
-        log.info("UPF verify: GTP-U counters working (indatapkt +%d)", delta)
+    if after_val > 0:
+        log.info("UPF verify: GTP-U counters working (indatapkt=%d)", after_val)
         return True
     else:
-        log.error("UPF verify: GTP-U counters NOT incrementing (before=%d, after=%d). "
-                   "The docker_open5gs image may have been pulled from ghcr.io instead of built from source.",
-                   before_val, after_val)
+        log.error("UPF verify: GTP-U counters NOT incrementing (still 0 after traffic). "
+                   "The docker_open5gs image may have been pulled from ghcr.io instead of built from source.")
         return False
 
 

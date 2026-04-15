@@ -55,9 +55,11 @@ gnb_radio_link_failure = Scenario(
 pcscf_latency = Scenario(
     name="P-CSCF Latency",
     description=(
-        "Inject 500ms latency on the P-CSCF (SIP edge proxy). SIP T1 timer "
-        "is 2000ms, so REGISTER transactions will start timing out. Tests "
-        "IMS resilience to WAN-like latency on the signaling path."
+        "Inject 2000ms latency (with 50ms jitter) on the P-CSCF (SIP edge "
+        "proxy). SIP transactions will experience severe delays as every "
+        "message entering and leaving the P-CSCF is delayed, compounding "
+        "across multiple round-trips in the IMS registration chain. Tests "
+        "IMS resilience to high latency on the signaling edge."
     ),
     category=FaultCategory.NETWORK,
     blast_radius=BlastRadius.SINGLE_NF,

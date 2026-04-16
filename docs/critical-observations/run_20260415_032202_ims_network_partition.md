@@ -269,4 +269,6 @@ The fault localization prompt instructs the NA to check `measure_rtt` when packe
 
 2. Improve the prompt, and likely causal chains in the ontology and add a specific section on IMS signaling.
 
-3. Re-think the agent orchestration and methodology. As it stands, NetworkAnalyst always sounds very confident and therefore, investigator agent is always skipped! Instead, maybe it's better to have the NA come up with the most likely hypothese and have the investigator prove or disprove those hypothese. Also, related to sub-agents, the match finder is not that useful either. It might be better to create a RAG-based agent that looks at all the episode files that we have collected so far and perform semantic search and add to context. It then must still be investigated by the investigator agent.
+3. Re-think the agent orchestration and methodology. As it stands, NetworkAnalyst always sounds very confident and therefore, investigator agent is always skipped! Instead, maybe it's better to have the NA come up with the most likely hypothese and have the investigator prove or disprove those hypothese. 
+
+4. Also, related to sub-agents, the match finder is not that useful either. It might be better to create a RAG-based agent that looks at all the episode files that we have collected so far and perform semantic search and add to context. It then must still be investigated by the investigator agent.

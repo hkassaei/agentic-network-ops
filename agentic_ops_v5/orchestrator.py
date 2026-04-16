@@ -23,8 +23,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any
+
+
+def _falsifier_mode_enabled() -> bool:
+    """When true, the Investigator always runs as a falsifier (Track 1).
+    When false, the legacy skip-when-NA-is-confident gate applies.
+    """
+    return os.getenv("FALSIFIER_INVESTIGATOR", "0") == "1"
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.runners import Runner
@@ -433,6 +441,13 @@ async def investigate(
     # =================================================================
     investigator_skipped = False
     network_analysis = state.get("network_analysis")
+
+    # When falsifier mode is on, the Investigator always runs as a falsifier.
+    # Skip the entire legacy confidence-gate block.
+    if _falsifier_mode_enabled():
+        log.info("FALSIFIER_INVESTIGATOR=1 — Investigator will always run as a falsifier. "
+                 "Skipping the legacy confidence-based skip gate.")
+        network_analysis = None
 
     if isinstance(network_analysis, (dict, str)):
         na = network_analysis if isinstance(network_analysis, dict) else {}

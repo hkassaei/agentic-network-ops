@@ -27,3 +27,6 @@ Thumbs.db
 
 # Ops layer secrets (contains API keys and credentials)
 ops.env
+
+# Local utility scripts (contain project-specific paths/credentials)
+check-model-availability.py

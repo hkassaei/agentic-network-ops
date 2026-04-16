@@ -144,18 +144,16 @@ _COLLECT_METRICS = {
     "ims_auth:mar_replies_received",
     "ims_registrar_scscf:sar_timeouts",
     "ims_registrar_scscf:sar_replies_received",
-    # RTPEngine
-    "average_mos",
+    # RTPEngine — only point-in-time gauges, NOT cumulative lifetime metrics.
+    # Removed: average_packet_loss, packet_loss_standard_deviation, average_mos,
+    # packets_lost, total_number_of_1_way_streams, total_relayed_packet_errors.
+    # These are cumulative lifetime averages/counters that carry stale data from
+    # previous chaos runs and poison the anomaly screener (see ADR:
+    # remove_cumulative_rtpengine_features.md).
+    "errors_per_second_(total)",
     "packets_per_second_(total)",
-    "average_packet_loss",
-    "average_jitter_(reported)",
     "total_sessions",
     "owned_sessions",
-    "packets_lost",
-    "total_number_of_1_way_streams",
-    "total_relayed_packet_errors",
-    "errors_per_second_(total)",
-    "packet_loss_standard_deviation",
     # PyHSS
     "ims_subscribers",
     # MongoDB
@@ -262,25 +260,20 @@ class MetricPreprocessor:
         # --- Category 1: Quality gauges (already scale-independent) ---
         _passthrough_gauges = [
             # RTPEngine quality
-            "rtpengine.average_mos",
-            "rtpengine.average_packet_loss",
-            "rtpengine.average_jitter_(reported)",
-            "rtpengine.packet_loss_standard_deviation",
-            "rtpengine.packets_lost",
-            "rtpengine.total_number_of_1_way_streams",
+            # RTPEngine — only point-in-time gauges (not cumulative lifetime metrics)
             "rtpengine.errors_per_second_(total)",
-            "rtpengine.total_relayed_packet_errors",
             # Response times (latency, not volume)
             "icscf.cdp:average_response_time",
             "icscf.ims_icscf:uar_avg_response_time",
             "icscf.ims_icscf:lir_avg_response_time",
             "scscf.ims_auth:mar_avg_response_time",
             "scscf.ims_registrar_scscf:sar_avg_response_time",
-            # Timeout counters (absolute, not rate — a single timeout is notable)
-            "icscf.cdp:timeout",
-            "icscf.ims_icscf:uar_timeouts",
-            "icscf.ims_icscf:lir_timeouts",
-            "scscf.ims_auth:mar_timeouts",
+            # Timeout counters removed from passthrough gauges — they are
+            # cumulative counters that carry stale data from previous runs.
+            # The derived ratio features (icscf_uar_timeout_ratio, etc.)
+            # use the sliding-window rates of these counters instead,
+            # which only reflect current state. See ADR:
+            # remove_cumulative_timeout_counters.md
         ]
         for key in _passthrough_gauges:
             if key in raw_features:

@@ -130,12 +130,23 @@ class ChallengeAgent(BaseAgent):
                 seconds_since_observation=seconds_since_observation,
             )
         except Exception as e:
-            log.error("RCA agent failed: %s", e)
+            import traceback
+            tb = traceback.format_exc()
+            log.error("RCA agent failed: %s\n%s", e, tb)
             yield Event(
                 author=self.name,
                 content=types.Content(
-                    parts=[types.Part(text=f"Challenge Mode: RCA agent error — {e}")],
+                    parts=[types.Part(text=f"Challenge Mode: RCA agent error — {e}\n{tb}")],
                 ),
+                actions=EventActions(state_delta={
+                    "challenge_result": {
+                        "rca_agent_model": f"{agent_version}-adk/error",
+                        "diagnosis_text": f"RCA agent crashed: {e}",
+                        "score": {"total_score": 0, "summary": f"Agent crashed: {e}"},
+                        "time_to_diagnosis_seconds": 0,
+                        "_error_traceback": tb,
+                    }
+                }),
             )
             return
 

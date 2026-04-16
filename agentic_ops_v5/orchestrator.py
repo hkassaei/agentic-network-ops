@@ -438,7 +438,6 @@ async def investigate(
         na = network_analysis if isinstance(network_analysis, dict) else {}
         if isinstance(network_analysis, str):
             try:
-                import json
                 na = json.loads(network_analysis)
             except (json.JSONDecodeError, TypeError):
                 na = {}

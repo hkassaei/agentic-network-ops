@@ -102,8 +102,11 @@ def main():
         description="Train the anomaly detection model on healthy IMS traffic"
     )
     parser.add_argument(
-        "--duration", type=int, default=300,
-        help="Training duration in seconds (default: 300 = 5 minutes)"
+        "--duration", type=int, default=1200,
+        help="Training duration in seconds (default: 1200 = 20 minutes). "
+             "Chosen to give enough samples after the temporal-metric "
+             "pre-filter drops snapshots where the underlying counter did "
+             "not advance. ADR: anomaly_training_zero_pollution.md"
     )
     parser.add_argument(
         "--output", type=str, default=None,

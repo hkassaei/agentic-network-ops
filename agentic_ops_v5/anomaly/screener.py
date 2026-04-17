@@ -29,6 +29,23 @@ _RIVER_THRESHOLD = 0.7
 # Minimum training samples before scoring is meaningful
 _MIN_TRAINING_SAMPLES = 10
 
+# =========================================================================
+# Silent-failure severity escalation thresholds
+# ADR: anomaly_training_zero_pollution.md
+# =========================================================================
+# When a metric's current value is 0 but its learned mean is substantially
+# non-zero AND the feature is marked "live" (underlying counter advanced
+# recently), severity is escalated to HIGH regardless of σ distance.
+# The per-metric-type floor filters out features whose mean is too small
+# to be considered a load-bearing liveness signal.
+_MIN_ACTIVE_MEAN_TIME_MS = 10.0  # response-time / duration metrics
+_MIN_ACTIVE_MEAN_RATE = 0.01     # rate metrics (events per UE per window)
+
+
+def _is_temporal_feature(key: str) -> bool:
+    """Temporal features are response-time averages + the derived register time."""
+    return "avg_response_time" in key or "register_time_ms" in key
+
 
 @dataclass
 class AnomalyFlag:
@@ -178,11 +195,20 @@ class AnomalyScreener:
             log.info("Anomaly model trained on %d samples (%d features)",
                      self._training_samples, len(features))
 
-    def score(self, features: dict[str, float]) -> AnomalyReport:
+    def score(
+        self,
+        features: dict[str, float],
+        liveness: dict[str, bool] | None = None,
+    ) -> AnomalyReport:
         """Score a new feature dict and return flagged anomalies.
 
         Args:
             features: Preprocessed feature dict from MetricPreprocessor.
+            liveness: Optional per-feature liveness signals from
+                MetricPreprocessor.liveness_signals(). When provided, enables
+                silent-failure severity escalation (current=0 + mean>>0 +
+                counter was recently active → HIGH). When None, escalation
+                is skipped and the standard σ-based severity rule applies.
 
         Returns:
             AnomalyReport with flagged metrics and overall score.
@@ -210,7 +236,7 @@ class AnomalyScreener:
                  overall, self._threshold)
 
         # Identify which features contribute most via leave-one-out attribution
-        flags = self._attribute_anomalies(features, overall)
+        flags = self._attribute_anomalies(features, overall, liveness)
         report.flags = flags
 
         return report
@@ -219,6 +245,7 @@ class AnomalyScreener:
         self,
         features: dict[str, float],
         overall_score: float,
+        liveness: dict[str, bool] | None = None,
     ) -> list[AnomalyFlag]:
         """Identify which features deviate most from their learned normal.
 
@@ -277,6 +304,27 @@ class AnomalyScreener:
                     severity = "MEDIUM"
                 else:
                     severity = "LOW"
+
+                # Silent-failure escalation (ADR: anomaly_training_zero_pollution.md)
+                # A metric going to exactly 0 while its learned mean is well
+                # above the active-signal floor, AND the subsystem was active
+                # in the recent past, is categorically different from "value
+                # drifted below mean." Escalate to HIGH regardless of σ
+                # distance. The liveness check gates against naturally-idle
+                # moments — if the underlying counter hasn't moved recently,
+                # "went silent" is not a meaningful claim.
+                if (
+                    liveness is not None
+                    and current_value == 0.0
+                    and liveness.get(key, False)
+                ):
+                    is_temporal = _is_temporal_feature(key)
+                    floor = (
+                        _MIN_ACTIVE_MEAN_TIME_MS if is_temporal
+                        else _MIN_ACTIVE_MEAN_RATE
+                    )
+                    if learned_mean > floor:
+                        severity = "HIGH"
 
                 flags.append(AnomalyFlag(
                     metric=metric_name,

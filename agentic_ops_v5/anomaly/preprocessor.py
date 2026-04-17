@@ -171,6 +171,72 @@ _COLLECT_METRICS = {
 _RATE_WINDOW_SAMPLES = 6
 
 
+# =========================================================================
+# Temporal-metric pre-filter mapping (ADR: anomaly_training_zero_pollution.md)
+# =========================================================================
+# Time/duration metrics are semantically undefined when their underlying
+# event counter did not advance. A response-time of 0 is not a value of
+# zero — it means "no event happened, so the time is not applicable."
+# For each temporal feature emitted by the preprocessor, we record the
+# underlying counter whose advance is required for the feature to be
+# valid in a given snapshot. When the counter didn't advance, the
+# feature is omitted from that snapshot's feature vector entirely.
+#
+# Keys are the OUTPUT feature names. Values are the INPUT counter fkeys
+# (i.e. "{component}.{metric}").
+_TEMPORAL_COUNTER_MAP: dict[str, str] = {
+    "icscf.ims_icscf:lir_avg_response_time":
+        "icscf.ims_icscf:lir_replies_received",
+    "icscf.ims_icscf:uar_avg_response_time":
+        "icscf.ims_icscf:uar_replies_received",
+    "icscf.cdp:average_response_time":
+        "icscf.cdp:replies_received",
+    "scscf.ims_auth:mar_avg_response_time":
+        "scscf.ims_auth:mar_replies_received",
+    "scscf.ims_registrar_scscf:sar_avg_response_time":
+        "scscf.ims_registrar_scscf:sar_replies_received",
+    "derived.pcscf_avg_register_time_ms":
+        "pcscf.script:register_success",
+}
+
+
+# For rate-based features, map each output feature to its underlying
+# cumulative counter. Used by the screener's silent-failure escalation
+# to decide whether "current rate = 0" means "subsystem is quiet by
+# nature" (no escalation) or "subsystem was active recently but has
+# gone silent" (escalate to HIGH). Rate features themselves are never
+# filtered out — 0 is a legitimate rate observation.
+_RATE_COUNTER_MAP: dict[str, str] = {
+    "normalized.pcscf.core:rcv_requests_register_per_ue":
+        "pcscf.core:rcv_requests_register",
+    "normalized.pcscf.core:rcv_requests_invite_per_ue":
+        "pcscf.core:rcv_requests_invite",
+    "normalized.icscf.core:rcv_requests_register_per_ue":
+        "icscf.core:rcv_requests_register",
+    "normalized.icscf.core:rcv_requests_invite_per_ue":
+        "icscf.core:rcv_requests_invite",
+    "normalized.scscf.core:rcv_requests_register_per_ue":
+        "scscf.core:rcv_requests_register",
+    "normalized.scscf.core:rcv_requests_invite_per_ue":
+        "scscf.core:rcv_requests_invite",
+    "normalized.icscf.cdp_replies_per_ue":
+        "icscf.cdp:replies_received",
+    "normalized.scscf.cdp_replies_per_ue":
+        "scscf.cdp:replies_received",
+    "normalized.upf.gtp_indatapktn3upf_per_ue":
+        "upf.fivegs_ep_n3_gtp_indatapktn3upf",
+    "normalized.upf.gtp_outdatapktn3upf_per_ue":
+        "upf.fivegs_ep_n3_gtp_outdatapktn3upf",
+}
+
+
+# How many recent snapshot windows to consider when deciding a counter
+# was "recently active." With a 6-sample rate window, looking at 2
+# recent windows covers ~60 seconds of history, enough to distinguish
+# steady-state silence from a just-went-silent failure.
+_LIVENESS_LOOKBACK_WINDOWS = 2
+
+
 class MetricPreprocessor:
     """Converts raw per-component metric dicts into scale-independent features.
 
@@ -190,6 +256,12 @@ class MetricPreprocessor:
     def __init__(self) -> None:
         # Ring buffer of (timestamp, {fkey: counter_value}) for sliding window rates
         self._history: list[tuple[float, dict[str, float]]] = []
+        # Liveness signals computed during the most recent process() call.
+        # Maps OUTPUT feature name → True if the feature's underlying counter
+        # advanced in at least one of the last _LIVENESS_LOOKBACK_WINDOWS
+        # snapshot pairs. Consumed by AnomalyScreener.score() for silent-
+        # failure severity escalation. See ADR: anomaly_training_zero_pollution.md
+        self._liveness: dict[str, bool] = {}
 
     def process(self, raw_metrics: dict[str, dict[str, Any]], timestamp: float | None = None) -> dict[str, float]:
         """Convert raw metrics snapshot to a scale-independent feature dict.
@@ -250,6 +322,9 @@ class MetricPreprocessor:
                     else:
                         rates[fkey] = 0.0
 
+        # Reset liveness for this snapshot; populated as features are emitted.
+        self._liveness = {}
+
         # Step 2: Extract UE counts for normalization
         ims_ue_count = raw_features.get("pcscf.ims_usrloc_pcscf:registered_contacts", 0)
         ran_ue_count = raw_features.get("amf.ran_ue", 0)
@@ -276,8 +351,21 @@ class MetricPreprocessor:
             # remove_cumulative_timeout_counters.md
         ]
         for key in _passthrough_gauges:
-            if key in raw_features:
-                features[key] = raw_features[key]
+            if key not in raw_features:
+                continue
+            # Pre-filter: omit response-time / duration metrics from this
+            # snapshot when the underlying event counter did not advance.
+            # A time-of-zero with no event is semantically "not applicable,"
+            # not a valid observation. ADR: anomaly_training_zero_pollution.md
+            counter_fkey = _TEMPORAL_COUNTER_MAP.get(key)
+            if counter_fkey is not None:
+                counter_advanced = rates.get(counter_fkey, 0) > 0
+                if not counter_advanced:
+                    continue
+                # Emitted: mark live so silent-failure escalation can fire
+                # if the same feature later reports 0 despite being live.
+                self._liveness[key] = True
+            features[key] = raw_features[key]
 
         # --- Category 2: Error ratios (scale-independent, [0, 1]) ---
 
@@ -322,15 +410,18 @@ class MetricPreprocessor:
         # P-CSCF average registration time (ms per registration)
         # script:register_time is a CUMULATIVE counter (total ms across all
         # registrations), not a gauge. We compute avg time per registration
-        # using the sliding window rates of both counters.
+        # using the sliding window rates of both counters. When no new
+        # REGISTERs completed in the window, the metric is omitted from this
+        # snapshot entirely — "0 ms" would be a semantically wrong value for
+        # "no events to average." ADR: anomaly_training_zero_pollution.md
         reg_time_rate = rates.get("pcscf.script:register_time", 0)
         reg_success_rate = rates.get("pcscf.script:register_success", 0)
         if reg_success_rate > 0:
             features["derived.pcscf_avg_register_time_ms"] = round(
                 reg_time_rate / reg_success_rate, 1
             )
-        else:
-            features["derived.pcscf_avg_register_time_ms"] = 0.0
+            self._liveness["derived.pcscf_avg_register_time_ms"] = True
+        # else: feature omitted — counter did not advance this window
 
         # --- Category 3: Per-UE normalized rates ---
 
@@ -406,11 +497,52 @@ class MetricPreprocessor:
         # varying UE counts. These values are used internally for per-UE
         # normalization but not fed to the anomaly model.
 
+        # Populate liveness for rate features (never filtered; used only for
+        # silent-failure severity escalation at scoring time). A rate feature
+        # is "live" if its underlying counter advanced in any of the last
+        # _LIVENESS_LOOKBACK_WINDOWS snapshot pairs — i.e., the subsystem
+        # was recently active regardless of whether it's active right now.
+        for feature_name, counter_fkey in _RATE_COUNTER_MAP.items():
+            if feature_name not in features:
+                continue
+            self._liveness[feature_name] = self._counter_advanced_recently(
+                counter_fkey, _LIVENESS_LOOKBACK_WINDOWS
+            )
+
         return features
+
+    def _counter_advanced_recently(self, counter_fkey: str, n_windows: int) -> bool:
+        """Check whether a counter advanced in any of the last n snapshot pairs.
+
+        Consults the ring buffer maintained for rate computation. Returns
+        False if history is too short to answer.
+        """
+        if len(self._history) < n_windows + 1:
+            return False
+        recent = self._history[-(n_windows + 1):]
+        for i in range(len(recent) - 1):
+            _, counters_prev = recent[i]
+            _, counters_curr = recent[i + 1]
+            prev = counters_prev.get(counter_fkey, 0)
+            curr = counters_curr.get(counter_fkey, 0)
+            if curr > prev:
+                return True
+        return False
+
+    def liveness_signals(self) -> dict[str, bool]:
+        """Return per-feature liveness signals from the most recent process() call.
+
+        Maps OUTPUT feature name → True if the feature's underlying counter
+        showed activity in the recent window. Consumed by the screener's
+        silent-failure severity escalation. Returns a copy; mutating it does
+        not affect internal state.
+        """
+        return dict(self._liveness)
 
     def reset(self) -> None:
         """Reset state (e.g., between training and monitoring)."""
         self._history.clear()
+        self._liveness.clear()
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:

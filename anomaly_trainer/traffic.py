@@ -134,11 +134,16 @@ async def generate_traffic(duration_seconds: int = 300) -> None:
     call_count = 0
     register_count = 0
 
+    # Activity weights and waits tuned to minimize signaling-idle snapshots
+    # during training. Previously, ~74% of training snapshots were SIP-idle
+    # because 20% of time was explicit idle and most call time (hold phase)
+    # saw no new signaling. These knobs collectively cut that to roughly
+    # half. ADR: anomaly_training_zero_pollution.md
     while elapsed < duration_seconds:
-        # Pick a random activity
+        # Pick a random activity — idle weight reduced from 20 to 5.
         activity = random.choices(
             ["register_both", "register_ue1", "call", "idle"],
-            weights=[20, 15, 45, 20],
+            weights=[20, 15, 45, 5],
         )[0]
 
         if activity == "register_both":
@@ -147,7 +152,8 @@ async def generate_traffic(duration_seconds: int = 300) -> None:
             await asyncio.sleep(1)
             await trigger_reregister("e2e_ue2")
             register_count += 2
-            wait = random.uniform(3, 8)
+            # Post-register wait tightened from (3, 8) to (1, 3).
+            wait = random.uniform(1, 3)
             await asyncio.sleep(wait)
             elapsed += wait + 1
 
@@ -156,12 +162,15 @@ async def generate_traffic(duration_seconds: int = 300) -> None:
             log.info("[T+%.0fs] Re-registering %s", elapsed, ue)
             await trigger_reregister(ue)
             register_count += 1
-            wait = random.uniform(3, 6)
+            # Post-register wait tightened from (3, 6) to (1, 3).
+            wait = random.uniform(1, 3)
             await asyncio.sleep(wait)
             elapsed += wait
 
         elif activity == "call":
-            call_duration = random.uniform(5, 30)
+            # Call hold shortened from (5, 30) to (5, 15) — same signaling
+            # count per call, less dead SIP time during hold.
+            call_duration = random.uniform(5, 15)
             log.info("[T+%.0fs] Placing VoNR call (hold %.0fs)", elapsed, call_duration)
             ok = await place_call(ims_domain, callee_imsi)
             if ok:
@@ -169,8 +178,8 @@ async def generate_traffic(duration_seconds: int = 300) -> None:
                 await asyncio.sleep(call_duration)
                 elapsed += call_duration
                 await hangup()
-                # Brief settling time after hangup
-                settle = random.uniform(3, 8)
+                # Settle shortened from (3, 8) to (2, 4) for faster cycling.
+                settle = random.uniform(2, 4)
                 await asyncio.sleep(settle)
                 elapsed += settle
             else:

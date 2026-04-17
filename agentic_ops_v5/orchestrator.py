@@ -345,7 +345,11 @@ async def investigate(
                 # Only score after the sliding window has enough samples
                 # for smooth rates (window size = 6, so start scoring at 6+)
                 if i >= 6 and features:
-                    report = screener.score(features)
+                    # Pass liveness signals so the screener can escalate
+                    # silent-failure anomalies (current=0 + mean>>0 + counter
+                    # recently active) to HIGH regardless of σ distance.
+                    # See ADR: anomaly_training_zero_pollution.md
+                    report = screener.score(features, liveness=pp.liveness_signals())
                     if best_report is None or report.overall_score > best_report.overall_score:
                         best_report = report
 
@@ -392,9 +396,22 @@ async def investigate(
                 "Run: python -m anomaly_trainer --duration 300"
             )
 
-    except ImportError:
-        log.info("anomaly_trainer module not available — Phase 0 skipped")
-        state["anomaly_report"] = "Anomaly screening not available."
+    except ImportError as e:
+        # The try block imports both `anomaly_trainer` and its ML dependencies
+        # (river, etc.). Any missing module lands here — report which one, so
+        # "anomaly_trainer missing" and "river missing" don't look identical.
+        log.warning(
+            "Phase 0 skipped — ImportError while loading anomaly screener: %s. "
+            "This usually means a dependency of anomaly_trainer (e.g. river) is "
+            "missing from the current Python environment. Check that you're "
+            "running with the venv Python (.venv/bin/python3) that has all "
+            "requirements installed.", e,
+        )
+        state["anomaly_report"] = (
+            f"Anomaly screening not available: ImportError ({e}). "
+            "Likely cause: running with a Python environment that lacks "
+            "anomaly_trainer's dependencies. Use the project venv."
+        )
     except Exception as e:
         log.warning("AnomalyScreener failed (non-fatal): %s", e, exc_info=True)
         state["anomaly_report"] = f"Anomaly screening failed: {e}"
@@ -549,6 +566,62 @@ async def investigate(
             all_phases.extend(traces)
             invocation_order.extend(t.agent_name for t in traces)
             _accumulate_phase_traces(state, traces)
+
+            # -------- Mechanical guardrail: minimum tool-call count --------
+            # The Investigator has repeatedly emitted polished "falsification"
+            # output while making zero actual tool calls, fabricating every
+            # [EVIDENCE: ...] citation. Prompt discipline alone has failed.
+            # Enforce the minimum mechanically: if fewer than MIN_PROBES tool
+            # calls were made, discard the LLM's self-reported verdict and
+            # replace it with a forced INCONCLUSIVE so Synthesis caps
+            # confidence at medium (and the Evidence Validator will further
+            # tighten to low/severe if citations turn out to be fabricated).
+            MIN_PROBES = 2
+            investigator_trace = next(
+                (t for t in traces if t.agent_name == "InvestigatorAgent"),
+                None,
+            )
+            inv_tool_calls = (
+                len(investigator_trace.tool_calls) if investigator_trace else 0
+            )
+            state["investigator_tool_call_count"] = inv_tool_calls
+
+            if inv_tool_calls < MIN_PROBES:
+                log.warning(
+                    "Investigator made %d tool call(s); minimum is %d. "
+                    "Overriding self-reported output with forced INCONCLUSIVE verdict.",
+                    inv_tool_calls, MIN_PROBES,
+                )
+                state["investigation_raw_overridden"] = state.get("investigation", "")
+                state["investigation"] = (
+                    "### Hypothesis\n"
+                    "Not assessed — the mechanical guardrail triggered before "
+                    "the Investigator could produce a trustworthy verdict.\n\n"
+                    "### Falsification Probes Executed\n"
+                    f"Tool calls made: {inv_tool_calls} (minimum required: {MIN_PROBES}).\n"
+                    "The Investigator's self-reported output has been discarded "
+                    "because it did not execute the minimum number of probes "
+                    "needed to falsify the Network Analyst's hypothesis. Any "
+                    "[EVIDENCE: ...] citations the Investigator produced are "
+                    "not backed by real tool invocations and have been removed.\n\n"
+                    "### Verdict\n"
+                    "- **Verdict:** INCONCLUSIVE\n"
+                    "- **Reasoning:** Mechanical override. The Investigator "
+                    f"made only {inv_tool_calls} tool call(s) — below the "
+                    f"{MIN_PROBES}-probe minimum required to attempt "
+                    "falsification. Confidence in any downstream diagnosis "
+                    "must be capped at medium per the INCONCLUSIVE branch in "
+                    "the Synthesis prompt.\n"
+                )
+                if on_event:
+                    await on_event({
+                        "type": "phase_guardrail",
+                        "agent": "InvestigatorAgent",
+                        "reason": (
+                            f"Only {inv_tool_calls} tool call(s) "
+                            f"(min {MIN_PROBES}) — forced INCONCLUSIVE"
+                        ),
+                    })
         except Exception as e:
             log.error("InvestigatorAgent failed: %s", e)
             state["investigation"] = f"Investigation failed: {e}"

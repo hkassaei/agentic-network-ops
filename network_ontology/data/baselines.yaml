@@ -3,12 +3,32 @@
 # =============================================================================
 # Source: Episode JSON baselines from chaos runs, network/.env
 #
-# These are the expected metric values when the stack is healthy with
-# 2 UEs registered and 0-1 active VoNR calls.
+# These are the expected metric values when the stack is healthy.
 #
 # Used to distinguish pre-existing conditions from injected faults.
 # The `description` field is the single source of truth for metric tooltips
 # displayed in the GUI.
+#
+# =============================================================================
+# IMPORTANT — Scale dependence of `expected` values
+# =============================================================================
+# Many `expected` values in this file are tied to the current test-stack
+# dimensions (2 UEs, 1 gNB, 2 APNs per UE). They are NOT invariants of a
+# healthy network — a production network with 200 UEs will have
+# ran_ue=200, amf_session=400, registered_contacts=200, etc., all healthy.
+#
+# Entries that are scale-dependent are tagged `scale_dependent: true` and
+# include an `invariant:` field describing the scale-independent relationship
+# that actually holds in a healthy network (e.g., "ran_ue equals configured
+# UE pool size" or "amf_session == ran_ue * configured_apns_per_ue").
+#
+# Agents reasoning about healthy vs. degraded MUST prefer the `invariant:`
+# over the raw `expected:` number. The raw expected is retained only for
+# backward compatibility with tools that hard-code the 2-UE assumption.
+#
+# A planned follow-up ADR proposes replacing this file with a scale-independent
+# "metric knowledge base" — see docs/ADR/metric_knowledge_base_schema.md
+# =============================================================================
 
 baselines:
 
@@ -19,16 +39,22 @@ baselines:
         description: "Number of UEs attached to the 5G RAN via this AMF."
         expected: 2
         condition: "2 UEs attached"
-        alarm_if: "= 0 (RAN failure) or < expected (partial failure)"
+        scale_dependent: true
+        invariant: "Equals configured UE pool size when healthy. Any drop from a stable prior baseline indicates lost attachments."
+        alarm_if: "= 0 (RAN failure) or dropped from prior stable value (partial failure)"
       gnb:
         description: "Number of gNBs connected to the AMF via N2 (NGAP)."
         expected: 1
         condition: "1 gNB connected"
-        alarm_if: "= 0 (gNB down)"
+        scale_dependent: true
+        invariant: "Equals configured gNB count when N2 is healthy. Drop to 0 = all N2 associations lost."
+        alarm_if: "= 0 (all gNBs disconnected) or dropped from prior stable value"
       amf_session:
         description: "Active NAS sessions on the AMF. Each UE has 2 (internet + IMS APN)."
         expected: 4
         note: "2 UEs x 2 sessions (internet + IMS APN)"
+        scale_dependent: true
+        invariant: "amf_session == ran_ue * configured_apns_per_ue (typically 2). Ratio should stay constant; absolute count scales with UE pool."
       fivegs_amffunction_rm_reginitreq:
         description: "Registration initial requests received (counter). Delta indicates new registrations."
         type: counter
@@ -55,17 +81,25 @@ baselines:
         description: "Active PDU sessions managed by the SMF. Each UE establishes 2 (internet + IMS APN)."
         expected: 4
         condition: "2 UEs x 2 PDU sessions each"
+        scale_dependent: true
+        invariant: "sessionnbr == ues_active * configured_apns_per_ue. Ratio is the invariant; absolute value scales with UE count."
       ues_active:
         description: "Number of UEs with active PDU sessions on this SMF."
         expected: 2
+        scale_dependent: true
+        invariant: "Typically equals amf.ran_ue in healthy VoNR mode. Drift between SMF ues_active and AMF ran_ue indicates session-establishment problems."
       bearers_active:
         description: "Active QoS bearers. 4 at rest (default bearers), rises to 6 during VoNR call (2 dedicated voice QoS flows)."
         expected: 4
         note: "Rises to 6 during active VoNR call (2 dedicated QoS flows for voice)"
         during_call: 6
+        scale_dependent: true
+        invariant: "At rest: one default bearer per PDU session (2 per UE). During VoNR call: +1 dedicated QoS bearer per active voice session per caller. Per-UE ratio is the invariant."
       pfcp_sessions_active:
         description: "Active PFCP sessions between SMF and UPF. Should track PDU session count."
         expected: 4
+        scale_dependent: true
+        invariant: "pfcp_sessions_active == fivegs_smffunction_sm_sessionnbr. Any divergence = SMF/UPF state desync."
       fivegs_smffunction_sm_pdusessioncreationreq:
         description: "PDU session creation requests (counter)."
         type: counter
@@ -78,6 +112,8 @@ baselines:
       fivegs_upffunction_upf_sessionnbr:
         description: "Active PFCP sessions on the UPF. Should match SMF session count."
         expected: 4
+        scale_dependent: true
+        invariant: "upf_sessionnbr == smf.pfcp_sessions_active. Divergence = SMF/UPF desync or PFCP heartbeat failure."
       fivegs_ep_n3_gtp_indatapktn3upf:
         description: "Cumulative GTP-U packets received on N3 (gNB to UPF) since UPF started. Must be incrementing for healthy data plane."
         type: counter
@@ -178,6 +214,8 @@ baselines:
       fivegs_pcffunction_pa_sessionnbr:
         description: "Active policy association sessions on the PCF."
         expected: 4
+        scale_dependent: true
+        invariant: "Typically tracks smf.fivegs_smffunction_sm_sessionnbr in policy-enabled deployments."
       fivegs_pcffunction_pa_policyamassocnbr:
         description: "Active AM (Access and Mobility) policy associations."
         type: gauge
@@ -204,12 +242,16 @@ baselines:
         description: "UE contacts currently registered at the P-CSCF. Expected 2 (one per UE)."
         expected: 2
         condition: "2 UEs registered"
-        alarm_if: "< 2 (UE deregistered) or = 0 (all UEs lost)"
+        scale_dependent: true
+        invariant: "Equals configured IMS-enabled UE pool size when healthy. In VoNR mode typically equals amf.ran_ue. Drop from prior stable baseline = lost IMS registrations."
+        alarm_if: "Dropped from prior stable baseline, or = 0 (all UEs lost)"
       "dialog_ng:active":
         description: "Active SIP dialogs at P-CSCF. 0 at rest, 2 during active call (one per direction)."
         expected: 0
         during_call: 2
         note: "2 dialogs during active call (one per direction)"
+        scale_dependent: true
+        invariant: "2 SIP dialogs per simultaneous bidirectional VoNR call. Ratio = 2 * simultaneous_calls."
       "core:rcv_requests_register":
         description: "SIP REGISTER requests received (counter)."
         type: counter
@@ -292,6 +334,8 @@ baselines:
         description: "Active IMS contacts registered at the S-CSCF. Expected 2 (one per UE)."
         expected: 2
         condition: "2 UEs registered"
+        scale_dependent: true
+        invariant: "Equals pcscf.ims_usrloc_pcscf:registered_contacts in healthy steady state. Divergence = S-CSCF/P-CSCF registration state desync."
       "ims_registrar_scscf:accepted_regs":
         description: "Accepted IMS registrations (counter)."
         type: counter
@@ -303,6 +347,8 @@ baselines:
         description: "Active SIP dialogs at S-CSCF. 0 at rest, 2 during active call."
         expected: 0
         during_call: 2
+        scale_dependent: true
+        invariant: "Matches pcscf.dialog_ng:active in healthy operation (2 dialogs per simultaneous bidirectional call)."
       "cdp:timeout":
         description: "Diameter Cx timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity issues."
         expected: 0
@@ -332,6 +378,8 @@ baselines:
         description: "Number of IMS subscribers provisioned in PyHSS (queried via REST API)."
         expected: 2
         source: api
+        scale_dependent: true
+        invariant: "Equals provisioned subscriber count. Should be >= pcscf.registered_contacts (provisioned >= currently registered)."
 
   mongo:
     metrics:
@@ -339,3 +387,5 @@ baselines:
         description: "Number of 5G subscribers provisioned in MongoDB (queried via mongosh)."
         expected: 2
         source: mongosh
+        scale_dependent: true
+        invariant: "Equals provisioned 5G subscriber count. Should be >= amf.ran_ue (provisioned >= currently attached)."

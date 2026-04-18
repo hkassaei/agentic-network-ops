@@ -593,8 +593,13 @@ def parse_nf_metrics_text(text: str) -> dict[str, dict[str, float]]:
             continue
 
         # Metric value lines: "  key = value" or "  key: value"
+        # Key charset must include parens (RTPEngine: errors_per_second_(total),
+        # packets_per_second_(kernel)), colons (Kamailio: cdp:replies_received),
+        # and slashes (RTPEngine: mixed_kernel/userspace_media_streams). Earlier
+        # versions of this regex only allowed word-chars + colons, silently
+        # dropping every paren-containing RTPEngine metric.
         if current_component:
-            metric_match = re.match(r'"?([\w:]+)"?\s*[=:]\s*(-?\d+\.?\d*)', stripped)
+            metric_match = re.match(r'"?([\w:()/-]+)"?\s*[=:]\s*(-?\d+\.?\d*)', stripped)
             if metric_match:
                 key = metric_match.group(1)
                 try:

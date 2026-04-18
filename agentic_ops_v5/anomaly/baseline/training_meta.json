@@ -1,8 +1,8 @@
 {
-  "trained_at": "2026-04-17T03:51:37.146058+00:00",
-  "duration_seconds": 1587,
-  "n_samples": 213,
-  "n_features": 22,
+  "trained_at": "2026-04-17T19:27:29.184364+00:00",
+  "duration_seconds": 1546,
+  "n_samples": 211,
+  "n_features": 23,
   "feature_keys": [
     "derived.icscf_lir_timeout_ratio",
     "derived.icscf_sip_error_ratio",
@@ -25,8 +25,9 @@
     "normalized.smf.bearers_per_ue",
     "normalized.smf.sessions_per_ue",
     "normalized.upf.gtp_indatapktn3upf_per_ue",
-    "normalized.upf.gtp_outdatapktn3upf_per_ue"
+    "normalized.upf.gtp_outdatapktn3upf_per_ue",
+    "rtpengine.errors_per_second_(total)"
   ],
   "model_ready": true,
-  "training_samples": 213
+  "training_samples": 211
 }

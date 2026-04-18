@@ -1,9 +1,9 @@
 # Anomaly Detection Model — Feature Set Reference
 
-**Last updated:** 2026-04-15
+**Last updated:** 2026-04-17
 **Total features:** 29
 **Model:** River HalfSpaceTrees (50 trees, height 15, window 50, threshold 0.70)
-**Training:** 600 seconds of randomized IMS traffic on healthy stack, 5-second collection intervals, 30-second sliding window for rate computation
+**Training:** 1200 seconds (default) of randomized IMS traffic on a healthy stack, 5-second collection intervals, 30-second sliding window for rate computation. Temporal metrics are pre-filtered: response-time features are emitted only in snapshots where the underlying event counter advanced (see ADR `anomaly_training_zero_pollution.md`).
 
 ---
 
@@ -31,21 +31,21 @@ Scale-independent ratios in [0, 1]. Zero during healthy operation, spike during 
 | 7 | `derived.icscf_sip_error_ratio` | (4xx + 5xx) / total_replies | % of I-CSCF SIP responses that are errors |
 | 8 | `derived.scscf_sip_error_ratio` | (4xx + 5xx) / total_replies | % of S-CSCF SIP responses that are errors |
 | 9 | `derived.upf_activity_during_calls` | actual_upf_rate / expected_upf_rate | Ratio of UPF throughput vs expected during active calls. 1.0 = healthy or idle. Drops to 0.0 when calls are active but UPF is not forwarding. |
-| 10 | `derived.pcscf_avg_register_time_ms` | delta(register_time) / delta(register_success) | Average milliseconds per SIP registration at P-CSCF. ~300ms healthy. Spikes to 4000ms+ under P-CSCF latency faults. |
+| 10 | `derived.pcscf_avg_register_time_ms` | delta(register_time) / delta(register_success) | Average milliseconds per SIP registration at P-CSCF. ~250ms healthy (dominated by four serial HSS Diameter RTTs: UAR+MAR+SAR+LIR). Spikes to 4000ms+ under P-CSCF latency faults. Omitted entirely from the snapshot when no new REGISTERs completed in the window. |
 
 ---
 
 ## Response Times (5 features)
 
-Point-in-time Diameter latency gauges. Tight distributions during healthy operation, spike under HSS latency or overload faults.
+Point-in-time Diameter latency gauges. Tight distributions during healthy operation, spike under HSS latency or overload faults. Each feature is omitted from a snapshot when its underlying reply counter did not advance (no new requests completed in the rate window); see ADR `anomaly_training_zero_pollution.md`.
 
 | # | Feature | Healthy Baseline | What it measures |
 |---|---|---|---|
-| 11 | `icscf.cdp:average_response_time` | ~59ms | Average Diameter response time at I-CSCF (across all Cx operations) |
-| 12 | `icscf.ims_icscf:uar_avg_response_time` | ~61ms | Average UAR response time (user authorization during REGISTER) |
-| 13 | `icscf.ims_icscf:lir_avg_response_time` | ~51ms | Average LIR response time (user location during call routing) |
-| 14 | `scscf.ims_auth:mar_avg_response_time` | ~89ms | Average MAR response time (authentication vector retrieval) |
-| 15 | `scscf.ims_registrar_scscf:sar_avg_response_time` | ~120ms | Average SAR response time (S-CSCF assignment at HSS) |
+| 11 | `icscf.cdp:average_response_time` | ~51ms | Average Diameter response time at I-CSCF (across all Cx operations — weighted mix of UAR + LIR) |
+| 12 | `icscf.ims_icscf:uar_avg_response_time` | ~52ms | Average UAR response time (user authorization during REGISTER) |
+| 13 | `icscf.ims_icscf:lir_avg_response_time` | ~48ms | Average LIR response time (user location during call routing) |
+| 14 | `scscf.ims_auth:mar_avg_response_time` | ~92ms | Average MAR response time (authentication vector retrieval) |
+| 15 | `scscf.ims_registrar_scscf:sar_avg_response_time` | ~101ms | Average SAR response time (S-CSCF assignment at HSS) |
 
 ---
 
@@ -98,4 +98,3 @@ Point-in-time gauge. Not a cumulative lifetime metric.
 | `health.ran_ue`, `health.gnb`, `health.upf_sessions`, `health.ims_registered` | Absolute UE/gNB counts — don't generalize across different UE populations | `anomaly_model_v2_improvements.md` |
 | `derived.pcscf_httpclient_failure_ratio` | 84% failure rate is "normal" (deployment-specific SCP/Rx noise) — masks real faults | `anomaly_model_v2_improvements.md` |
 | `normalized.rtpengine.pps_per_session` | Always 0 — gauge resets between snapshots faster than collection interval | `anomaly_model_v2_improvements.md` |
-| `normalized.smf.sessions_per_ue` | Always exactly 2.0 with zero variance — dead weight | `anomaly_model_v2_improvements.md` |

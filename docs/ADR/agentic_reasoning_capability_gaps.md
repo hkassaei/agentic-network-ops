@@ -1,7 +1,7 @@
 # ADR: Agentic Reasoning Capability — Gap Analysis
 
 **Date:** 2026-04-17
-**Status:** Proposed (for review)
+**Status:** Reviewed. Plan for implementation.
 **Related:**
 - [`anomaly_model_feature_set.md`](anomaly_model_feature_set.md) — inventory of model features
 - [`v5_6phase_pipeline.md`](v5_6phase_pipeline.md) — current agent pipeline

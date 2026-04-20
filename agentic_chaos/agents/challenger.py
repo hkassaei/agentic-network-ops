@@ -102,6 +102,13 @@ class ChallengeAgent(BaseAgent):
 
         log.info("Challenge Mode: invoking %s agent...", agent_version)
 
+        # Pass episode_id to v6 via env var so it can scope the event store query
+        if agent_version == "v6":
+            episode_id = ctx.session.state.get("episode_id", "unknown")
+            import os as _os
+            _os.environ["V6_EPISODE_ID"] = str(episode_id)
+            log.info("Set V6_EPISODE_ID=%s for v6 event store scoping", episode_id)
+
         faults_injected = ctx.session.state.get("faults_injected", [])
         anomaly_window_hint_seconds = int(
             ctx.session.state.get("anomaly_window_hint_seconds", 300)
@@ -167,7 +174,7 @@ class ChallengeAgent(BaseAgent):
             network_analysis=str(network_analysis) if network_analysis else "",
         )
 
-        if agent_version in ("v3", "v4", "v5"):
+        if agent_version in ("v3", "v4", "v5", "v6"):
             rca_model = f"{agent_version}-adk/{_get_v3_models()}"
         else:
             rca_model = f"v1.5-pydantic/{os.environ.get('AGENT_MODEL', 'google-vertex:gemini-2.5-pro')}"
@@ -213,7 +220,7 @@ class ChallengeAgent(BaseAgent):
         if ops_path not in sys.path:
             sys.path.insert(0, ops_path)
 
-        if agent_version in ("v3", "v4", "v5"):
+        if agent_version in ("v3", "v4", "v5", "v6"):
             # v3/v4/v5 use Google ADK (Vertex AI)
             has_key = bool(
                 os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -222,7 +229,9 @@ class ChallengeAgent(BaseAgent):
             if not has_key:
                 return False
             try:
-                if agent_version == "v5":
+                if agent_version == "v6":
+                    from agentic_ops_v6.orchestrator import investigate  # noqa: F401
+                elif agent_version == "v5":
                     from agentic_ops_v5.orchestrator import investigate  # noqa: F401
                 elif agent_version == "v4":
                     from agentic_ops_v4.orchestrator import investigate  # noqa: F401
@@ -271,7 +280,7 @@ class ChallengeAgent(BaseAgent):
         if ops_path not in sys.path:
             sys.path.insert(0, ops_path)
 
-        if agent_version in ("v3", "v4", "v5"):
+        if agent_version in ("v3", "v4", "v5", "v6"):
             return await self._run_adk_agent(
                 question, agent_version,
                 anomaly_window_hint_seconds=anomaly_window_hint_seconds,
@@ -318,8 +327,21 @@ class ChallengeAgent(BaseAgent):
         observation_window_duration: int = 0,
         seconds_since_observation: int = 0,
     ) -> dict:
-        """Run an ADK multi-phase troubleshooting agent (v3, v4, or v5)."""
-        if version == "v5":
+        """Run an ADK multi-phase troubleshooting agent (v3, v4, v5, or v6)."""
+        if version == "v6":
+            from agentic_ops_v6.orchestrator import investigate
+            import os as _os
+            # Pass the chaos episode_id via env so v6 can scope its event store query
+            episode_id = _os.environ.get("V6_EPISODE_ID")
+            result = await investigate(
+                question,
+                anomaly_window_hint_seconds=anomaly_window_hint_seconds,
+                metric_snapshots=metric_snapshots or [],
+                observation_window_duration=observation_window_duration,
+                seconds_since_observation=seconds_since_observation,
+                episode_id=episode_id,
+            )
+        elif version == "v5":
             from agentic_ops_v5.orchestrator import investigate
             result = await investigate(
                 question,

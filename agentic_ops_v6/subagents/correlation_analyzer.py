@@ -48,11 +48,19 @@ def _render_correlation_result(result: CorrelationResult) -> str:
             f"or lack registered correlation hints in the KB."
         )
 
+    # Cap rendered output at top 3 hypotheses for consistency with the rest of
+    # the pipeline (MAX_PARALLEL_INVESTIGATORS = 3). Correlation engine still
+    # produces all matching composites internally, but only the top 3 are
+    # shown to the NA as hints and included in the episode report.
+    top_hypotheses = result.hypotheses[:3]
+    total = len(result.hypotheses)
+    suffix = f" (showing top 3 of {total})" if total > 3 else ""
+
     lines = [
-        f"**Correlation engine produced {len(result.hypotheses)} ranked composite hypotheses "
-        f"from {result.events_considered} fired events:**\n"
+        f"**Correlation engine produced {total} ranked composite hypotheses "
+        f"from {result.events_considered} fired events{suffix}:**\n"
     ]
-    for i, h in enumerate(result.hypotheses, 1):
+    for i, h in enumerate(top_hypotheses, 1):
         lines.append(
             f"### H{i}: {h.statement}"
         )

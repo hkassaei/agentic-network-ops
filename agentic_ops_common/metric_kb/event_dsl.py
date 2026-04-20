@@ -45,25 +45,59 @@ class DSLEvaluationError(Exception):
     """Raised when a trigger expression fails to evaluate."""
 
 
+def _is_tight(values: list[float]) -> bool:
+    """True if a small sample of values is self-consistent.
+
+    Used by _filter_stable to decide whether the earliest-third of the window
+    is a coherent "pre-fault stable" region vs. noise.
+
+    A sample is tight if either:
+      - all values are equal (trivial case), or
+      - the std is small relative to the mean (cv < 20%, or std < 0.5 when
+        mean is near zero).
+    """
+    if len(values) < 2:
+        return True
+    if all(v == values[0] for v in values):
+        return True
+    mean = statistics.mean(values)
+    std = statistics.pstdev(values)
+    if abs(mean) < 0.1:  # near-zero mean
+        return std < 0.5
+    return std / abs(mean) < 0.2
+
+
 # ----------------------------------------------------------------------------
 # Predicate implementations (pure functions of MetricContext)
 # ----------------------------------------------------------------------------
 
 def _filter_stable(series: list[tuple[float, float]]) -> list[float]:
-    """Identify the 'stable' subset of a series.
+    """Identify the 'stable' subset of a series, anchored in the EARLIER
+    portion of the window.
 
-    Simple heuristic: if median and mean are within 20% of each other, the
-    series is already stable — return all values. Otherwise, return only
-    values within 1 std of the median (rejecting outliers).
+    Why "earlier": prior_stable() is asked for the value "before the change."
+    In a chaos episode where a fault triggers sometime during the window,
+    the earlier values are pre-fault and the later values are post-fault. A
+    naive median-over-the-whole-window is dominated by whichever half of the
+    window is longer, not by the pre-fault value.
 
-    This is used by prior_stable to avoid being thrown off by a single
-    anomalous point at the start of the window.
+    Heuristic: look at the earliest third of the window. If those values are
+    self-consistent (median ≈ mean within 20%), return them. Otherwise, fall
+    back to std-based outlier filtering on the whole series.
     """
     if not series:
         return []
     values = [v for _, v in series]
     if len(values) <= 2:
         return values
+
+    # Step 1: try the earliest third. If it's self-consistent, use it.
+    earliest_n = max(2, len(values) // 3)
+    earliest = values[:earliest_n]
+    if _is_tight(earliest):
+        return earliest
+
+    # Step 2: fall back to outlier filtering on the whole window
     med = statistics.median(values)
     mean = statistics.mean(values)
     if med == 0:

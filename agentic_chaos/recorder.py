@@ -34,6 +34,7 @@ _AGENT_LOG_DIRS = {
     "v3": _OPERATE_DIR / "agentic_ops_v3" / "docs" / "agent_logs",
     "v4": _OPERATE_DIR / "agentic_ops_v4" / "docs" / "agent_logs",
     "v5": _OPERATE_DIR / "agentic_ops_v5" / "docs" / "agent_logs",
+    "v6": _OPERATE_DIR / "agentic_ops_v6" / "docs" / "agent_logs",
 }
 
 
@@ -196,7 +197,11 @@ def _coerce_to_dict(value) -> dict | None:
 
 
 def _format_network_analysis(value) -> list[str]:
-    """Render the NetworkAnalysis Pydantic dict as readable markdown."""
+    """Render the NetworkAnalysis Pydantic dict as readable markdown.
+
+    Handles both v5 schema (suspect_components + investigation_hint) and
+    v6 schema (hypotheses with falsification_probes).
+    """
     data = _coerce_to_dict(value)
     if not data:
         # Not parseable — fall back to raw text in a code block
@@ -242,7 +247,7 @@ def _format_network_analysis(value) -> list[str]:
                 out.append(f"- {item}")
             out.append("")
 
-    # Suspect components
+    # v5: Suspect components
     suspects = data.get("suspect_components") or []
     if suspects:
         out.append("**Suspect components:**")
@@ -256,13 +261,45 @@ def _format_network_analysis(value) -> list[str]:
             out.append(f"- **{name}** ({conf}): {reason}")
         out.append("")
 
-    # Investigation hint
+    # v6: Ranked hypotheses
+    hypotheses = data.get("hypotheses") or []
+    if hypotheses:
+        out.append("**Ranked hypotheses:**")
+        out.append("")
+        for h in hypotheses:
+            if not isinstance(h, dict):
+                continue
+            hid = h.get("id", "?")
+            statement = h.get("statement", "")
+            nf = h.get("primary_suspect_nf", "?")
+            fit = h.get("explanatory_fit", 0.0)
+            spec = h.get("specificity", "?")
+            support = h.get("supporting_events") or []
+            probes = h.get("falsification_probes") or []
+            try:
+                fit_str = f"{float(fit):.2f}"
+            except (TypeError, ValueError):
+                fit_str = "?"
+            out.append(f"- **`{hid}`** (fit={fit_str}, nf={nf}, specificity={spec}):")
+            out.append(f"    - **Statement:** {statement}")
+            if support:
+                out.append(
+                    "    - **Supporting events:** "
+                    + ", ".join(f"`{s}`" for s in support)
+                )
+            if probes:
+                out.append("    - **Falsification probes:**")
+                for p in probes:
+                    out.append(f"        - {p}")
+        out.append("")
+
+    # Investigation hint (v5 only)
     hint = data.get("investigation_hint", "")
     if hint:
         out.append(f"**Investigation hint:** {hint}")
         out.append("")
 
-    # Tools called
+    # Tools called (v5 only)
     tools = data.get("tools_called") or []
     if tools:
         out.append(f"**Tools called:** {', '.join(tools)}")
@@ -272,10 +309,20 @@ def _format_network_analysis(value) -> list[str]:
 
 
 def _format_pattern_match(value) -> list[str]:
-    """Render PatternMatcher JSON output as readable markdown."""
+    """Render the Phase-2 output as readable markdown.
+
+    Handles both:
+      - v5 PatternMatcher JSON (dict with matched/top_diagnosis/confidence)
+      - v6 CorrelationAnalyzer rendered markdown (plain text)
+    """
+    # v6: correlation analyzer produces plain markdown text directly
+    if isinstance(value, str) and value.strip().startswith("**"):
+        return [value]
+
     data = _coerce_to_dict(value)
     if not data:
-        return ["```", str(value)[:500], "```"]
+        # Plain markdown rendering (v6) — return as-is, no code-block wrapping
+        return [str(value)] if value else []
 
     out: list[str] = []
 
@@ -460,9 +507,7 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     lines.append("## Investigation Instruction (Phase 3)")
     lines.append("")
     if investigation_instruction:
-        # Render as a blockquote, preserving line breaks
-        for ln in str(investigation_instruction).splitlines():
-            lines.append(f"> {ln}" if ln.strip() else ">")
+        lines.extend(_format_investigation_instruction(investigation_instruction))
     else:
         lines.append("*No output produced.*")
     lines.append("")
@@ -472,9 +517,7 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     lines.append("## Investigation (Phase 4)")
     lines.append("")
     if investigation:
-        inv_text = str(investigation)
-        for ln in inv_text.splitlines():
-            lines.append(f"> {ln}" if ln.strip() else ">")
+        lines.extend(_format_investigation(investigation))
     else:
         lines.append("*No investigation output produced.*")
     lines.append("")
@@ -484,19 +527,7 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     lines.append("## Evidence Validation (Phase 5)")
     lines.append("")
     if evidence_validation:
-        if isinstance(evidence_validation, dict):
-            lines.append(f"**Verdict:** {evidence_validation.get('verdict', '?')}")
-            lines.append(f"**Investigator confidence:** {evidence_validation.get('investigator_confidence', '?')}")
-            lines.append(f"**Citations:** {evidence_validation.get('matched', 0)}/{evidence_validation.get('total_citations', 0)} verified")
-            if evidence_validation.get('investigator_made_zero_calls'):
-                lines.append("")
-                lines.append("**WARNING:** Investigator made ZERO tool calls — all evidence citations are fabricated.")
-            summary = evidence_validation.get('summary', '')
-            if summary:
-                lines.append("")
-                lines.append(f"```\n{summary}\n```")
-        else:
-            lines.append(str(evidence_validation))
+        lines.extend(_format_evidence_validation(evidence_validation))
     else:
         lines.append("*No evidence validation output.*")
     lines.append("")

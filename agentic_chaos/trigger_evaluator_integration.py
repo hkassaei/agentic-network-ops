@@ -69,10 +69,36 @@ def _snapshots_to_feature_history(
         (history_dict, current_values_dict) — history is keyed by KB metric_id
         (`<layer>.<nf>.<metric>`), values are current (most recent) floats.
     """
-    # Order snapshots chronologically, baseline first if provided
+    # Order snapshots chronologically, baseline first if provided.
+    #
+    # Critical: we EXPAND the single baseline snapshot into a long synthetic
+    # pre-fault history (a row per N seconds across a 10-minute window). This
+    # anchors prior_stable() in pre-fault data.
+    #
+    # Rationale: the DSL's prior_stable(window='5m') looks back from eval_time
+    # (= end of observation). By end of observation, the fault has been in
+    # effect for the majority of the last 5 minutes — the "stable" median of
+    # that window is post-fault data, not pre-fault. With a single baseline
+    # point, _filter_stable treats it as an outlier and ignores it. By
+    # synthesizing ~60 baseline-valued samples across the pre-fault window,
+    # we give prior_stable a dominant pre-fault signal to anchor against.
     ordered: list[dict] = []
     if baseline_snapshot is not None:
-        ordered.append(baseline_snapshot)
+        baseline_ts = float(baseline_snapshot.get("_timestamp", 0.0))
+        # Determine the earliest observation timestamp so we fill the gap
+        obs_start_ts = min(
+            (float(s.get("_timestamp", 0.0)) for s in snapshots),
+            default=baseline_ts,
+        )
+        # Fill from baseline_ts - 600 up to obs_start_ts - 5, spaced every 10s
+        synth_end = obs_start_ts - 5.0
+        synth_start = min(baseline_ts - 600.0, synth_end - 60.0)
+        t = synth_start
+        while t <= synth_end:
+            synth = dict(baseline_snapshot)
+            synth["_timestamp"] = t
+            ordered.append(synth)
+            t += 10.0
     ordered.extend(sorted(snapshots, key=lambda s: s.get("_timestamp", 0.0)))
 
     if not ordered:

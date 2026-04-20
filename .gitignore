@@ -8,6 +8,7 @@ __pycache__/
 # Chaos platform state
 agentic_chaos/state.db
 agentic_chaos/episodes/
+agentic_ops_common/metric_kb/events.db
 
 # IDE
 .idea/

@@ -36,7 +36,12 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from agentic_ops_common.metric_kb import EventStore, KBLoadError, load_kb
+from agentic_ops_common.metric_kb import (
+    EventStore,
+    KBLoadError,
+    enrich_anomaly_report,
+    load_kb,
+)
 from agentic_ops_common.models import (
     InvestigationTrace,
     PhaseTrace,
@@ -225,6 +230,20 @@ async def _phase0_anomaly_screener(
                     best_report = report
 
         if best_report is not None:
+            # Enrich flags with KB semantic context so the NA sees *what
+            # the deviation means* instead of only *which numbers moved*.
+            # KB load is best-effort — if it fails, we still emit the
+            # numeric-only report rather than dropping anomaly signals.
+            try:
+                kb = load_kb()
+                enrich_anomaly_report(best_report, kb)
+            except KBLoadError as e:
+                log.warning("KB unavailable for anomaly flag enrichment: %s", e)
+            except Exception as e:
+                log.warning(
+                    "Anomaly flag enrichment failed (non-fatal): %s", e,
+                    exc_info=True,
+                )
             state["anomaly_report"] = best_report.to_prompt_text()
             state["anomaly_flags"] = best_report.to_dict_list()
         else:

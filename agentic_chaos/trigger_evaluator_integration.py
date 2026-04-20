@@ -31,8 +31,10 @@ from agentic_ops_common.metric_kb import (
     EventStore,
     FiredEvent,
     KBLoadError,
+    NF_LAYER,
     evaluate,
     load_kb,
+    map_preprocessor_key_to_kb,
 )
 
 log = logging.getLogger("chaos.trigger_eval")
@@ -171,98 +173,17 @@ def _snapshots_to_feature_history(
 
 
 # ----------------------------------------------------------------------------
-# Feature-key mapping
+# Feature-key mapping — delegated to the shared module in agentic_ops_common.
+# Re-exported under the original names so this module's internal callers and
+# its test suite keep working without churn.
 # ----------------------------------------------------------------------------
 
-# Layer assignment per NF (matches components.yaml). Used for namespacing.
-_NF_LAYER: dict[str, str] = {
-    "amf": "core",
-    "smf": "core",
-    "upf": "core",
-    "pcf": "core",
-    "ausf": "core",
-    "udm": "core",
-    "udr": "core",
-    "nrf": "core",
-    "pcscf": "ims",
-    "icscf": "ims",
-    "scscf": "ims",
-    "pyhss": "ims",
-    "rtpengine": "ims",
-    "mongo": "infrastructure",
-    "mysql": "infrastructure",
-    "dns": "infrastructure",
-    "nr_gnb": "ran",
-}
+_NF_LAYER = NF_LAYER
 
 
 def _map_preprocessor_key_to_kb(fkey: str) -> Optional[str]:
-    """Translate a preprocessor feature key to its KB metric id.
-
-    Preprocessor emits keys like:
-        amf.ran_ue
-        icscf.cdp:average_response_time
-        icscf.ims_icscf:uar_avg_response_time
-        normalized.pcscf.dialogs_per_ue
-        normalized.upf.gtp_indatapktn3upf_per_ue
-        derived.pcscf_avg_register_time_ms
-        derived.icscf_uar_timeout_ratio
-        derived.upf_activity_during_calls
-        rtpengine.errors_per_second_(total)
-
-    KB uses <layer>.<nf>.<metric>, e.g. core.amf.ran_ue, ims.pcscf.dialogs_per_ue.
-    """
-    # normalized.<nf>.<metric_part>  ->  <layer>.<nf>.<metric_part stripped of _per_ue>
-    if fkey.startswith("normalized."):
-        rest = fkey[len("normalized."):]
-        parts = rest.split(".", 1)
-        if len(parts) != 2:
-            return None
-        nf, metric = parts
-        layer = _NF_LAYER.get(nf)
-        if layer is None:
-            return None
-        # normalized.pcscf.dialogs_per_ue -> ims.pcscf.dialogs_per_ue
-        # normalized.pcscf.core:rcv_requests_register_per_ue -> ims.pcscf.rcv_requests_register_per_ue
-        clean_metric = metric.replace("core:", "")
-        return f"{layer}.{nf}.{clean_metric}"
-
-    # derived.<rest>  -> find the NF it belongs to
-    if fkey.startswith("derived."):
-        rest = fkey[len("derived."):]
-        # Patterns: pcscf_avg_register_time_ms, icscf_uar_timeout_ratio,
-        #          upf_activity_during_calls, scscf_mar_timeout_ratio, etc.
-        for nf in _NF_LAYER:
-            if rest.startswith(nf + "_"):
-                layer = _NF_LAYER[nf]
-                metric = rest[len(nf) + 1:]
-                return f"{layer}.{nf}.{metric}"
-        return None  # e.g. derived.upf_activity_during_calls handled above
-
-    # <nf>.<metric>  -> <layer>.<nf>.<metric_cleaned>
-    parts = fkey.split(".", 1)
-    if len(parts) != 2:
-        return None
-    nf, metric = parts
-    layer = _NF_LAYER.get(nf)
-    if layer is None:
-        return None
-    # Strip kamailio "group:" prefix (e.g. ims_icscf:uar_avg_response_time)
-    if ":" in metric:
-        # Keep the full key without the group prefix:
-        # ims_icscf:uar_avg_response_time -> uar_avg_response_time
-        # cdp:average_response_time -> cdp_avg_response_time (rename to match KB)
-        group, bare = metric.split(":", 1)
-        if group == "cdp" and bare == "average_response_time":
-            return f"{layer}.{nf}.cdp_avg_response_time"
-        if group.startswith("ims_") and bare.endswith("_response_time"):
-            return f"{layer}.{nf}.{bare}"
-        # Other group:metric combos — skip for now (not in KB)
-        return None
-    # Handle rtpengine.errors_per_second_(total) -> ims.rtpengine.errors_per_second
-    if nf == "rtpengine" and metric == "errors_per_second_(total)":
-        return "ims.rtpengine.errors_per_second"
-    return f"{layer}.{nf}.{metric}"
+    """Re-export of `agentic_ops_common.metric_kb.map_preprocessor_key_to_kb`."""
+    return map_preprocessor_key_to_kb(fkey)
 
 
 # ----------------------------------------------------------------------------

@@ -53,6 +53,34 @@ When evidence conflicts:
 2. Live evidence beats cumulative metrics.
 3. Cross-layer contradiction is the strongest falsification signal.
 
+## Localization rule — directional probes are ambiguous about which endpoint owns the problem
+
+A single directional probe (e.g. `measure_rtt` from A to B, or a request-response time between two components) does NOT, on its own, identify which endpoint is responsible. The probe measures the composite of:
+
+  endpoint A's path + the network between A and B + endpoint B's path.
+
+If the probe result looks bad (high latency, loss, timeouts, slow response), you have three independent possibilities: (i) A is degraded, (ii) the path is degraded, (iii) B is degraded. Picking B because the hypothesis named B is confirmation bias, not falsification.
+
+**Before attributing the anomaly to either endpoint, triangulate:**
+
+  - **Measure in the reverse direction** or **from a different source**: if `A → B` is slow but `X → B` is fast, A is the source; if `X → B` is also slow, B is the source.
+  - **Measure A → a known-good third component**: if `A → C` is also slow, the problem is A's egress/ingress (not B).
+  - **Check adjacent-path probes**: e.g. A → B's gateway/DNS/host.
+
+Only after at least one triangulation probe narrows the possibilities should you commit a verdict that names an endpoint. If you cannot run a triangulation probe and the probe result is directional, mark the verdict `INCONCLUSIVE` and say which triangulation probe you would have needed.
+
+Apply the same reasoning to any probe whose result mixes two components' health: response-time probes, cross-container log searches for errors that *either* side could emit, throughput ratios, etc. A single measurement across a boundary is a claim about the *pair*, not about a side.
+
+## Negative-result interpretation
+
+When a tool returns "no data", "no matches", "metric not found", or an empty result, DO NOT infer absence of the underlying phenomenon without evidence that the tool would have found it if it were present. In particular:
+
+  - `query_prometheus` returning "metric may not exist or have no data" is ambiguous — the metric may simply not be exported in this stack. Prefer a cross-check against a tool whose presence/absence semantics are unambiguous (container logs, `get_network_status`, direct config reads).
+  - `search_logs` returning no matches for a pattern only rules out that specific pattern. A truly failing component usually surfaces *some* error somewhere — if every log is clean, treat that as evidence the hypothesized failure mode is wrong, not as evidence of "too broken to log".
+  - Low activity (low absolute throughput, low request rate) does NOT prove local drops or internal fault — it is equally consistent with upstream starvation. Verify the upstream is actually sending work before concluding the downstream is losing it.
+
+If your hypothesis survives only by explaining away every negative result, your verdict is `INCONCLUSIVE` at best, not `NOT_DISPROVEN`.
+
 ## Output format — `InvestigatorVerdict`
 
 ```

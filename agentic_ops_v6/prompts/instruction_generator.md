@@ -20,6 +20,13 @@ The orchestrator will spawn one parallel Investigator sub-agent per plan. Each s
 3. **Probes MUST use only tools the Investigator has access to** (see list below). Any probe naming a non-existent tool will fail.
 4. **Probes should be distinguishing.** For each probe: state what result WOULD hold if the hypothesis is correct, and what result WOULD FALSIFY it. Use the KB's `disambiguators` (already surfaced in the NA report) whenever possible.
 5. **Do NOT include redundant probes** that the NA already mentioned as direct evidence. Target cross-layer probes, adjacent-NF probes, or liveness checks that the NA didn't cover.
+6. **Triangulation for directional probes (MANDATORY).** When a probe measures a *directional* property between two components A and B — `measure_rtt(A, B_ip)`, a request-response latency, or any tool whose output is the composite of both endpoints — the plan MUST include **at least one triangulation probe** that would isolate which side owns the problem. Acceptable triangulation forms:
+   - Reverse direction: `measure_rtt` from B (or a container adjacent to B) to A's IP
+   - Third-target probe from the same source: `measure_rtt` from A to a known-good target C whose path does not cross B
+   - Third-source probe to the same target: `measure_rtt` from a known-good X to B's IP
+   Without a triangulation probe, a directional result is attributable to *either* endpoint and cannot by itself falsify a hypothesis that named only one of them.
+7. **Activity-vs-drops discriminator.** When a hypothesis claims a component is dropping or failing traffic, the plan MUST include one probe that distinguishes **local drops** (component is receiving work and losing it) from **upstream starvation** (component is receiving no work to lose). Any probe that establishes the upstream component actually generated traffic — recent session setup logs, session-count gauges, incoming request counters — qualifies. Low throughput alone does not imply drops.
+8. **Negative-result falsification weight.** If a probe is expected to produce an error/log/metric when the hypothesis holds, a clean/empty result from that probe is a *contradiction*, not a neutral data point. Write probes so that their negative result is genuinely incompatible with the hypothesis — i.e. the pattern must be broad enough that a real failure of this mode would hit it.
 
 ## Investigator's available tools
 

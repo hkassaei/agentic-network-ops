@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from google.adk.agents import LlmAgent
 from google.adk.tools import AgentTool
-from .. import tools
+from agentic_ops_common import tools
 from .ontology_consultation import create_ontology_consultation_agent
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "investigator.md"

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from google.adk.agents import LlmAgent
 
-from .. import tools
+from agentic_ops_common import tools
 from ..models import NetworkAnalysis
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "network_analyst.md"

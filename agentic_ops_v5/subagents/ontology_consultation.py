@@ -9,7 +9,7 @@ interface that reasons about which ontology query to run.
 from __future__ import annotations
 from pathlib import Path
 from google.adk.agents import LlmAgent
-from .. import tools
+from agentic_ops_common import tools
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "ontology_consultation.md"
 

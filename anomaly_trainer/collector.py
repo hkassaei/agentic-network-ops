@@ -10,9 +10,9 @@ import asyncio
 import logging
 import time
 
-from agentic_ops_v5.anomaly import MetricPreprocessor, AnomalyScreener
-from agentic_ops_v5.anomaly.preprocessor import parse_nf_metrics_text
-from agentic_ops_v5 import tools as v5_tools
+from agentic_ops_common.anomaly import MetricPreprocessor, AnomalyScreener
+from agentic_ops_common.anomaly.preprocessor import parse_nf_metrics_text
+from agentic_ops_common import tools as v5_tools
 
 log = logging.getLogger("anomaly_trainer.collector")
 

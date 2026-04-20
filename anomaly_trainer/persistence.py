@@ -17,11 +17,11 @@ import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agentic_ops_v5.anomaly import AnomalyScreener
+from agentic_ops_common.anomaly import AnomalyScreener
 
 log = logging.getLogger("anomaly_trainer.persistence")
 
-_DEFAULT_DIR = Path(__file__).resolve().parents[1] / "agentic_ops_v5" / "anomaly" / "baseline"
+_DEFAULT_DIR = Path(__file__).resolve().parents[1] / "agentic_ops_common" / "anomaly" / "baseline"
 
 
 def save_model(
@@ -92,6 +92,20 @@ def load_model(
 
     with open(meta_path) as f:
         meta = json.load(f)
+
+    # Backward compatibility for models pickled when the anomaly module
+    # lived at agentic_ops_v5.anomaly. Alias the old path to the new one
+    # so pickle.load can resolve the class during unpickling. Safe because
+    # the two modules are literally the same code (Phase 0 refactor moved
+    # it; nothing changed functionally).
+    import sys
+    if "agentic_ops_v5.anomaly" not in sys.modules:
+        import agentic_ops_common.anomaly as _new_anomaly
+        import agentic_ops_common.anomaly.screener as _new_screener
+        import agentic_ops_common.anomaly.preprocessor as _new_preprocessor
+        sys.modules["agentic_ops_v5.anomaly"] = _new_anomaly
+        sys.modules["agentic_ops_v5.anomaly.screener"] = _new_screener
+        sys.modules["agentic_ops_v5.anomaly.preprocessor"] = _new_preprocessor
 
     with open(model_path, "rb") as f:
         screener = pickle.load(f)

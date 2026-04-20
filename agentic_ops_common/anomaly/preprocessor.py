@@ -29,7 +29,7 @@ import logging
 import time
 from typing import Any
 
-log = logging.getLogger("v5.anomaly.preprocessor")
+log = logging.getLogger("anomaly.preprocessor")
 
 # =========================================================================
 # Counter definitions — metrics that monotonically increase

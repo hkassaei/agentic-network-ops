@@ -290,7 +290,7 @@ async def investigate(
     # =================================================================
     try:
         from anomaly_trainer.persistence import load_model
-        from .anomaly.preprocessor import MetricPreprocessor
+        from agentic_ops_common.anomaly.preprocessor import MetricPreprocessor
 
         screener, _, meta = load_model()
 
@@ -309,10 +309,10 @@ async def investigate(
             if not snapshots:
                 # No pre-collected snapshots — collect one live snapshot.
                 # Less effective than extended observation but still useful.
-                from .anomaly.preprocessor import parse_nf_metrics_text
-                from . import tools as v5_tools
+                from agentic_ops_common.anomaly.preprocessor import parse_nf_metrics_text
+                from agentic_ops_common import tools as common_tools
                 log.info("No observation snapshots provided — collecting live snapshot")
-                text = await v5_tools.get_nf_metrics()
+                text = await common_tools.get_nf_metrics()
                 raw = parse_nf_metrics_text(text)
                 snapshots = [{"_parsed": raw}]
 

@@ -103,7 +103,7 @@ def create_pattern_matcher() -> PatternMatcherAgent:
 
 async def _collect_observations() -> dict[str, Any]:
     """Collect raw observations directly from network tools."""
-    from .. import tools
+    from agentic_ops_common import tools
 
     metrics_text, status_text = await asyncio.gather(
         tools.get_nf_metrics(),

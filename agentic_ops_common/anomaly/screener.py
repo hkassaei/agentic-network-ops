@@ -20,7 +20,7 @@ from typing import Any
 
 from river import anomaly as river_anomaly
 
-log = logging.getLogger("v5.anomaly.screener")
+log = logging.getLogger("anomaly.screener")
 
 # Anomaly score threshold — scores above this are flagged.
 # River HalfSpaceTrees scores are in [0, 1] where 1 = most anomalous.

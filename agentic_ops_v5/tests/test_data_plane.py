@@ -5,11 +5,10 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from agentic_ops_v5.tools.data_plane import (
+from agentic_ops_common.tools.data_plane import (
     _prom_query,
     _safe_div,
     get_dp_quality_gauges,
-    _QUERIES,
 )
 
 
@@ -195,7 +194,7 @@ class TestGetDpQualityGauges:
 
     @pytest.mark.asyncio
     async def test_healthy_call(self):
-        with patch("agentic_ops_v5.tools.data_plane._get_deps") as mock_deps:
+        with patch("agentic_ops_common.tools.data_plane._get_deps") as mock_deps:
             mock_deps.return_value = MagicMock(env={"METRICS_IP": "172.22.0.36"})
             with patch("httpx.AsyncClient") as MockClient:
                 instance = AsyncMock()
@@ -218,7 +217,7 @@ class TestGetDpQualityGauges:
 
     @pytest.mark.asyncio
     async def test_degraded_call_shows_asymmetry(self):
-        with patch("agentic_ops_v5.tools.data_plane._get_deps") as mock_deps:
+        with patch("agentic_ops_common.tools.data_plane._get_deps") as mock_deps:
             mock_deps.return_value = MagicMock(env={"METRICS_IP": "172.22.0.36"})
             with patch("httpx.AsyncClient") as MockClient:
                 instance = AsyncMock()
@@ -238,7 +237,7 @@ class TestGetDpQualityGauges:
 
     @pytest.mark.asyncio
     async def test_idle_returns_zeros(self):
-        with patch("agentic_ops_v5.tools.data_plane._get_deps") as mock_deps:
+        with patch("agentic_ops_common.tools.data_plane._get_deps") as mock_deps:
             mock_deps.return_value = MagicMock(env={"METRICS_IP": "172.22.0.36"})
             with patch("httpx.AsyncClient") as MockClient:
                 instance = AsyncMock()
@@ -256,7 +255,7 @@ class TestGetDpQualityGauges:
 
     @pytest.mark.asyncio
     async def test_prometheus_unreachable(self):
-        with patch("agentic_ops_v5.tools.data_plane._get_deps") as mock_deps:
+        with patch("agentic_ops_common.tools.data_plane._get_deps") as mock_deps:
             mock_deps.return_value = MagicMock(env={"METRICS_IP": "172.22.0.36"})
             with patch("httpx.AsyncClient") as MockClient:
                 instance = AsyncMock()
@@ -271,7 +270,7 @@ class TestGetDpQualityGauges:
 
     @pytest.mark.asyncio
     async def test_output_format_structure(self):
-        with patch("agentic_ops_v5.tools.data_plane._get_deps") as mock_deps:
+        with patch("agentic_ops_common.tools.data_plane._get_deps") as mock_deps:
             mock_deps.return_value = MagicMock(env={"METRICS_IP": "172.22.0.36"})
             with patch("httpx.AsyncClient") as MockClient:
                 instance = AsyncMock()

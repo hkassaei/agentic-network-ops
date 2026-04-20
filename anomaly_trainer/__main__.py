@@ -22,7 +22,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 
 async def run_training(duration: int, output_dir: Path | None) -> None:
-    from agentic_ops_v5.anomaly import AnomalyScreener, MetricPreprocessor
+    from agentic_ops_common.anomaly import AnomalyScreener, MetricPreprocessor
     from anomaly_trainer.traffic import generate_traffic
     from anomaly_trainer.collector import collect_and_train
     from anomaly_trainer.persistence import save_model

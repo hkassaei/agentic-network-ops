@@ -131,37 +131,11 @@ class Diagnosis(BaseModel):
 # Investigation Trace (observability)
 # -------------------------------------------------------------------------
 
-class TokenBreakdown(BaseModel):
-    prompt: int = 0
-    completion: int = 0
-    thinking: int = 0
-    total: int = 0
-
-
-class ToolCallTrace(BaseModel):
-    name: str
-    args: str = ""
-    result_size: int = 0
-    timestamp: float = 0.0
-
-
-class PhaseTrace(BaseModel):
-    agent_name: str
-    started_at: float = 0.0
-    finished_at: float = 0.0
-    duration_ms: int = 0
-    tokens: TokenBreakdown = Field(default_factory=TokenBreakdown)
-    tool_calls: list[ToolCallTrace] = Field(default_factory=list)
-    llm_calls: int = 0
-    output_summary: str = ""
-    state_keys_written: list[str] = Field(default_factory=list)
-
-
-class InvestigationTrace(BaseModel):
-    question: str = ""
-    started_at: float = 0.0
-    finished_at: float = 0.0
-    duration_ms: int = 0
-    total_tokens: TokenBreakdown = Field(default_factory=TokenBreakdown)
-    phases: list[PhaseTrace] = Field(default_factory=list)
-    invocation_chain: list[str] = Field(default_factory=list)
+# Trace models moved to agentic_ops_common.models.trace (Phase 0 refactor).
+# Re-exported here for backward compatibility with v5 callers.
+from agentic_ops_common.models.trace import (  # noqa: F401,E402
+    TokenBreakdown,
+    ToolCallTrace,
+    PhaseTrace,
+    InvestigationTrace,
+)

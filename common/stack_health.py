@@ -43,9 +43,9 @@ async def collect_health_metrics() -> dict[str, float]:
         all_metrics = await snapshot_metrics()
     except ImportError:
         # Fallback: use v5 tools directly
-        from agentic_ops_v5 import tools as v5_tools
-        from agentic_ops_v5.anomaly.preprocessor import parse_nf_metrics_text
-        text = await v5_tools.get_nf_metrics()
+        from agentic_ops_common import tools as common_tools
+        from agentic_ops_common.anomaly.preprocessor import parse_nf_metrics_text
+        text = await common_tools.get_nf_metrics()
         raw = parse_nf_metrics_text(text)
         # Reshape to match snapshot_metrics format
         all_metrics = {comp: {"metrics": metrics} for comp, metrics in raw.items()}

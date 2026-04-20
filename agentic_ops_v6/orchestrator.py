@@ -500,6 +500,15 @@ async def investigate(
     log.info("NA produced %d hypotheses; investigating top %d",
              len(na_report.hypotheses), len(hypotheses))
 
+    # Preserve the NA report in structured form for the episode recorder.
+    # The state["network_analysis"] slot is about to be overwritten with
+    # markdown text so downstream LLM prompts (IG, Investigator, Synthesis)
+    # can read a prompt-friendly rendering. The recorder needs the dict
+    # form to render a proper ranked-hypotheses table — otherwise it falls
+    # back to a truncated code-block dump of the markdown.
+    na_for_report = na_report.model_copy(update={"hypotheses": hypotheses})
+    state["network_analysis_structured"] = na_for_report.model_dump(mode="json")
+
     if not hypotheses:
         log.warning("No testable hypotheses from NA — skipping Investigator phase")
         state["diagnosis"] = _render_no_hypotheses_diagnosis(na_report)
@@ -684,7 +693,15 @@ def _build_result(
     #   - investigation         ← Phase 5 (aggregated sub-Investigator verdicts)
     #   - evidence_validation   ← Phase 6
     anomaly_report = state.get("anomaly_report", "")
-    network_analysis = _prettify_json_state(state.get("network_analysis"))
+    # Prefer the structured NA dict for the recorder. The markdown form under
+    # `network_analysis` exists only so downstream LLM prompts have a
+    # prompt-friendly rendering; rendering it via the recorder yields a
+    # truncated code-block dump.
+    na_structured = state.get("network_analysis_structured")
+    if na_structured is not None:
+        network_analysis = _prettify_json_state(na_structured)
+    else:
+        network_analysis = _prettify_json_state(state.get("network_analysis"))
     correlation_analysis = state.get("correlation_analysis", "")
     plan_set = _prettify_json_state(state.get("falsification_plan_set"))
     investigator_verdicts = _prettify_json_state(state.get("investigator_verdicts"))
@@ -695,17 +712,18 @@ def _build_result(
         "investigation_trace": trace.model_dump(mode="json"),
         "total_tokens": total.total,
         "state_keys": sorted(state.keys()),
-        # ─── Per-phase outputs for the chaos EpisodeRecorder ────────────
-        "anomaly_report": anomaly_report,
-        "pattern_match": correlation_analysis,   # Phase 2 analog
-        "network_analysis": network_analysis,    # Phase 3
-        "investigation_instruction": plan_set,   # Phase 4
-        "investigation": investigator_verdicts,  # Phase 5
-        "evidence_validation": evidence_validation,  # Phase 6
-        # Also surface the v6-native key explicitly for clarity
-        "correlation_analysis": correlation_analysis,
-        "fired_events": state.get("fired_events", ""),
+        # ─── v6 per-phase outputs for the chaos EpisodeRecorder ─────────
+        # The recorder's v6 layout (see recorder._render_v6_pipeline) reads
+        # these by name. Kept as v6-native labels, not v5 synonyms.
+        "anomaly_report": anomaly_report,                 # Phase 0
+        "fired_events": state.get("fired_events", ""),    # Phase 1
         "fired_event_count": state.get("fired_event_count", 0),
+        "correlation_analysis": correlation_analysis,     # Phase 2
+        "network_analysis": network_analysis,             # Phase 3
+        "investigation_instruction": plan_set,            # Phase 4
+        "investigation": investigator_verdicts,           # Phase 5
+        "evidence_validation": evidence_validation,       # Phase 6
+        # Synthesis output (Phase 7) = `diagnosis` above.
     }
 
 

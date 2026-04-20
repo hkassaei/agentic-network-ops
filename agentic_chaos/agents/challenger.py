@@ -194,6 +194,8 @@ class ChallengeAgent(BaseAgent):
             "investigation_instruction": diagnosis_dict.get("_investigation_instruction", ""),
             "investigation": diagnosis_dict.get("_investigation", ""),
             "evidence_validation": diagnosis_dict.get("_evidence_validation", ""),
+            "fired_events": diagnosis_dict.get("_fired_events", ""),
+            "correlation_analysis": diagnosis_dict.get("_correlation_analysis", ""),
         }
 
         total = score.get("total_score", 0)
@@ -391,6 +393,9 @@ class ChallengeAgent(BaseAgent):
             "_investigation_instruction": result.get("investigation_instruction", ""),
             "_investigation": result.get("investigation", ""),
             "_evidence_validation": result.get("evidence_validation", ""),
+            # v6-native keys (populated by v6 orchestrator; empty for v5)
+            "_fired_events": result.get("fired_events", ""),
+            "_correlation_analysis": result.get("correlation_analysis", ""),
         }
 
     async def _run_live_impl(self, ctx):

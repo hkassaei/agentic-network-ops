@@ -354,6 +354,335 @@ def _format_pattern_match(value) -> list[str]:
     return out
 
 
+def _format_investigation_instruction(value) -> list[str]:
+    """Render Phase 3 output.
+
+    v5: plain text instruction (one block).
+    v6: FalsificationPlanSet dict with plans list — one plan per hypothesis.
+    """
+    data = _coerce_to_dict(value)
+    if data and isinstance(data.get("plans"), list):
+        # v6 shape
+        out: list[str] = []
+        plans = data.get("plans") or []
+        if not plans:
+            return ["*(No falsification plans generated.)*"]
+        out.append(f"**{len(plans)} falsification plan(s) — one per hypothesis:**")
+        out.append("")
+        for plan in plans:
+            if not isinstance(plan, dict):
+                continue
+            hid = plan.get("hypothesis_id", "?")
+            stmt = plan.get("hypothesis_statement", "")
+            nf = plan.get("primary_suspect_nf", "?")
+            probes = plan.get("probes") or []
+            notes = plan.get("notes", "")
+            out.append(f"### Plan for `{hid}` (target: `{nf}`)")
+            out.append("")
+            if stmt:
+                out.append(f"**Hypothesis:** {stmt}")
+                out.append("")
+            out.append(f"**Probes ({len(probes)}):**")
+            for i, p in enumerate(probes, 1):
+                if not isinstance(p, dict):
+                    continue
+                tool = p.get("tool", "?")
+                args_hint = p.get("args_hint", "")
+                exp_hold = p.get("expected_if_hypothesis_holds", "")
+                falsify = p.get("falsifying_observation", "")
+                out.append(f"{i}. **`{tool}`** — {args_hint}")
+                if exp_hold:
+                    out.append(f"    - *Expected if hypothesis holds:* {exp_hold}")
+                if falsify:
+                    out.append(f"    - *Falsifying observation:* {falsify}")
+            if notes:
+                out.append("")
+                out.append(f"*Notes:* {notes}")
+            out.append("")
+        return out
+    # v5 fallback — blockquote plain text
+    out = []
+    for ln in str(value).splitlines():
+        out.append(f"> {ln}" if ln.strip() else ">")
+    return out
+
+
+def _format_investigation(value) -> list[str]:
+    """Render Phase 4 output.
+
+    v5: plain text investigation report with [EVIDENCE: ...] citations.
+    v6: JSON list of InvestigatorVerdict (one per hypothesis).
+    """
+    # Try to parse v6 verdict list
+    verdicts: list[dict] = []
+    if isinstance(value, list):
+        verdicts = [v for v in value if isinstance(v, dict)]
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                verdicts = [v for v in parsed if isinstance(v, dict)]
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    if verdicts:
+        out: list[str] = []
+        # Summary counts per verdict type
+        counts: dict[str, int] = {}
+        for v in verdicts:
+            key = v.get("verdict", "?")
+            counts[key] = counts.get(key, 0) + 1
+        summary = ", ".join(f"**{c} {k}**" for k, c in counts.items())
+        out.append(f"**{len(verdicts)} sub-Investigator verdict(s):** {summary}")
+        out.append("")
+        for v in verdicts:
+            hid = v.get("hypothesis_id", "?")
+            stmt = v.get("hypothesis_statement", "")
+            verdict = v.get("verdict", "?")
+            reasoning = v.get("reasoning", "")
+            probes = v.get("probes_executed") or []
+            alts = v.get("alternative_suspects") or []
+            icon = {
+                "DISPROVEN": "❌", "NOT_DISPROVEN": "✅",
+                "INCONCLUSIVE": "❓",
+            }.get(verdict, "")
+            out.append(f"### `{hid}` — {icon} **{verdict}**")
+            out.append("")
+            if stmt:
+                out.append(f"**Hypothesis:** {stmt}")
+                out.append("")
+            if reasoning:
+                out.append(f"**Reasoning:** {reasoning}")
+                out.append("")
+            if probes:
+                out.append(f"**Probes executed ({len(probes)}):**")
+                for p in probes:
+                    if not isinstance(p, dict):
+                        continue
+                    desc = p.get("probe_description", "")
+                    tool = p.get("tool_call", "")
+                    obs = p.get("observation", "")
+                    cmp = p.get("compared_to_expected", "?")
+                    note = p.get("commentary", "")
+                    cmp_icon = {
+                        "CONSISTENT": "✓", "CONTRADICTS": "✗", "AMBIGUOUS": "~",
+                    }.get(cmp, "")
+                    out.append(f"- **{desc}** {cmp_icon} {cmp}")
+                    if tool:
+                        out.append(f"    - *Tool:* `{tool}`")
+                    if obs:
+                        # Truncate very long observations
+                        obs_short = obs if len(obs) <= 400 else obs[:400] + "…"
+                        out.append(f"    - *Observation:* {obs_short}")
+                    if note:
+                        out.append(f"    - *Comment:* {note}")
+                out.append("")
+            if alts:
+                out.append(f"**Alternative suspects:** {', '.join(alts)}")
+                out.append("")
+        return out
+
+    # v5 fallback — blockquote plain text
+    out = []
+    for ln in str(value).splitlines():
+        out.append(f"> {ln}" if ln.strip() else ">")
+    return out
+
+
+def _format_evidence_validation(value) -> list[str]:
+    """Render Phase 5/6 output.
+
+    v5: dict with verdict/investigator_confidence/matched/total_citations/summary.
+    v6: dict with overall_verdict/overall_confidence/per_agent list/summary.
+    """
+    data = _coerce_to_dict(value)
+    if not data:
+        return [str(value)]
+
+    out: list[str] = []
+
+    # v6 shape
+    if "per_agent" in data:
+        out.append(f"**Overall verdict:** {data.get('overall_verdict', '?')}")
+        out.append(f"**Overall confidence:** {data.get('overall_confidence', '?')}")
+        out.append("")
+        per_agent = data.get("per_agent") or []
+        if per_agent:
+            out.append("**Per sub-Investigator:**")
+            out.append("")
+            out.append("| Agent | Tool Calls | Citations | Verdict | Confidence |")
+            out.append("|---|---|---|---|---|")
+            for p in per_agent:
+                if not isinstance(p, dict):
+                    continue
+                name = p.get("agent_name", "?")
+                tcs = p.get("tool_calls_made", "?")
+                cits = f"{p.get('citations_matched', '?')}/{p.get('citations_found', '?')}"
+                verdict = p.get("verdict", "?")
+                conf = p.get("confidence", "?")
+                out.append(f"| `{name}` | {tcs} | {cits} | {verdict} | {conf} |")
+                notes = p.get("notes") or []
+                for n in notes:
+                    out.append(f"|  |  |  |  | *{n}* |")
+            out.append("")
+        return out
+
+    # v5 shape
+    out.append(f"**Verdict:** {data.get('verdict', '?')}")
+    out.append(f"**Investigator confidence:** {data.get('investigator_confidence', '?')}")
+    out.append(f"**Citations:** {data.get('matched', 0)}/{data.get('total_citations', 0)} verified")
+    if data.get('investigator_made_zero_calls'):
+        out.append("")
+        out.append("**WARNING:** Investigator made ZERO tool calls — all evidence citations are fabricated.")
+    summary = data.get('summary', '')
+    if summary:
+        out.append("")
+        out.append(f"```\n{summary}\n```")
+    return out
+
+
+def _render_v5_pipeline(challenge: dict) -> list[str]:
+    """v5 pipeline layout: 6 phases, PatternMatcher at Phase 2."""
+    out: list[str] = []
+
+    anomaly_report = challenge.get("anomaly_report", "")
+    out.append("## Anomaly Screening (Phase 0)")
+    out.append("")
+    out.append(str(anomaly_report) if anomaly_report else "*No anomaly screening output.*")
+    out.append("")
+
+    network_analysis = challenge.get("network_analysis", "")
+    out.append("## Network Analysis (Phase 1)")
+    out.append("")
+    if network_analysis:
+        out.extend(_format_network_analysis(network_analysis))
+    else:
+        out.append("*No output produced.*")
+    out.append("")
+
+    pattern_match = challenge.get("pattern_match", "")
+    out.append("## Pattern Match (Phase 2)")
+    out.append("")
+    if pattern_match:
+        out.extend(_format_pattern_match(pattern_match))
+    else:
+        out.append("*No output produced.*")
+    out.append("")
+
+    investigation_instruction = challenge.get("investigation_instruction", "")
+    out.append("## Investigation Instruction (Phase 3)")
+    out.append("")
+    if investigation_instruction:
+        out.extend(_format_investigation_instruction(investigation_instruction))
+    else:
+        out.append("*No output produced.*")
+    out.append("")
+
+    investigation = challenge.get("investigation", "")
+    out.append("## Investigation (Phase 4)")
+    out.append("")
+    if investigation:
+        out.extend(_format_investigation(investigation))
+    else:
+        out.append("*No investigation output produced.*")
+    out.append("")
+
+    evidence_validation = challenge.get("evidence_validation", "")
+    out.append("## Evidence Validation (Phase 5)")
+    out.append("")
+    if evidence_validation:
+        out.extend(_format_evidence_validation(evidence_validation))
+    else:
+        out.append("*No evidence validation output.*")
+    out.append("")
+    return out
+
+
+def _render_v6_pipeline(challenge: dict) -> list[str]:
+    """v6 pipeline layout: 8 phases with distinct Events + Correlation steps.
+
+    Section numbering matches v6's execution order:
+      0 AnomalyScreener  → 1 EventAggregator → 2 CorrelationAnalyzer
+      → 3 NetworkAnalyst → 4 InstructionGenerator → 5 Investigator × N
+      → 6 EvidenceValidator → 7 Synthesis (rendered as Agent Diagnosis)
+    """
+    out: list[str] = []
+
+    # Phase 0 — Anomaly Screener (ML, no LLM)
+    anomaly_report = challenge.get("anomaly_report", "")
+    out.append("## Anomaly Screening (Phase 0)")
+    out.append("")
+    out.append(str(anomaly_report) if anomaly_report else "*No anomaly screening output.*")
+    out.append("")
+
+    # Phase 1 — Event Aggregator (Python, reads fired events from store)
+    fired_events = challenge.get("fired_events", "")
+    out.append("## Event Aggregation (Phase 1)")
+    out.append("")
+    out.append(
+        str(fired_events) if fired_events else "*No events aggregated from the event store.*"
+    )
+    out.append("")
+
+    # Phase 2 — Correlation Analyzer (Python, runs correlation engine)
+    correlation_analysis = challenge.get("correlation_analysis", "")
+    # Fall back to `pattern_match` for backward compat in case orchestrator
+    # maps correlation output there too.
+    if not correlation_analysis:
+        correlation_analysis = challenge.get("pattern_match", "")
+    out.append("## Correlation Analysis (Phase 2)")
+    out.append("")
+    if correlation_analysis:
+        out.extend(_format_pattern_match(correlation_analysis))
+    else:
+        out.append("*No correlation analysis produced.*")
+    out.append("")
+
+    # Phase 3 — Network Analyst (LLM, ranked hypothesis former)
+    network_analysis = challenge.get("network_analysis", "")
+    out.append("## Network Analysis (Phase 3)")
+    out.append("")
+    if network_analysis:
+        out.extend(_format_network_analysis(network_analysis))
+    else:
+        out.append("*No output produced.*")
+    out.append("")
+
+    # Phase 4 — Instruction Generator (LLM, per-hypothesis falsification plans)
+    investigation_instruction = challenge.get("investigation_instruction", "")
+    out.append("## Falsification Plans (Phase 4)")
+    out.append("")
+    if investigation_instruction:
+        out.extend(_format_investigation_instruction(investigation_instruction))
+    else:
+        out.append("*No output produced.*")
+    out.append("")
+
+    # Phase 5 — Parallel Sub-Investigators
+    investigation = challenge.get("investigation", "")
+    out.append("## Parallel Investigators (Phase 5)")
+    out.append("")
+    if investigation:
+        out.extend(_format_investigation(investigation))
+    else:
+        out.append("*No investigation output produced.*")
+    out.append("")
+
+    # Phase 6 — Evidence Validator (per-sub-Investigator citation check)
+    evidence_validation = challenge.get("evidence_validation", "")
+    out.append("## Evidence Validation (Phase 6)")
+    out.append("")
+    if evidence_validation:
+        out.extend(_format_evidence_validation(evidence_validation))
+    else:
+        out.append("*No evidence validation output.*")
+    out.append("")
+
+    # Phase 7 — Synthesis is rendered below as "Agent Diagnosis" in the
+    # unchanged shared section.
+    return out
+
+
 def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     """Generate a plain-English markdown summary of the episode."""
     scenario = episode.get("scenario", {})
@@ -473,64 +802,15 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     # Notable log lines omitted from report — they contain stale logs
     # from previous runs and are not useful for diagnosis evaluation.
 
-    # Pipeline intermediate state — v5 pipeline phases
+    # Pipeline intermediate state. v5 and v6 have genuinely different phase
+    # layouts (v5 has 6 phases, v6 has 8 with Events + Correlation added
+    # and NA shifted to Phase 3). Branch on agent_version so each version
+    # renders its own pipeline faithfully.
     challenge = episode.get("challenge_result") or {}
-
-    anomaly_report = challenge.get("anomaly_report", "")
-    lines.append("## Anomaly Screening (Phase 0)")
-    lines.append("")
-    if anomaly_report:
-        lines.append(str(anomaly_report))
+    if agent_version == "v6":
+        lines.extend(_render_v6_pipeline(challenge))
     else:
-        lines.append("*No anomaly screening output.*")
-    lines.append("")
-
-    network_analysis = challenge.get("network_analysis", "")
-    lines.append("## Network Analysis (Phase 1)")
-    lines.append("")
-    if network_analysis:
-        lines.extend(_format_network_analysis(network_analysis))
-    else:
-        lines.append("*No output produced.*")
-    lines.append("")
-
-    pattern_match = challenge.get("pattern_match", "")
-    lines.append("## Pattern Match (Phase 2)")
-    lines.append("")
-    if pattern_match:
-        lines.extend(_format_pattern_match(pattern_match))
-    else:
-        lines.append("*No output produced.*")
-    lines.append("")
-
-    investigation_instruction = challenge.get("investigation_instruction", "")
-    lines.append("## Investigation Instruction (Phase 3)")
-    lines.append("")
-    if investigation_instruction:
-        lines.extend(_format_investigation_instruction(investigation_instruction))
-    else:
-        lines.append("*No output produced.*")
-    lines.append("")
-
-    # Investigation output (Phase 4)
-    investigation = challenge.get("investigation", "")
-    lines.append("## Investigation (Phase 4)")
-    lines.append("")
-    if investigation:
-        lines.extend(_format_investigation(investigation))
-    else:
-        lines.append("*No investigation output produced.*")
-    lines.append("")
-
-    # Evidence validation
-    evidence_validation = challenge.get("evidence_validation", "")
-    lines.append("## Evidence Validation (Phase 5)")
-    lines.append("")
-    if evidence_validation:
-        lines.extend(_format_evidence_validation(evidence_validation))
-    else:
-        lines.append("*No evidence validation output.*")
-    lines.append("")
+        lines.extend(_render_v5_pipeline(challenge))
 
     # Ground truth
     lines.append("## Ground Truth")

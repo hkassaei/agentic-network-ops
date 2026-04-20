@@ -1,0 +1,721 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260420_173758_p_cscf_latency",
+  "timestamp": "2026-04-20T17:38:00.719021+00:00",
+  "duration_seconds": 305.29709,
+  "scenario": {
+    "name": "P-CSCF Latency",
+    "description": "Inject 2000ms latency (with 50ms jitter) on the P-CSCF (SIP edge proxy). SIP transactions will experience severe delays as every message entering and leaving the P-CSCF is delayed, compounding across multiple round-trips in the IMS registration chain. Tests IMS resilience to high latency on the signaling edge.",
+    "category": "network",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "network_latency",
+        "target": "pcscf",
+        "params": {
+          "delay_ms": 2000,
+          "jitter_ms": 50
+        },
+        "ttl_seconds": 600
+      }
+    ],
+    "expected_symptoms": [
+      "SIP REGISTER 408 Request Timeout",
+      "Kamailio tm transaction timeouts",
+      "IMS registration failures at UEs"
+    ],
+    "escalation": true,
+    "observation_traffic_seconds": 120,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 600
+  },
+  "baseline": {
+    "timestamp": "2026-04-20T17:38:00.719021+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 5.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 8078.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 222.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 351563.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 144762.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 10.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 10.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 20.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 20.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 9.0,
+          "core:rcv_requests_options": 9791.0,
+          "core:rcv_requests_register": 72.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 9796.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 33.0,
+          "script:register_time": 24237.0,
+          "sl:1xx_replies": 75.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 3.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 72.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 50.0,
+          "cdp:replies_response_time": 3600.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 104.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 72.0,
+          "ims_icscf:uar_replies_received": 50.0,
+          "ims_icscf:uar_replies_response_time": 3600.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "104 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 108.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 66.0,
+          "cdp:replies_response_time": 7171.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 66.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 113.0,
+          "ims_auth:mar_replies_received": 33.0,
+          "ims_auth:mar_replies_response_time": 3747.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 33.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 103.0,
+          "ims_registrar_scscf:sar_replies_received": 33.0,
+          "ims_registrar_scscf:sar_replies_response_time": 3424.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 0.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 0.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 0.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 0.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 0.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 0.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 0.0,
+          "total_number_of_streams_with_no_relayed_packets": 0.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 0.0,
+          "sum_of_all_mos_square_values_sampled": 0.0,
+          "total_number_of_mos_samples": 0.0,
+          "average_mos": 0.0,
+          "mos_standard_deviation": 0.0,
+          "sum_of_all_jitter_(reported)_values_sampled": 0.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(reported)_samples": 0.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 0.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 0.0,
+          "average_end_to_end_round_trip_time": 0.0,
+          "end_to_end_round_trip_time_standard_deviation": 0.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 0.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 0.0,
+          "total_number_of_discrete_round_trip_time_samples": 0.0,
+          "average_discrete_round_trip_time": 0.0,
+          "discrete_round_trip_time_standard_deviation": 0.0,
+          "sum_of_all_packet_loss_values_sampled": 0.0,
+          "sum_of_all_packet_loss_square_values_sampled": 0.0,
+          "total_number_of_packet_loss_samples": 0.0,
+          "average_packet_loss": 0.0,
+          "packet_loss_standard_deviation": 0.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_f1351a3b",
+      "fault_type": "network_latency",
+      "target": "pcscf",
+      "params": {
+        "delay_ms": 2000,
+        "jitter_ms": 50
+      },
+      "mechanism": "sudo nsenter -t 2570593 -n tc qdisc add dev eth0 root netem delay 2000ms 50ms",
+      "heal_command": "sudo nsenter -t 2570593 -n tc qdisc del dev eth0 root",
+      "injected_at": "2026-04-20T17:38:00.721421+00:00",
+      "ttl_seconds": 600,
+      "expires_at": "2026-04-20T17:48:00.721421+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "qdisc netem 801a: root refcnt 9 limit 1000 delay 2s  50ms"
+    }
+  ],
+  "fault_verification": {
+    "verdict": "confirmed",
+    "wait_seconds": 0,
+    "elapsed_seconds": 0.0,
+    "verified_at": "2026-04-20T17:40:07.827011+00:00",
+    "filtered_deltas": {
+      "pcscf": {
+        "core:rcv_requests_register": {
+          "baseline": 72.0,
+          "current": 88.0,
+          "delta": 16.0
+        },
+        "script:register_time": {
+          "baseline": 24237.0,
+          "current": 52910.0,
+          "delta": 28673.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 9.0,
+          "current": 18.0,
+          "delta": 9.0
+        },
+        "sl:4xx_replies": {
+          "baseline": 3.0,
+          "current": 6.0,
+          "delta": 3.0
+        }
+      }
+    },
+    "raw_delta_node_count": 4
+  },
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-04-20T17:40:07.827011+00:00",
+      "elapsed_seconds": 0.0,
+      "metrics_delta": {
+        "pcscf": {
+          "core:rcv_requests_register": {
+            "baseline": 72.0,
+            "current": 88.0,
+            "delta": 16.0
+          },
+          "script:register_time": {
+            "baseline": 24237.0,
+            "current": 52910.0,
+            "delta": 28673.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 9.0,
+            "current": 18.0,
+            "delta": 9.0
+          },
+          "sl:4xx_replies": {
+            "baseline": 3.0,
+            "current": 6.0,
+            "delta": 3.0
+          }
+        }
+      },
+      "log_samples": {},
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-04-20T17:43:06.016111+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 5.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 8160.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 242.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 384208.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 155994.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 10.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 10.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 20.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 20.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 18.0,
+          "core:rcv_requests_options": 9835.0,
+          "core:rcv_requests_register": 88.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 9842.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 35.0,
+          "script:register_time": 52910.0,
+          "sl:1xx_replies": 88.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 6.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 72.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 52.0,
+          "cdp:replies_response_time": 3774.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 116.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 72.0,
+          "ims_icscf:uar_replies_received": 52.0,
+          "ims_icscf:uar_replies_response_time": 3774.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "116 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 109.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 70.0,
+          "cdp:replies_response_time": 7631.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 70.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 113.0,
+          "ims_auth:mar_replies_received": 35.0,
+          "ims_auth:mar_replies_response_time": 3971.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 35.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 104.0,
+          "ims_registrar_scscf:sar_replies_received": 35.0,
+          "ims_registrar_scscf:sar_replies_response_time": 3660.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 0.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 0.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 0.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 0.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 0.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 0.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 0.0,
+          "total_number_of_streams_with_no_relayed_packets": 0.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 0.0,
+          "sum_of_all_mos_square_values_sampled": 0.0,
+          "total_number_of_mos_samples": 0.0,
+          "average_mos": 0.0,
+          "mos_standard_deviation": 0.0,
+          "sum_of_all_jitter_(reported)_values_sampled": 0.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(reported)_samples": 0.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 0.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 0.0,
+          "average_end_to_end_round_trip_time": 0.0,
+          "end_to_end_round_trip_time_standard_deviation": 0.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 0.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 0.0,
+          "total_number_of_discrete_round_trip_time_samples": 0.0,
+          "average_discrete_round_trip_time": 0.0,
+          "discrete_round_trip_time_standard_deviation": 0.0,
+          "sum_of_all_packet_loss_values_sampled": 0.0,
+          "sum_of_all_packet_loss_square_values_sampled": 0.0,
+          "total_number_of_packet_loss_samples": 0.0,
+          "average_packet_loss": 0.0,
+          "packet_loss_standard_deviation": 0.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 305.29469,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Inject 2000ms latency (with 50ms jitter) on the P-CSCF (SIP edge proxy). SIP transactions will experience severe delays as every message entering and leaving the P-CSCF is delayed, compounding across multiple round-trips in the IMS registration chain. Tests IMS resilience to high latency on the signaling edge.",
+    "affected_components": [
+      "pcscf"
+    ],
+    "severity": "degraded",
+    "failure_domain": "ims_signaling",
+    "protocol_impact": "SIP"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v6-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: IMS registration is failing because Diameter requests from the I/S-CSCF are not being successfully processed by the HSS; investigations have disproven HSS overload, pointing instead to a potential issue within the I-CSCF or S-CSCF.\n- **timeline**:\n    1. The `scp` container in the core network exited.\n    2. The I/S-CSCF begins experiencing a 50% failure rate on Diameter requests sent to the HSS.\n    3. High network latency (~2000ms RTT) is observed between the P-CSCF and PCF.\n    4. End-user devices are unable to complete IMS registration due to timeouts.\n- **root_cause**: The root cause is unconfirmed, but investigation has ruled out the HSS. The primary suspects are now the **I-CSCF (`icscf`)** and **S-CSCF (`scscf`)**, which appear to be failing to send or properly formulate Diameter requests.\n- **affected_components**:\n    - `icscf`: Root Cause (Suspected)\n    - `scscf`: Root Cause (Suspected)\n    - `pyhss`: Symptomatic (Not receiving the expected volume of requests, leading to registration timeouts.)\n    - `pcscf`: Secondary (Experiencing severe network latency to the PCF, a separate issue from the primary registration failure.)\n    - `pcf`: Secondary (Experiencing severe network latency from the P-CSCF.)\n    - `scp`: Unrelated (This component exited, but investigation into its impact was inconclusive.)\n- **recommendation**: Investigate the `icscf` and `scscf` containers. Check their internal logs for any errors related to sending Diameter requests to the HSS. It would be beneficial to run a packet capture on the `icscf` and `scscf` to verify if User-Authorization-Request (UAR) and Server-Assignment-Request (SAR) messages are being sent correctly to the HSS. Separately, investigate the cause of the ~2000ms latency between the `pcscf` and `pcf`.\n- **confidence**: medium\n- **explanation**: The initial leading hypotheses have been disproven. The HSS is not overloaded or partitioned, as proven by network probes showing 0% packet loss and the absence of any error logs within the HSS container (falsifying `h1`). The P-CSCF is not the source of the failure, as the expected \"HTTP client connection failure\" logs were not found, even though a separate high-latency issue with the PCF was discovered (falsifying `h2`). Both disproven investigations suggested the I-CSCF and S-CSCF as alternative culprits, shifting the focus of the investigation. Confidence is set to medium because the original hypotheses were ruled out, a new root cause has not been confirmed, and a third hypothesis regarding infrastructure instability (`h3`) was inconclusive.",
+    "score": {
+      "root_cause_correct": false,
+      "root_cause_rationale": "The simulated failure was P-CSCF latency. The agent observed 'High network latency (~2000ms RTT) is observed between the P-CSCF and PCF' and listed 'pcscf' as 'Secondary (Experiencing severe network latency to the PCF, a separate issue from the primary registration failure.)'. It explicitly dismissed the P-CSCF latency as the root cause, instead suspecting I-CSCF and S-CSCF Diameter issues.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent correctly identified 'pcscf' as experiencing 'severe network latency', which is the primary affected component and the nature of the simulated failure.",
+      "severity_correct": true,
+      "severity_rationale": "The agent correctly identified 'High network latency (~2000ms RTT)' and 'severe network latency' leading to 'IMS registration failures at UEs' and 'unable to complete IMS registration due to timeouts', which matches the severe degradation/outage caused by 2000ms latency.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent explicitly identified 'High network latency (~2000ms RTT)' and 'severe network latency', which is a correct identification of a network degradation fault type.",
+      "layer_accuracy": true,
+      "layer_accuracy_rationale": "The agent correctly rated the 'ims' layer as RED and provided evidence related to 'pcscf' (e.g., 'pcscf_avg_register_time_ms is 0', 'pcscf_sip_error_ratio is 0.50'), which aligns with the 'pcscf' belonging to the IMS layer.",
+      "confidence_calibrated": false,
+      "confidence_rationale": "The agent observed the exact simulated failure (P-CSCF latency) but explicitly dismissed it as a 'separate issue from the primary registration failure' and pursued an incorrect root cause (I/S-CSCF Diameter issues). A 'medium' confidence is poorly calibrated given it had direct evidence of the actual root cause but chose to prioritize an incorrect one.",
+      "ranking_position": null,
+      "ranking_rationale": "The agent explicitly stated the P-CSCF latency was a 'secondary' issue and 'a separate issue from the primary registration failure', ranking it below its primary suspects (I-CSCF and S-CSCF).",
+      "total_score": 0.5,
+      "summary": "The agent correctly identified the affected component, the type, and severity of the fault (latency leading to timeouts) but failed to recognize this as the root cause, instead attributing the primary issue to I/S-CSCF Diameter failures, leading to poor confidence calibration."
+    },
+    "time_to_diagnosis_seconds": 166.5,
+    "token_usage": {
+      "input_tokens": 100435,
+      "output_tokens": 5170,
+      "thinking_tokens": 16192,
+      "total_tokens": 121797,
+      "per_phase": [
+        {
+          "agent": "AnomalyScreener",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EventAggregator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "CorrelationAnalyzer",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 16330,
+          "tool_calls": 3,
+          "llm_calls": 2
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 8708,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 34392,
+          "tool_calls": 4,
+          "llm_calls": 5
+        },
+        {
+          "agent": "InvestigatorAgent_h2",
+          "tokens": 36593,
+          "tool_calls": 4,
+          "llm_calls": 5
+        },
+        {
+          "agent": "InvestigatorAgent_h3",
+          "tokens": 19037,
+          "tool_calls": 3,
+          "llm_calls": 3
+        },
+        {
+          "agent": "EvidenceValidator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 6737,
+          "tool_calls": 0,
+          "llm_calls": 1
+        }
+      ]
+    },
+    "anomaly_report": "**ANOMALY DETECTED.** Overall anomaly score: 0.93 (threshold: 0.70, trained on 211 healthy snapshots). The current metric pattern is statistically different from the learned healthy baseline. Something in the network has changed.\n\nThe following specific metrics were flagged as the top contributors to the anomaly. These MUST be reflected in your layer ratings:\n\n| Component | Metric | Current | Learned Normal | Severity |\n|-----------|--------|---------|---------------|----------|\n| derived | pcscf_sip_error_ratio | 0.50 | 0.00 | MEDIUM |\n| derived | pcscf_avg_register_time_ms | 0.00 | 248.24 | HIGH |\n| normalized | upf.gtp_outdatapktn3upf_per_ue | 0.06 | 3.34 | MEDIUM |\n| normalized | upf.gtp_indatapktn3upf_per_ue | 0.19 | 3.42 | MEDIUM |\n| normalized | pcscf.dialogs_per_ue | 0.00 | 0.57 | LOW |\n| derived | upf_activity_during_calls | 1.00 | 0.47 | LOW |",
+    "network_analysis": "{\n  \"summary\": \"IMS registration is failing completely due to a 50% Diameter request failure rate between the I/S-CSCF and the HSS, with secondary errors indicating a connectivity problem between the P-CSCF and PCF.\",\n  \"layer_status\": {\n    \"infrastructure\": {\n      \"rating\": \"yellow\",\n      \"evidence\": [\n        \"get_network_status shows container 'scp' has exited.\"\n      ],\n      \"note\": \"The exited SCP container indicates an infrastructure issue, but its direct impact on the current IMS failure is unclear as IMS-specific links remain active.\"\n    },\n    \"ran\": {\n      \"rating\": \"green\",\n      \"evidence\": [\n        \"P-CSCF is receiving REGISTER requests, implying RAN is passing traffic.\"\n      ],\n      \"note\": \"The RAN appears to be functioning correctly, as initial signaling from the UE is reaching the core network.\"\n    },\n    \"core\": {\n      \"rating\": \"yellow\",\n      \"evidence\": [\n        \"P-CSCF is failing to connect to PCF (httpclient:connfail is >9000).\",\n        \"UPF traffic is near zero, but this is a symptom of failed registrations, not a root cause.\"\n      ],\n      \"note\": \"The primary issue appears to be in the IMS layer, but the P-CSCF's inability to communicate with the PCF represents a significant fault in the core's policy control function that is contributing to the outage.\"\n    },\n    \"ims\": {\n      \"rating\": \"red\",\n      \"evidence\": [\n        \"pcscf_avg_register_time_ms is 0, indicating no successful registrations.\",\n        \"pcscf_sip_error_ratio is 0.50.\",\n        \"I-CSCF and S-CSCF are seeing ~50% of their Diameter requests to HSS time out.\",\n        \"P-CSCF's 'registrar:accepted_regs' is 0.\"\n      ],\n      \"note\": \"The IMS layer is the epicenter of the failure. The HSS is not responding to half of the authentication and registration requests, which is causing a complete failure of the user registration procedure.\"\n    }\n  },\n  \"hypotheses\": [\n    {\n      \"id\": \"h1\",\n      \"statement\": \"The HSS is overloaded or partially partitioned, causing it to drop approximately 50% of incoming Diameter requests from the I-CSCF and S-CSCF. This intermittent response failure is the primary cause of the end-to-end registration timeouts.\",\n      \"primary_suspect_nf\": \"pyhss\",\n      \"supporting_events\": [],\n      \"explanatory_fit\": 0.8,\n      \"falsification_probes\": [\n        \"Measure RTT and packet loss from 'icscf' to the 'pyhss' container IP; high loss would confirm a network partition.\",\n        \"Examine HSS internal logs for evidence of dropped requests, overload, or processing errors.\",\n        \"Run a packet capture on the HSS to verify if the missing Diameter requests are arriving on its network interface.\"\n      ],\n      \"specificity\": \"specific\"\n    },\n    {\n      \"id\": \"h2\",\n      \"statement\": \"The P-CSCF is unable to establish a connection with the PCF for policy checks, as evidenced by massive HTTP client connection failures. This failure causes the P-CSCF to abort the registration process locally, contributing to the overall failure rate.\",\n      \"primary_suspect_nf\": \"pcscf\",\n      \"supporting_events\": [],\n      \"explanatory_fit\": 0.6,\n      \"falsification_probes\": [\n        \"Verify the configured address of the PCF in the P-CSCF's configuration files.\",\n        \"Attempt to establish a connection manually from the 'pcscf' container to the 'pcf' container's IP and port.\",\n        \"Check PCF logs for any incoming connection attempts from P-CSCF.\"\n      ],\n      \"specificity\": \"specific\"\n    },\n    {\n      \"id\": \"h3\",\n      \"statement\": \"The exited SCP container has caused system-wide resource contention or instability, indirectly impacting the performance of the HSS. This is a non-specific infrastructure issue manifesting as performance degradation in the IMS layer.\",\n      \"primary_suspect_nf\": \"scp\",\n      \"supporting_events\": [],\n      \"explanatory_fit\": 0.3,\n      \"falsification_probes\": [\n        \"Analyze the logs from the exited 'scp' container to determine its cause of failure.\",\n        \"Check system-level logs (e.g., dmesg, journalctl) on the container host for OOM killer events or other resource pressure indicators.\"\n      ],\n      \"specificity\": \"vague\"\n    }\n  ]\n}",
+    "pattern_match": "",
+    "investigation_instruction": "{\n  \"plans\": [\n    {\n      \"hypothesis_id\": \"h1\",\n      \"hypothesis_statement\": \"The HSS is overloaded or partially partitioned, causing it to drop approximately 50% of incoming Diameter requests from the I-CSCF and S-CSCF. This intermittent response failure is the primary cause of the end-to-end registration timeouts.\",\n      \"primary_suspect_nf\": \"pyhss\",\n      \"probes\": [\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"from='icscf', to_ip='pyhss'\",\n          \"expected_if_hypothesis_holds\": \"High packet loss (e.g., >40%) or significantly elevated latency (>100ms) between I-CSCF and HSS, indicating a network partition or severe congestion.\",\n          \"falsifying_observation\": \"Low packet loss (<5%) and low latency (<10ms) between I-CSCF and HSS, suggesting the network path is healthy.\"\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"from='pyhss', to_ip='icscf'\",\n          \"expected_if_hypothesis_holds\": \"High packet loss (e.g., >40%) or significantly elevated latency (>100ms) from HSS to I-CSCF, consistent with a bidirectional network partition.\",\n          \"falsifying_observation\": \"Low packet loss (<5%) and low latency (<10ms) from HSS to I-CSCF, indicating the HSS's outgoing path is healthy, potentially narrowing the problem to HSS ingress or internal processing.\"\n        },\n        {\n          \"tool\": \"read_container_logs\",\n          \"args_hint\": \"container='pyhss', grep='error|fail|drop|timeout|overload'\",\n          \"expected_if_hypothesis_holds\": \"Frequent log entries within the pyhss container indicating internal errors, dropped Diameter requests, resource overload, or processing timeouts.\",\n          \"falsifying_observation\": \"Clean logs from pyhss with no significant errors, warnings related to dropped requests, or overload messages, suggesting HSS is not internally failing to process requests.\"\n        }\n      ],\n      \"notes\": \"Probes focus on confirming network issues from both directions and internal HSS health. The NA report's observation of '50% Diameter request failure rate' confirms upstream activity.\"\n    },\n    {\n      \"hypothesis_id\": \"h2\",\n      \"hypothesis_statement\": \"The P-CSCF is unable to establish a connection with the PCF for policy checks, as evidenced by massive HTTP client connection failures. This failure causes the P-CSCF to abort the registration process locally, contributing to the overall failure rate.\",\n      \"primary_suspect_nf\": \"pcscf\",\n      \"probes\": [\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"from='pcscf', to_ip='pcf'\",\n          \"expected_if_hypothesis_holds\": \"100% packet loss or connection timeout from P-CSCF to PCF, confirming a network connectivity issue.\",\n          \"falsifying_observation\": \"Clean RTT (< 5ms) from P-CSCF to PCF, indicating basic network connectivity is present.\"\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"from='pcf', to_ip='pcscf'\",\n          \"expected_if_hypothesis_holds\": \"100% packet loss or connection timeout from PCF to P-CSCF, consistent with a bidirectional network issue.\",\n          \"falsifying_observation\": \"Clean RTT (< 5ms) from PCF to P-CSCF, suggesting the issue is specific to the P-CSCF's client or PCF's server, not a general network partition.\"\n        },\n        {\n          \"tool\": \"read_container_logs\",\n          \"args_hint\": \"container='pcscf', grep='HTTP client connection failure|PCF connect error|policy error'\",\n          \"expected_if_hypothesis_holds\": \"Massive and continuous log entries within the pcscf container detailing HTTP client connection failures to the PCF, or policy enforcement errors.\",\n          \"falsifying_observation\": \"Absence or very low occurrence of connection failure logs from pcscf, indicating the P-CSCF is not experiencing the stated connectivity issues with the PCF.\"\n        }\n      ],\n      \"notes\": \"Probes triangulate network connectivity and directly check for the 'massive HTTP client connection failures' in P-CSCF logs, which also confirms activity.\"\n    },\n    {\n      \"hypothesis_id\": \"h3\",\n      \"hypothesis_statement\": \"The exited SCP container has caused system-wide resource contention or instability, indirectly impacting the performance of the HSS. This is a non-specific infrastructure issue manifesting as performance degradation in the IMS layer.\",\n      \"primary_suspect_nf\": \"scp\",\n      \"probes\": [\n        {\n          \"tool\": \"read_container_logs\",\n          \"args_hint\": \"container='scp', grep='OOM|kill|error|failure|exit'\",\n          \"expected_if_hypothesis_holds\": \"Log entries from the 'scp' container indicating an Out-Of-Memory (OOM) error, an unexpected system kill signal, or other critical system-level failures leading to its exit.\",\n          \"falsifying_observation\": \"Logs from 'scp' indicate a graceful shutdown, a configuration error, or a non-resource-related reason for its exit, weakening the link to system-wide resource contention.\"\n        },\n        {\n          \"tool\": \"get_nf_metrics\",\n          \"args_hint\": \"component='pyhss'\",\n          \"expected_if_hypothesis_holds\": \"Elevated CPU/memory utilization, increased garbage collection activity, or significantly higher Diameter request processing latency within the pyhss container, consistent with resource contention.\",\n          \"falsifying_observation\": \"Normal and stable CPU/memory utilization, low latency, and healthy performance metrics for pyhss, indicating no current performance degradation due to resource issues.\"\n        },\n        {\n          \"tool\": \"get_causal_chain_for_component\",\n          \"args_hint\": \"component='scp'\",\n          \"expected_if_hypothesis_holds\": \"The output describes a known causal chain where the failure of 'scp' leads to system-wide resource contention or instability that could indirectly impact HSS performance.\",\n          \"falsifying_observation\": \"The output indicates no known causal chain linking 'scp' failure directly to HSS performance degradation or system-wide resource issues, suggesting the impact is coincidental or non-existent in the system's defined fault model.\"\n        }\n      ],\n      \"notes\": \"Probes investigate the SCP's crash reason for resource-related indicators, check HSS for symptoms of resource contention, and consult the ontology for known causal links.\"\n    }\n  ]\n}",
+    "investigation": "[\n  {\n    \"hypothesis_id\": \"h1\",\n    \"hypothesis_statement\": \"The HSS is overloaded or partially partitioned, causing it to drop approximately 50% of incoming Diameter requests from the I-CSCF and S-CSCF. This intermittent response failure is the primary cause of the end-to-end registration timeouts.\",\n    \"verdict\": \"DISPROVEN\",\n    \"reasoning\": \"Probes revealed a healthy network connection from the I-CSCF to the HSS and a complete absence of error logs within the HSS container. This evidence directly contradicts the hypothesis that the HSS is either partitioned or overloaded, as both conditions would produce network latency/loss or internal error logs, respectively.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Measure RTT and packet loss from 'icscf' to the 'pyhss' container IP; high loss would confirm a network partition.\",\n        \"tool_call\": \"default_api.measure_rtt(container='icscf', target_ip='172.22.0.18')\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"icscf\\\", \\\"172.22.0.18\\\") -> \\\"3 packets transmitted, 3 received, 0% packet loss, time 2029ms\\\\nrtt min/avg/max/mdev = 0.076/0.161/0.269/0.080 ms\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"commentary\": \"The observed 0% packet loss and sub-millisecond latency are signs of a perfectly healthy network path, falsifying the 'network partition' aspect of the hypothesis.\"\n      },\n      {\n        \"probe_description\": \"Measure RTT and packet loss from 'pyhss' to the 'icscf' container IP to check for a bidirectional network partition.\",\n        \"tool_call\": \"default_api.measure_rtt(container='pyhss', target_ip='172.22.0.19')\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"pyhss\\\", \\\"172.22.0.19\\\") -> \\\"Ping failed from pyhss to 172.22.0.19: OCI runtime exec failed: exec failed: unable to start container process: exec: \\\\\\\"ping\\\\\\\": executable file not found in $PATH: unknown\\\"]\",\n        \"compared_to_expected\": \"AMBIGUOUS\",\n        \"commentary\": \"The tool failed because the 'ping' utility is not present in the pyhss container. This prevents a conclusion about the reverse network path's health.\"\n      },\n      {\n        \"probe_description\": \"Examine HSS internal logs for evidence of dropped requests, overload, or processing errors.\",\n        \"tool_call\": \"default_api.read_container_logs(container='pyhss', grep='error|fail|drop|timeout|overload')\",\n        \"observation\": \"[EVIDENCE: read_container_logs(\\\"pyhss\\\", \\\"error|fail|drop|timeout|overload\\\") -> \\\"(no log output)\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"commentary\": \"The complete absence of logs related to errors, dropped requests, or overload strongly suggests the HSS is not internally failing or resource-constrained. This falsifies the 'overloaded' aspect of the hypothesis.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"icscf\",\n      \"scscf\"\n    ]\n  },\n  {\n    \"hypothesis_id\": \"h2\",\n    \"hypothesis_statement\": \"The P-CSCF is unable to establish a connection with the PCF for policy checks, as evidenced by massive HTTP client connection failures. This failure causes the P-CSCF to abort the registration process locally, contributing to the overall failure rate.\",\n    \"verdict\": \"DISPROVEN\",\n    \"reasoning\": \"The hypothesis is disproven because its core evidence is absent. While network probes confirmed a severe latency issue (~2000ms RTT) between P-CSCF and PCF which could cause timeouts, a direct check of the P-CSCF's logs for the \\\"massive HTTP client connection failures\\\" cited in the hypothesis yielded no results. The absence of these specific, expected logs contradicts the stated evidence and suggests the failure mechanism is not what the hypothesis describes.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Measure RTT from P-CSCF to PCF to check for network connectivity issues.\",\n        \"tool_call\": \"measure_rtt(\\\"pcscf\\\", \\\"172.22.0.27\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"pcscf\\\", \\\"172.22.0.27\\\") -> \\\"rtt min/avg/max/mdev = 1963.668/2014.798/2040.383/36.154 ms\\\"]\",\n        \"compared_to_expected\": \"AMBIGUOUS\",\n        \"commentary\": \"This result showed extremely high latency (~2 seconds) but not the expected 100% packet loss. While not a complete partition, this level of latency would cause application timeouts, which is consistent with the hypothesis's claim of connection failure.\"\n      },\n      {\n        \"probe_description\": \"Measure RTT from PCF to P-CSCF to confirm if the network issue is bidirectional.\",\n        \"tool_call\": \"measure_rtt(\\\"pcf\\\", \\\"172.22.0.21\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"pcf\\\", \\\"172.22.0.21\\\") -> \\\"rtt min/avg/max/mdev = 1954.096/1986.705/2037.267/36.249 ms, pipe 2\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"commentary\": \"The latency is symmetrically high from PCF to P-CSCF, confirming a severe network degradation issue exists between the two components. This supports the general idea of a connection problem.\"\n      },\n      {\n        \"probe_description\": \"Read P-CSCF container logs to find the 'massive and continuous log entries detailing HTTP client connection failures' mentioned in the hypothesis.\",\n        \"tool_call\": \"read_container_logs(\\\"pcscf\\\", \\\"HTTP client connection failure|PCF connect error|policy error\\\", 300)\",\n        \"observation\": \"[EVIDENCE: read_container_logs(\\\"pcscf\\\", \\\"HTTP client connection failure|PCF connect error|policy error\\\", 300) -> \\\"(no log output)\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"commentary\": \"This is the key falsifying observation. The hypothesis explicitly states that the connection failure is 'evidenced by massive HTTP client connection failures'. The total absence of such logs in the P-CSCF container directly contradicts the hypothesis.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"icscf\",\n      \"scscf\"\n    ]\n  },\n  {\n    \"hypothesis_id\": \"h3\",\n    \"hypothesis_statement\": \"The exited SCP container has caused system-wide resource contention or instability, indirectly impacting the performance of the HSS. This is a non-specific infrastructure issue manifesting as performance degradation in the IMS layer.\",\n    \"verdict\": \"INCONCLUSIVE\",\n    \"reasoning\": \"Failed to parse Investigator output: 4 validation errors for InvestigatorVerdict\\nhypothesis_id\\n  Field required [type=missing, input_value={}, input_type=dict]\\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\\nhypothesis_statement\\n  Field required [type=missing, input_value={}, input_type=dict]\\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\\nverdict\\n  Field required [type=missing, input_value={}, input_type=dict]\\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\\nreasoning\\n  Field required [type=missing, input_value={}, input_type=dict]\\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\",\n    \"probes_executed\": [],\n    \"alternative_suspects\": []\n  }\n]",
+    "evidence_validation": "{\n  \"overall_verdict\": \"clean\",\n  \"overall_confidence\": \"high\",\n  \"per_agent\": [\n    {\n      \"agent_name\": \"InvestigatorAgent_h1\",\n      \"tool_calls_made\": 4,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h2\",\n      \"tool_calls_made\": 4,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h3\",\n      \"tool_calls_made\": 3,\n      \"citations_found\": 0,\n      \"citations_matched\": 0,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    }\n  ],\n  \"summary\": \"Evidence validation across 3 sub-Investigator(s): overall verdict=clean, confidence=high.\\n  - InvestigatorAgent_h1: 4 tool calls, 3/3 citations verified (clean, high)\\n  - InvestigatorAgent_h2: 4 tool calls, 3/3 citations verified (clean, high)\\n  - InvestigatorAgent_h3: 3 tool calls, 0/0 citations verified (clean, high)\"\n}",
+    "fired_events": "No events fired during this episode. Either no metric KB triggers matched, or the episode encountered no meaningful state transitions.",
+    "correlation_analysis": "No events fired \u2014 correlation engine had nothing to work with."
+  }
+}

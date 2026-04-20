@@ -196,7 +196,7 @@ _TEMPORAL_COUNTER_MAP: dict[str, str] = {
     "scscf.ims_registrar_scscf:sar_avg_response_time":
         "scscf.ims_registrar_scscf:sar_replies_received",
     "derived.pcscf_avg_register_time_ms":
-        "pcscf.script:register_success",
+        "pcscf.core:rcv_requests_register",
 }
 
 
@@ -407,21 +407,30 @@ class MetricPreprocessor:
             total = err_rate + ok_rate + rates.get(f"{cscf}.sl:1xx_replies", 0)
             features[f"derived.{cscf}_sip_error_ratio"] = _safe_ratio(err_rate, total)
 
-        # P-CSCF average registration time (ms per registration)
-        # script:register_time is a CUMULATIVE counter (total ms across all
-        # registrations), not a gauge. We compute avg time per registration
-        # using the sliding window rates of both counters. When no new
-        # REGISTERs completed in the window, the metric is omitted from this
-        # snapshot entirely — "0 ms" would be a semantically wrong value for
-        # "no events to average." ADR: anomaly_training_zero_pollution.md
+        # P-CSCF average registration processing time (ms per incoming REGISTER)
+        #
+        # `script:register_time` is a CUMULATIVE ms counter — it advances
+        # whenever the P-CSCF script processes a REGISTER, regardless of
+        # whether that REGISTER ultimately succeeds. Dividing by the
+        # SUCCESS counter collapses this feature to zero/undefined during
+        # the very failures we want to detect (e.g. latency injections
+        # that make REGISTERs time out before succeeding). Divide by the
+        # INCOMING REGISTER counter instead — it tracks the same
+        # attempts the processing-time counter advances on, so the ratio
+        # remains meaningful under both healthy and failure conditions.
+        #
+        # If no REGISTER attempts were made in the window (e.g. P-CSCF
+        # partitioned from UEs), the metric is still omitted — zero is
+        # semantically wrong for "no events to average." ADR:
+        # anomaly_training_zero_pollution.md
         reg_time_rate = rates.get("pcscf.script:register_time", 0)
-        reg_success_rate = rates.get("pcscf.script:register_success", 0)
-        if reg_success_rate > 0:
+        reg_attempt_rate = rates.get("pcscf.core:rcv_requests_register", 0)
+        if reg_attempt_rate > 0:
             features["derived.pcscf_avg_register_time_ms"] = round(
-                reg_time_rate / reg_success_rate, 1
+                reg_time_rate / reg_attempt_rate, 1
             )
             self._liveness["derived.pcscf_avg_register_time_ms"] = True
-        # else: feature omitted — counter did not advance this window
+        # else: feature omitted — no REGISTER attempts this window
 
         # --- Category 3: Per-UE normalized rates ---
 

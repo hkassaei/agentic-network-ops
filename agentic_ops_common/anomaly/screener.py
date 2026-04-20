@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from river import anomaly as river_anomaly
 
@@ -48,6 +48,25 @@ def _is_temporal_feature(key: str) -> bool:
 
 
 @dataclass
+class FlagKBContext:
+    """KB-derived semantic context for a flagged metric.
+
+    Populated by `agentic_ops_common.metric_kb.flag_enrichment.enrich_report`
+    after the screener scores a snapshot. Carries the metric's authored
+    meaning so downstream agents can interpret the deviation instead of
+    guessing from the metric name.
+    """
+    kb_metric_id: str  # e.g. "ims.pcscf.avg_register_time_ms"
+    display_name: Optional[str] = None
+    unit: Optional[str] = None
+    what_it_signals: Optional[str] = None
+    direction_meaning: Optional[str] = None  # meaning.spike / .drop / .zero
+    typical_range: Optional[tuple[float, float]] = None
+    invariant: Optional[str] = None
+    pre_existing_noise: Optional[str] = None
+
+
+@dataclass
 class AnomalyFlag:
     """A single flagged metric anomaly."""
     metric: str
@@ -57,6 +76,7 @@ class AnomalyFlag:
     anomaly_score: float
     severity: str  # HIGH, MEDIUM, LOW
     direction: str  # spike, drop, flat_while_related_spiking
+    kb_context: Optional[FlagKBContext] = None
 
 
 @dataclass
@@ -68,7 +88,15 @@ class AnomalyReport:
     model_ready: bool = False
 
     def to_prompt_text(self) -> str:
-        """Render as text suitable for injection into the NetworkAnalyst prompt."""
+        """Render as text suitable for injection into the NetworkAnalyst prompt.
+
+        Each flag is rendered as a short semantic block rather than just a
+        row in a bare numeric table. When KB context is attached (see
+        `metric_kb.flag_enrichment.enrich_report`) the render includes the
+        metric's authored meaning, its direction-specific interpretation,
+        and its healthy range — so the NA sees *what the deviation means*,
+        not only *what numbers moved*.
+        """
         if self.overall_score < 0.5 and not self.flags:
             return "No anomalies detected by the statistical screener."
 
@@ -85,15 +113,13 @@ class AnomalyReport:
 
         if self.flags:
             lines.append(
-                "The following specific metrics were flagged as the top contributors "
-                "to the anomaly. These MUST be reflected in your layer ratings:\n"
+                "The following metrics deviate from their learned-healthy baseline. "
+                "Treat each as a semantic observation (meaning + numbers), not a number "
+                "alone — the KB's interpretation is the authoritative reading.\n"
             )
-            lines.append("| Component | Metric | Current | Learned Normal | Severity |")
-            lines.append("|-----------|--------|---------|---------------|----------|")
             for f in sorted(self.flags, key=lambda x: -x.anomaly_score):
-                curr = f"{f.current:.2f}" if isinstance(f.current, float) else str(f.current)
-                norm = f"{f.learned_normal:.2f}" if isinstance(f.learned_normal, float) else str(f.learned_normal)
-                lines.append(f"| {f.component} | {f.metric} | {curr} | {norm} | {f.severity} |")
+                lines.extend(_render_flag(f))
+                lines.append("")
         else:
             lines.append(
                 "No single metric dominates the anomaly — the deviation is spread "
@@ -107,8 +133,9 @@ class AnomalyReport:
 
     def to_dict_list(self) -> list[dict[str, Any]]:
         """Serialize flags to a list of dicts for state passing."""
-        return [
-            {
+        out: list[dict[str, Any]] = []
+        for f in self.flags:
+            d: dict[str, Any] = {
                 "metric": f.metric,
                 "component": f.component,
                 "current": f.current,
@@ -117,8 +144,73 @@ class AnomalyReport:
                 "severity": f.severity,
                 "direction": f.direction,
             }
-            for f in self.flags
+            if f.kb_context is not None:
+                c = f.kb_context
+                d["kb_context"] = {
+                    "kb_metric_id": c.kb_metric_id,
+                    "display_name": c.display_name,
+                    "unit": c.unit,
+                    "what_it_signals": c.what_it_signals,
+                    "direction_meaning": c.direction_meaning,
+                    "typical_range": (
+                        list(c.typical_range) if c.typical_range else None
+                    ),
+                    "invariant": c.invariant,
+                    "pre_existing_noise": c.pre_existing_noise,
+                }
+            out.append(d)
+        return out
+
+
+def _render_flag(f: "AnomalyFlag") -> list[str]:
+    """Render one flag as a semantic block for the NA prompt."""
+    curr = f"{f.current:.2f}" if isinstance(f.current, float) else str(f.current)
+    norm = (
+        f"{f.learned_normal:.2f}"
+        if isinstance(f.learned_normal, float)
+        else str(f.learned_normal)
+    )
+    name = f"`{f.component}.{f.metric}`"
+    ctx = f.kb_context
+
+    if ctx is None:
+        return [
+            f"- **{name}** — current **{curr}** vs learned baseline **{norm}** "
+            f"({f.severity}, {f.direction}). *(No KB context available — "
+            f"interpret from the metric name.)*"
         ]
+
+    display = f" ({ctx.display_name})" if ctx.display_name else ""
+    unit = f" {ctx.unit}" if ctx.unit else ""
+    header = (
+        f"- **{name}**{display} — current **{curr}{unit}** vs learned baseline "
+        f"**{norm}{unit}** ({f.severity}, {f.direction})"
+    )
+    lines = [header]
+
+    if ctx.what_it_signals:
+        lines.append(f"    - **What it measures:** {ctx.what_it_signals.strip()}")
+    if ctx.direction_meaning:
+        label = {
+            "spike": "Spike means",
+            "drop": "Drop means",
+            "zero": "Zero means",
+            "shift": "Shift means",
+        }.get(f.direction, "Deviation means")
+        lines.append(f"    - **{label}:** {ctx.direction_meaning.strip()}")
+    if ctx.typical_range:
+        lo, hi = ctx.typical_range
+        unit_s = f" {ctx.unit}" if ctx.unit else ""
+        lines.append(
+            f"    - **Healthy typical range:** {lo:g}–{hi:g}{unit_s}"
+        )
+    if ctx.invariant:
+        lines.append(f"    - **Healthy invariant:** {ctx.invariant.strip()}")
+    if ctx.pre_existing_noise:
+        lines.append(
+            f"    - **Known noise:** {ctx.pre_existing_noise.strip()}"
+        )
+    return lines
 
 
 class AnomalyScreener:

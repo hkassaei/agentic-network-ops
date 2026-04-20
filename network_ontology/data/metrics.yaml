@@ -584,19 +584,31 @@ metrics:
         interface: Mw
         plane: control
         description: |
-          Computed as rate(pcscf.script:register_time) / rate(pcscf.script:register_success)
-          over a 30-second sliding window. Omitted when no REGISTERs completed
-          in the window (pre-filter).
+          Computed as rate(pcscf.script:register_time) / rate(pcscf.core:rcv_requests_register)
+          over a 30-second sliding window — i.e. average script-processing time
+          per INCOMING REGISTER (counted regardless of outcome). Omitted when
+          no REGISTERs arrived at P-CSCF in the window (pre-filter).
+
+          Denominator is the incoming-attempt counter, not the success counter:
+          this preserves the signal when REGISTERs are failing (e.g. latency
+          injections time them out) while the processing-time counter keeps
+          advancing. Dividing by successes would collapse the feature to 0
+          during the very fault it should detect.
         meaning:
           what_it_signals: |
-            End-to-end cost of a successful SIP REGISTER through the IMS
-            signaling chain. Dominated by four Diameter round-trips
-            (UAR + LIR + MAR + SAR) plus SIP forwarding overhead. Spikes
-            without matching Diameter latency spikes indicate SIP-path latency
-            (P-CSCF itself or P-CSCF ↔ I-CSCF hop).
+            End-to-end cost of processing a SIP REGISTER through the IMS
+            signaling chain. Under healthy conditions, dominated by four
+            Diameter round-trips (UAR + LIR + MAR + SAR) plus SIP forwarding
+            overhead. Spikes without matching Diameter latency spikes indicate
+            SIP-path latency (P-CSCF itself or P-CSCF ↔ I-CSCF hop). Remains
+            meaningful when REGISTERs are failing — numerator and denominator
+            both track attempts, not completions.
           spike: "Latency injected on the REGISTER path. Compare against Diameter response times to localize."
           drop: "Rarely meaningful — shorter REGISTERs are not a fault signal."
-          zero: "No new REGISTERs in the window. Feature is omitted entirely (pre-filter)."
+          zero: |
+            Stall signature. Two distinct cases:
+              (a) No REGISTERs arrived in the window — feature is omitted entirely by pre-filter; you won't see a 0 here, you'll see the metric absent.
+              (b) REGISTERs arrived but none completed within the window, so the numerator (cumulative register_time) didn't advance while the denominator (rcv_requests_register) did — the ratio snapshots to 0. This is the classic SIP-path-latency signature: a latency injection on P-CSCF, or a partition, is stretching REGISTER processing past the sliding-window horizon. Confirm by checking whether `pcscf.core:rcv_requests_register` is still advancing (it is = case b); if it's flat too, it's case (a).
         healthy:
           scale_independent: true
           typical_range: [150, 350]

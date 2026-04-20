@@ -81,6 +81,12 @@ class BaselineCollector(BaseAgent):
         nf_count = len([s for s in statuses.values() if s == "running"])
         metric_count = len(metrics)
 
+        # Build a baseline "snapshot" matching the observation-snapshot format
+        # so the trigger evaluator can use it for prior_stable(window=5m) context.
+        import time as _time
+        baseline_snapshot = dict(metrics)  # shallow copy of metrics per component
+        baseline_snapshot["_timestamp"] = _time.time()
+
         yield Event(
             author=self.name,
             content=types.Content(
@@ -90,11 +96,15 @@ class BaselineCollector(BaseAgent):
                     f"{metric_count} NFs with metrics"
                 ))],
             ),
-            # Store metrics both nested (for episode record) and flat
-            # (for FaultPropagationVerifier convenience).
+            # Store metrics in three shapes:
+            #   - baseline: the structured episode-record form
+            #   - baseline_metrics: flat form (FaultPropagationVerifier convenience)
+            #   - baseline_metrics_snapshot: timestamp-tagged shape for the
+            #     v6 trigger evaluator (feeds prior_stable queries)
             actions=EventActions(state_delta={
                 "baseline": baseline,
                 "baseline_metrics": metrics,
+                "baseline_metrics_snapshot": baseline_snapshot,
             }),
         )
 

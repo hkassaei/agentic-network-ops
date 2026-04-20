@@ -128,9 +128,35 @@ class ObservationTrafficAgent(BaseAgent):
         log.info("Observation traffic complete: %d metric snapshots collected "
                  "over %ds", len(snapshots), elapsed_since_start)
 
+        # -------- v6: invoke trigger evaluator to populate event store --------
+        # See docs/ADR/agentic_ops_v6_plan.md ("Trigger evaluator invocation model").
+        # The agentic ops pipeline reads events from the store; we're the producer.
+        # Phase 1 integration point: single end-of-observation pass over the
+        # combined baseline + observation snapshots. Non-fatal if it fails.
+        episode_id = ctx.session.state.get("episode_id", "unknown")
+        baseline_snapshot = ctx.session.state.get("baseline_metrics_snapshot")
+        try:
+            from ..trigger_evaluator_integration import evaluate_episode_events
+            fired = evaluate_episode_events(
+                episode_id=episode_id,
+                observation_snapshots=snapshots,
+                baseline_snapshot=baseline_snapshot,
+            )
+            log.info(
+                "Trigger evaluator fired %d events into the event store "
+                "(episode=%s)", len(fired), episode_id,
+            )
+        except Exception as e:
+            log.warning(
+                "Trigger evaluator failed for episode %s (non-fatal): %s",
+                episode_id, e,
+            )
+            fired = []
+
         msg = (
             f"Observation traffic: generated IMS traffic for {elapsed_since_start}s, "
-            f"collected {len(snapshots)} metric snapshots"
+            f"collected {len(snapshots)} metric snapshots, "
+            f"trigger evaluator fired {len(fired)} events"
         )
         yield Event(
             author=self.name,
@@ -140,6 +166,7 @@ class ObservationTrafficAgent(BaseAgent):
                 "observation_window_start": observation_start,
                 "observation_window_end": observation_end,
                 "observation_window_duration": elapsed_since_start,
+                "fired_event_count": len(fired),
             }),
         )
 

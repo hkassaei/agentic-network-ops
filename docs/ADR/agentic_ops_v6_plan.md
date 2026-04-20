@@ -339,7 +339,7 @@ Refactor shared code to `agentic_ops_common/`. No v6 work starts until v5 still 
 
 1. `agentic_ops_common/correlation/engine.py` — reads recent events, applies KB `correlates_with` hints and ontology causal chains, outputs ranked hypotheses with supporting events.
 2. `agentic_ops_common/correlation/rules.py` — rule loader (bootstrapping from KB hints; extensible).
-3. Does NOT yet handle operational-context suppression (deferred to Phase 4).
+3. Does NOT yet handle operational-context suppression (deferred to Phase 5).
 
 **Acceptance:** given a synthetic event stream (e.g., `core.amf.ran_ue_sudden_drop` + `infrastructure.mongo.subscribers_decrease`), the engine produces the expected composite hypothesis ("planned offboarding — benign").
 
@@ -355,9 +355,36 @@ Refactor shared code to `agentic_ops_common/`. No v6 work starts until v5 still 
 
 **Acceptance:** run all 11 chaos scenarios, measure scores against v5 baseline. Target: 80%+ average, no scenario below 50%, partition scenarios above 70%.
 
-### Phase 4 — Operational context + suppression (stub implementation)
+### Phase 4 — Retire `baselines.yaml`, consolidate on `metrics.yaml`
 
-In production telecom ops, operational context comes from external systems (ServiceNow change management, BSS/OSS subscriber-lifecycle platforms, deployment automation, ITSM ticketing). Our test environment has none of these. Phase 4 defines the *interface* for operational context and provides a *stub implementation* driven by chaos-scenario metadata.
+Triggered after Phase 3 acceptance. Phase 1 authored `metrics.yaml` covering the 27 metrics the 11 chaos scenarios exercise. `baselines.yaml` still holds entries for ~77 metrics (many overlapping in concept but not in the structured KB schema) and is actively consumed by:
+
+- `network_ontology/loader.py` — loads baselines into Neo4j as properties on Component/Metric nodes.
+- `network_ontology/query.py::get_baseline()` + `compare_to_baseline()` — ontology tools the v5 NetworkAnalyst uses every run.
+- `gui/server.py::/api/metric-descriptions` — serves tooltips from baselines.yaml to the GUI.
+- v5's NetworkAnalyst prompt instructs explicit use of `compare_to_baseline`.
+
+Coexistence is safe during Phases 1–3 (different lookup paths, no conflict). After Phase 3, consolidate.
+
+1. **Expand KB content.** Author the remaining ~50 metrics from baselines.yaml into `metrics.yaml` with the same semantic depth as Phase 1 entries (meaning, invariants, disambiguators, related_metrics). Mostly AMF/SMF/PCF counters, P/I/S-CSCF raw kamailio counters, RTPEngine rich gauges, pyhss/mongo subscriber counts.
+2. **Migrate ontology tools.** `network_ontology/query.py::compare_to_baseline()` and `get_baseline()` read from `metrics.yaml` via the KB loader instead of the Neo4j-backed baselines properties.
+3. **Migrate GUI tooltips.** `gui/server.py::/api/metric-descriptions` reads `meaning.what_it_signals` + `description` from the KB loader.
+4. **Remove baselines loader path.** Drop the `_load_yaml("baselines.yaml")` call in `network_ontology/loader.py`. Neo4j no longer carries baseline properties.
+5. **Delete `baselines.yaml`.** Single commit after consumers verify green against the KB-backed paths.
+6. **Update v5 prompts (documentation-only).** v5 is frozen so behavior doesn't change, but cross-references in v5's NetworkAnalyst prompt referencing baselines.yaml by name are updated to metrics.yaml for consistency. v5 is a regression-only baseline at this point.
+
+**Acceptance:**
+- `metrics.yaml` covers every metric previously in `baselines.yaml`.
+- v5 still runs end-to-end with `compare_to_baseline` backed by the KB.
+- GUI tooltips render identically.
+- `baselines.yaml` is deleted.
+- All tests green.
+
+**Why after Phase 3, not before:** Phase 3 is the path to the chaos-score deliverable. Retirement work doesn't improve scores and touches consumers v5 still depends on for regression comparison. Keeping it as a cleanup phase avoids conflating the two.
+
+### Phase 5 — Operational context + suppression (stub implementation)
+
+In production telecom ops, operational context comes from external systems (ServiceNow change management, BSS/OSS subscriber-lifecycle platforms, deployment automation, ITSM ticketing). Our test environment has none of these. Phase 5 defines the *interface* for operational context and provides a *stub implementation* driven by chaos-scenario metadata.
 
 1. **Scenario metadata as operational context.** Extend `agentic_chaos/scenarios/library.py` to allow each scenario to declare context tags:
 
@@ -382,9 +409,9 @@ In production telecom ops, operational context comes from external systems (Serv
 
 **Acceptance:** a chaos scenario explicitly tagged as "AMF upgrade window" produces events that the correlation engine recognizes as expected-during-upgrade and suppresses. A scenario NOT tagged produces events that escalate normally.
 
-**Priority note:** Phase 4 is lower priority than Phase 3 for the chaos-score goal. Our current 11 scenarios do not include planned-maintenance variants; we don't need suppression to score 100% on them. Phase 4 becomes relevant when the chaos library expands to include planned-activity variants (a separate chaos-framework ADR).
+**Priority note:** Phase 5 is lower priority than Phase 3 for the chaos-score goal. Our current 11 scenarios do not include planned-maintenance variants; we don't need suppression to score 100% on them. Phase 5 becomes relevant when the chaos library expands to include planned-activity variants (a separate chaos-framework ADR).
 
-### Phase 5 — Episode RAG (Track 2)
+### Phase 6 — Episode RAG (Track 2)
 
 1. Index past episodes (ground truth + post-run analyses).
 2. Retrieval inputs to correlation engine: "past episodes with similar event signatures had these actual root causes."

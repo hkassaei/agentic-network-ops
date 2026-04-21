@@ -209,6 +209,14 @@ class MetricEntry(BaseModel):
     composite_of: list[str] = Field(default_factory=list)
     feeds_model_features: list[str] = Field(default_factory=list)
 
+    # --- Raw source names ---
+    # Prometheus/kamcmd/RTPEngine raw names that feed this KB entry (or
+    # whose diagnostic reading IS this KB entry). Populate when the KB
+    # metric is a *derived* / *per-UE* / *rate* form of a raw counter —
+    # so agent-facing tools can annotate raw counter values by pointing
+    # at the correct derived KB entry, preventing misreads.
+    raw_sources: list[str] = Field(default_factory=list)
+
     # --- Disambiguators ---
     disambiguators: list[Disambiguator] = Field(default_factory=list)
 

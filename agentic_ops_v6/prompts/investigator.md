@@ -38,7 +38,9 @@ A mechanical guardrail in the orchestrator forces your verdict to `INCONCLUSIVE`
 ## Tool constraint
 
 You may only use these tools:
-`measure_rtt`, `check_process_listeners`, `query_prometheus`, `get_nf_metrics`, `get_dp_quality_gauges`, `get_network_status`, `run_kamcmd`, `read_running_config`, `read_container_logs`, `search_logs`, `read_env_config`, `query_subscriber`, `OntologyConsultationAgent`
+`measure_rtt`, `check_process_listeners`, `get_nf_metrics`, `get_dp_quality_gauges`, `get_network_status`, `run_kamcmd`, `read_running_config`, `read_container_logs`, `search_logs`, `read_env_config`, `query_subscriber`, `OntologyConsultationAgent`
+
+**There is no raw-PromQL tool.** Use `get_nf_metrics` for a KB-annotated snapshot of every NF, or `get_dp_quality_gauges` for pre-computed data-plane rates. Both tools are KB-backed — every returned metric carries its `[type, unit]` tag and, when covered, a one-line meaning. You do not need to know (or guess) Prometheus metric names.
 
 Do NOT invent other tool names. If your plan implies a probe the tools can't execute directly, use the closest available tool and note the substitution in your observation.
 
@@ -75,7 +77,7 @@ Apply the same reasoning to any probe whose result mixes two components' health:
 
 When a tool returns "no data", "no matches", "metric not found", or an empty result, DO NOT infer absence of the underlying phenomenon without evidence that the tool would have found it if it were present. In particular:
 
-  - `query_prometheus` returning "metric may not exist or have no data" is ambiguous — the metric may simply not be exported in this stack. Prefer a cross-check against a tool whose presence/absence semantics are unambiguous (container logs, `get_network_status`, direct config reads).
+  - If `get_nf_metrics` does not include a metric you expected, that is equally consistent with "the NF doesn't export it" and "the feature is omitted because its underlying counter didn't advance in the window." Cross-check with a tool whose presence/absence semantics are unambiguous (container logs, `get_network_status`, direct config reads) before concluding anything from a missing metric.
   - `search_logs` returning no matches for a pattern only rules out that specific pattern. A truly failing component usually surfaces *some* error somewhere — if every log is clean, treat that as evidence the hypothesized failure mode is wrong, not as evidence of "too broken to log".
   - Low activity (low absolute throughput, low request rate) does NOT prove local drops or internal fault — it is equally consistent with upstream starvation. Verify the upstream is actually sending work before concluding the downstream is losing it.
 

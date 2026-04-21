@@ -777,30 +777,19 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     lines.append(f"Observation iterations: {len(observations)}")
     lines.append("")
 
-    # Collect notable log samples and metrics deltas
-    all_logs: dict[str, list[str]] = {}
-    all_deltas: dict[str, dict] = {}
-    for obs in observations:
-        for container, log_lines in obs.get("log_samples", {}).items():
-            all_logs.setdefault(container, []).extend(log_lines)
-        for node, delta in obs.get("metrics_delta", {}).items():
-            all_deltas.setdefault(node, {}).update(delta)
-
-    if all_deltas:
-        lines.append("### Metrics Changes")
-        lines.append("")
-        lines.append("| Node | Metric | Baseline | Current | Delta |")
-        lines.append("|------|--------|----------|---------|-------|")
-        for node, deltas in sorted(all_deltas.items()):
-            for metric, vals in deltas.items():
-                b = vals.get("baseline", "?")
-                c = vals.get("current", "?")
-                d = vals.get("delta", "?")
-                lines.append(f"| {node} | {metric} | {b} | {c} | {d} |")
-        lines.append("")
-
     # Notable log lines omitted from report — they contain stale logs
     # from previous runs and are not useful for diagnosis evaluation.
+    #
+    # The per-observation "Metrics Changes" table was also removed: its
+    # `baseline` column came from the chaos `BaselineCollector`'s single
+    # cold-start snapshot (captured before the observation traffic agent
+    # ran any calls/registers), so Kamailio and RTPEngine counters were
+    # 0 at baseline regardless of fault state. The resulting table was a
+    # workload delta, not a fault delta, and actively misled both human
+    # readers and the agent's reasoning (e.g. reading "0 → 2 dialogs" as
+    # a signaling fault instead of "synthetic traffic just started"). The
+    # legitimate fault signal lives in Phase 0's anomaly screener, which
+    # uses its own learned-healthy baseline from training snapshots.
 
     # Pipeline intermediate state. v5 and v6 have genuinely different phase
     # layouts (v5 has 6 phases, v6 has 8 with Events + Correlation added

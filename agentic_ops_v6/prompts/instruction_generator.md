@@ -36,15 +36,16 @@ The orchestrator will spawn one parallel Investigator sub-agent per plan. Each s
 | `read_container_logs(container, grep, since)` | Read container logs, optionally filtered |
 | `search_logs(container, pattern)` | Regex search container logs |
 | `run_kamcmd(container, command)` | Run a Kamailio management command |
-| `get_nf_metrics(component)` | Fetch Prometheus/kamcmd metrics for a component |
-| `get_dp_quality_gauges(window)` | Fetch RTPEngine + UPF data-plane quality |
+| `get_nf_metrics()` | KB-annotated snapshot of every NF's live metrics, with `[type, unit]` tags and per-metric meaning — use this for "what's the current value of X?" probes |
+| `get_dp_quality_gauges(window_seconds)` | Pre-computed RTPEngine + UPF data-plane rates (packets/sec, KB/s, MOS, loss, jitter) over a sliding window |
 | `get_network_status()` | Container running/exited status |
 | `read_running_config(container)` | Active config file |
 | `read_env_config()` | Network env variables |
 | `check_process_listeners(container)` | Listening ports |
-| `query_prometheus(query)` | Raw PromQL |
 | `query_subscriber(imsi)` | PyHSS subscriber lookup |
 | `OntologyConsultationAgent(question)` | Consult the ontology for causal chains, log interpretations |
+
+**There is no raw-PromQL tool.** The Investigator has no way to hand-craft Prometheus queries. If your plan needs a metric value, write it as `get_nf_metrics()` + note the metric name — the Investigator will get the KB-annotated value. If you need a data-plane *rate*, use `get_dp_quality_gauges`.
 
 If a probe you'd like to run has no matching tool, express it via the closest available tool. Do not invent tool names.
 

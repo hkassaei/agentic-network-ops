@@ -256,9 +256,17 @@ metrics:
         protocol: GTP-U
         interface: N3
         plane: user
+        raw_sources:
+          - fivegs_ep_n3_gtp_indatapktn3upf
         description: |
           Per-UE rate of GTP-U packets arriving at the UPF from gNB on N3
           (uplink). Sliding 30-second window rate divided by attached UE count.
+          The underlying raw Prometheus counter `fivegs_ep_n3_gtp_indatapktn3upf`
+          is a lifetime cumulative total — its absolute value carries
+          accumulated UERANSIM keepalive noise across the container's
+          entire uptime and is NOT a current rate. Use this derived
+          per-UE form (or the screener's anomaly flag on it) for current
+          activity reasoning.
         meaning:
           what_it_signals: |
             Health of the uplink user-plane path gNB → UPF. Drops to near-zero
@@ -310,9 +318,16 @@ metrics:
         protocol: GTP-U
         interface: N3
         plane: user
+        raw_sources:
+          - fivegs_ep_n3_gtp_outdatapktn3upf
         description: |
           Per-UE rate of GTP-U packets leaving the UPF toward gNB on N3
-          (downlink).
+          (downlink). The underlying raw Prometheus counter
+          `fivegs_ep_n3_gtp_outdatapktn3upf` is a lifetime cumulative
+          total; its ratio against `fivegs_ep_n3_gtp_indatapktn3upf`
+          reflects accumulated traffic-pattern asymmetry, not current
+          packet loss. Use this derived per-UE form to reason about
+          current downlink health.
         meaning:
           what_it_signals: |
             Health of the downlink user-plane path UPF → gNB. Typically mirrors
@@ -479,6 +494,8 @@ metrics:
         protocol: SIP
         interface: Gm
         plane: control
+        raw_sources:
+          - core:rcv_requests_register
         description: |
           Sliding-window rate of SIP REGISTER requests arriving at the P-CSCF
           from UEs. Normalized per UE for scale invariance.
@@ -531,6 +548,8 @@ metrics:
         protocol: SIP
         interface: Gm
         plane: control
+        raw_sources:
+          - core:rcv_requests_invite
         description: |
           Sliding-window rate of SIP INVITEs arriving at the P-CSCF.
           INVITEs mark call-setup attempts.
@@ -583,6 +602,9 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        raw_sources:
+          - script:register_time
+          - script:register_success
         description: |
           Computed as rate(pcscf.script:register_time) / rate(pcscf.core:rcv_requests_register)
           over a 30-second sliding window — i.e. average script-processing time
@@ -672,6 +694,11 @@ metrics:
         protocol: SIP
         interface: Gm
         plane: control
+        raw_sources:
+          - sl:4xx_replies
+          - sl:5xx_replies
+          - sl:200_replies
+          - sl:1xx_replies
         description: |
           (4xx + 5xx replies) / (1xx + 200 + 4xx + 5xx replies) over a rolling
           window at the P-CSCF. Zero during healthy operation.

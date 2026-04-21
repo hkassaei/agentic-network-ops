@@ -2,7 +2,11 @@
 
 # Network diagnostic tools
 from .topology import get_network_topology
-from .metrics import get_nf_metrics, query_prometheus
+# query_prometheus is intentionally NOT re-exported at this level. It is
+# retained in `metrics.py` for internal callers (tests / bespoke tooling)
+# but agents must use `get_nf_metrics` or `get_dp_quality_gauges`, which
+# are KB-annotated and impervious to metric-name hallucination.
+from .metrics import get_nf_metrics
 from .container_status import get_network_status
 from .log_search import read_container_logs, search_logs
 from .reachability import measure_rtt, check_process_listeners, check_tc_rules
@@ -20,7 +24,7 @@ from .vonr_scope import get_vonr_components
 
 __all__ = [
     "get_network_topology",
-    "get_nf_metrics", "query_prometheus",
+    "get_nf_metrics",
     "get_network_status",
     "read_container_logs", "search_logs",
     "measure_rtt", "check_process_listeners", "check_tc_rules",

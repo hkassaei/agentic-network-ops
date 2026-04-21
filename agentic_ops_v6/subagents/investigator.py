@@ -40,10 +40,11 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
         output_key="investigator_verdict",
         output_schema=InvestigatorVerdict,
         tools=[
-            # All diagnostic tools
+            # All diagnostic tools. `query_prometheus` is intentionally
+            # absent — agents must use `get_nf_metrics` / `get_dp_quality_gauges`
+            # which are KB-annotated and cannot return hallucinated names.
             tools.measure_rtt,
             tools.check_process_listeners,
-            tools.query_prometheus,
             tools.get_nf_metrics,
             tools.get_dp_quality_gauges,
             tools.get_network_status,

@@ -98,7 +98,22 @@ Each flag in the Phase 0 anomaly report has been enriched with KB context: **Wha
 - Do NOT invent specific failure rates that the flags don't report. If your hypothesis references "50% Diameter failures" or "95% packet drop," there MUST be a corresponding flag (or explicit metric retrieval) showing that figure. Don't fabricate magnitudes.
 - Match each flag to at most one hypothesis. Flags clustering on the same NF are a strong signal the NF itself is the fault source — see principle 7.
 
-### 7. The observing NF can be the fault source
+### 7. Never compare two cumulative counters as a rate
+
+`get_nf_metrics` annotates every returned value with a `[type, ...]` tag. A `[counter]` value is a **monotonic lifetime total** accumulated since the container's last start. Its absolute value carries accumulated test-traffic noise (UERANSIM keepalives, prior healthy runs, etc.) and is NOT a current rate.
+
+**Forbidden reasoning:** *"Counter A = 9348 and counter B = 294; that's 32× asymmetry so 97% is being dropped."* Two cumulative counter values DO NOT form a rate. The asymmetry you see is lifetime noise, not a live fault.
+
+When you want to reason about current rate, ratio, or asymmetry:
+
+  - Use the **anomaly screener's enriched flags** (Phase 0). They already give you the per-UE rate, the healthy baseline, and the KB's meaning for the deviation.
+  - Use the **`[derived]` or `[ratio]` entries** in `get_nf_metrics` — those are already per-window rates / proportions.
+  - Use **`get_dp_quality_gauges`** for pre-computed pps / KB/s / MOS on the data plane.
+  - If the KB entry for a raw counter says *"see KB: `<other_id>`"*, go read that derived entry — that's the diagnostic unit.
+
+If your only evidence for a hypothesis is a ratio between two `[counter]` values, that hypothesis is not supported — the ratio is noise. Reframe using one of the sources above.
+
+### 8. The observing NF can be the fault source
 
 If the most degraded metrics cluster on one NF — e.g. its own processing-time, its own error-ratio, and its own per-UE normalized rates all deviate — the NF itself is a primary hypothesis, not only a passive observer of downstream failures. A latency injection / CPU stall / internal fault on NF X surfaces *through* X's own metrics before it manifests as downstream symptoms.
 

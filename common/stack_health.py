@@ -402,6 +402,36 @@ async def check_stack_health(purpose: str = "operation") -> bool:
     print()
     print(f"The stack must be healthy before {purpose}.")
     print()
+
+    # Non-interactive / batch mode: `CHAOS_AUTO_HEAL=1` auto-selects "a".
+    # The auto-heal runs ONCE; if health metrics are still off afterward,
+    # the pre-check fails (returns False) rather than prompting again or
+    # looping. This keeps batch runs headless and avoids retry storms.
+    import os as _os
+    auto_heal_env = _os.environ.get("CHAOS_AUTO_HEAL", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    if auto_heal_env:
+        log.info("CHAOS_AUTO_HEAL is set — attempting auto-heal non-interactively")
+        healed = await auto_heal_stack()
+        if not healed:
+            log.error("Pre-check: auto-heal failed (CHAOS_AUTO_HEAL mode) — aborting scenario")
+            return False
+        health2 = await collect_health_metrics()
+        still_bad = []
+        for metric, check in HEALTH_CHECKS.items():
+            actual = health2.get(metric)
+            if actual != check["expected"]:
+                still_bad.append(f"  {metric}: {actual} (expected {check['expected']})")
+        if still_bad:
+            log.error(
+                "Pre-check: auto-heal left stack unhealthy (CHAOS_AUTO_HEAL mode) — aborting scenario:\n%s",
+                "\n".join(still_bad),
+            )
+            return False
+        log.info("Pre-check: stack healthy after auto-heal ✓")
+        return True
+
     print("Options:")
     print("  [a] Auto-heal: redeploy UEs and wait for registration")
     print("  [s] Skip: proceed anyway (results may be unreliable)")

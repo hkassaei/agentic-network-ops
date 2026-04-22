@@ -40,9 +40,15 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
         output_key="investigator_verdict",
         output_schema=InvestigatorVerdict,
         tools=[
-            # All diagnostic tools. `query_prometheus` is intentionally
-            # absent — agents must use `get_nf_metrics` / `get_dp_quality_gauges`
-            # which are KB-annotated and cannot return hallucinated names.
+            # All diagnostic tools. Two tools are intentionally absent:
+            #   - `query_prometheus`: removed per ADR kb_backed_tool_outputs_and_no_raw_promql.md
+            #     (agents use `get_nf_metrics` / `get_dp_quality_gauges` instead,
+            #     which are KB-annotated and cannot return hallucinated names).
+            #   - `read_container_logs` / `search_logs`: removed per ADR
+            #     remove_log_probes_from_investigator.md (agent-authored grep
+            #     patterns are unreliable and "no matches" is mis-read as
+            #     strong contradicting evidence; the recurring mongodb_gone
+            #     mis-diagnoses traced directly to this).
             tools.measure_rtt,
             tools.check_process_listeners,
             tools.get_nf_metrics,
@@ -50,15 +56,13 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
             tools.get_network_status,
             tools.run_kamcmd,
             tools.read_running_config,
-            tools.read_container_logs,
-            tools.search_logs,
             tools.read_env_config,
             tools.query_subscriber,
             # Flow tools for mechanism-walk falsification: pull the
             # full flow for the procedure the hypothesis implicates,
             # then step through its `failure_modes` to identify the
-            # exact log line / metric / SIP response code you should
-            # see at each step if the hypothesis is true.
+            # exact metric / SIP response code / container status you
+            # should see at each step if the hypothesis is true.
             tools.list_flows,
             tools.get_flow,
             tools.get_flows_through_component,

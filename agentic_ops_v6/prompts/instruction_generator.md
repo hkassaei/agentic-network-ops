@@ -43,8 +43,6 @@ Use these before writing probes for any hypothesis. They are cheap and they anch
 | Tool | What it does |
 |---|---|
 | `measure_rtt(from, to_ip)` | Ping from a container to an IP — detects latency and packet loss |
-| `read_container_logs(container, grep, since)` | Read container logs, optionally filtered |
-| `search_logs(container, pattern)` | Regex search container logs |
 | `run_kamcmd(container, command)` | Run a Kamailio management command |
 | `get_nf_metrics()` | KB-annotated snapshot of every NF's live metrics, with `[type, unit]` tags and per-metric meaning — use this for "what's the current value of X?" probes |
 | `get_dp_quality_gauges(window_seconds)` | Pre-computed RTPEngine + UPF data-plane rates (packets/sec, KB/s, MOS, loss, jitter) over a sliding window |
@@ -56,6 +54,8 @@ Use these before writing probes for any hypothesis. They are cheap and they anch
 | `OntologyConsultationAgent(question)` | Consult the ontology for causal chains, log interpretations |
 
 **There is no raw-PromQL tool.** The Investigator has no way to hand-craft Prometheus queries. If your plan needs a metric value, write it as `get_nf_metrics()` + note the metric name — the Investigator will get the KB-annotated value. If you need a data-plane *rate*, use `get_dp_quality_gauges`.
+
+**There are no log-search tools** (`read_container_logs`, `search_logs` — removed per ADR `remove_log_probes_from_investigator.md`). Do not propose probes that grep logs for patterns. Agent-authored grep patterns repeatedly missed what components actually log, and the absence of matches was misread as strong contradicting evidence. For "X is failing, show me an error" probes, reach for structured observations instead: `get_nf_metrics` for counter/gauge effects of the failure, `get_network_status` for container state, `run_kamcmd` for Kamailio runtime state, `check_process_listeners` for listening ports.
 
 If a probe you'd like to run has no matching tool, express it via the closest available tool. Do not invent tool names.
 

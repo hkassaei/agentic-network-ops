@@ -8,6 +8,12 @@ from .topology import get_network_topology
 # are KB-annotated and impervious to metric-name hallucination.
 from .metrics import get_nf_metrics
 from .container_status import get_network_status
+# read_container_logs / search_logs are intentionally NOT re-exported at this
+# level. They are retained in `log_search.py` for non-agent callers (scripts,
+# tests) but removed from agent-facing toolsets in the v6 pipeline per ADR
+# remove_log_probes_from_investigator.md — agent-authored grep patterns
+# were repeatedly unreliable and empty log searches were mis-read as
+# strong-negative evidence.
 from .log_search import read_container_logs, search_logs
 from .reachability import measure_rtt, check_process_listeners, check_tc_rules
 from .config_inspection import read_config, read_running_config, read_env_config
@@ -27,7 +33,6 @@ __all__ = [
     "get_network_topology",
     "get_nf_metrics",
     "get_network_status",
-    "read_container_logs", "search_logs",
     "measure_rtt", "check_process_listeners", "check_tc_rules",
     "read_config", "read_running_config", "read_env_config",
     "run_kamcmd",

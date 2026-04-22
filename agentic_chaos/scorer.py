@@ -80,35 +80,75 @@ whether it said "container was killed."
 You will receive:
 1. SIMULATED FAILURE — what failure mode was being simulated and what the agent
    should have been able to observe
-2. AGENT DIAGNOSIS — the agent's raw output (this is what you are evaluating)
+2. AGENT DIAGNOSIS — the agent's FINAL diagnosis, produced by the Synthesis
+   agent after all investigation. This is the operator-facing output and is
+   the AUTHORITATIVE artifact for scoring. It contains a `causes` block with
+   `summary`, `root_cause`, `affected_components`, `confidence`, and
+   `explanation` fields.
+3. AGENT NETWORK ANALYSIS (optional) — the pipeline's intermediate Phase-3
+   output, which contains a layer-status table. This is REASONING, not
+   CONCLUSION. Use it ONLY for the `layer_accuracy` dimension. Do NOT use it
+   to infer `root_cause_correct`, `component_overlap`, `severity_correct`,
+   `fault_type_identified`, `confidence_calibrated`, or `ranking_position` —
+   for all of those, evaluate strictly against the final AGENT DIAGNOSIS.
+
+   Why this matters: an agent may correctly identify the right cause in
+   Phase-3 reasoning and then walk it back to a different (wrong) conclusion
+   in its final diagnosis. The operator only sees the final diagnosis. If the
+   final `causes.root_cause` disagrees with what `NETWORK ANALYSIS` suggested,
+   score the final diagnosis — not the intermediate reasoning.
 
 Score the diagnosis on these dimensions:
 
 ## Scoring Dimensions
 
 1. **root_cause_correct** (bool): Did the agent identify the simulated failure
-   mode as the root cause? Semantic equivalence counts — the agent doesn't need
-   to use the exact same words. Accept any diagnosis that describes the same
-   observable failure from the network's perspective.
+   mode as the root cause? Evaluate strictly against the **final AGENT DIAGNOSIS**
+   — specifically the `causes.root_cause` field, supported by
+   `causes.summary` and `causes.explanation`. Do NOT score True based on what
+   the NETWORK ANALYSIS section said; that's intermediate reasoning, not the
+   agent's conclusion.
 
-   Examples of EQUIVALENT diagnoses for "radio link failure":
+   Semantic equivalence counts — the agent doesn't need to use the exact same
+   words. Accept any conclusion that describes the same observable failure
+   from the network's perspective.
+
+   Examples of EQUIVALENT final diagnoses for "radio link failure":
    - "RAN is unreachable" ✓
    - "N2 connectivity loss between gNB and AMF" ✓
    - "gNB not responding, 100% packet loss" ✓
    - "Transport failure on N2 path" ✓
    - "gNB container killed" ✓ (more specific than needed, but correct)
 
-   Examples of WRONG diagnoses:
+   Examples of WRONG final diagnoses:
    - "I-CSCF misconfiguration" ✗ (wrong component, wrong failure mode)
    - "HSS subscriber profile incomplete" ✗ (unrelated)
 
-   If the agent listed multiple candidates, the correct cause must be ranked
-   as the primary/top candidate to score True.
+   **Walk-back test.** If the NETWORK ANALYSIS section said cause X but the
+   final `causes.root_cause` section said cause Y (Y ≠ X), and Y is wrong,
+   score **False** — the agent walked back its correct reasoning to a wrong
+   conclusion. The operator-facing output is what matters.
+
+   **Multiple candidates in the final diagnosis.** If the `causes` block
+   itself lists multiple candidates (e.g. two root causes, or `root_cause`
+   names one NF while `affected_components` lists a different NF as "Root
+   Cause"), the correct cause must be named as the PRIMARY root cause to
+   score True. Ties, ambiguity, or "root cause is undetermined" are scored
+   False even if the correct NF appears elsewhere in the block.
 
 2. **component_overlap** (float 0.0-1.0): Did the agent correctly identify
-   the affected component(s)? Score 1.0 if the primary affected component is
-   named. Do NOT penalize for also listing cascading/downstream components —
-   that shows correct causal reasoning.
+   the affected component(s)? Evaluate against the final AGENT DIAGNOSIS's
+   `causes.affected_components` list. Score 1.0 if the primary affected
+   component is listed as **"Root Cause"** in that list (not merely as
+   "Secondary", "Symptomatic", or "Symptom"). Do NOT penalize for also
+   listing cascading/downstream components — that shows correct causal
+   reasoning.
+
+   If the primary affected component appears in `affected_components` only
+   as "Symptomatic" / "Secondary" while a different NF is labeled "Root
+   Cause", score proportionally (e.g. 0.3) — the agent saw the component
+   was involved but mis-ranked the causal role. Do NOT award 1.0 in that
+   case just because the NF name appears somewhere in the block.
 
 3. **severity_correct** (bool): Did the agent's severity assessment match the
    actual impact? A complete outage (container killed, network partitioned) =
@@ -127,10 +167,12 @@ Score the diagnosis on these dimensions:
 5. **layer_accuracy** (bool): Did the agent correctly attribute the affected
    component(s) to their correct ontology layer in the layer status assessment?
 
-   Each component belongs to a specific layer per the network ontology. The
-   ground truth section below specifies each affected component's ontology
-   layer. The agent's NETWORK ANALYSIS section (if provided) contains a layer
-   status table with ratings per layer.
+   This is the ONLY dimension where the NETWORK ANALYSIS section is an
+   authoritative input — layer ratings live there, not in the final
+   `causes` block. Each component belongs to a specific layer per the
+   network ontology. The ground truth section below specifies each affected
+   component's ontology layer. The NETWORK ANALYSIS section contains a
+   layer-status table with ratings per layer.
 
    Score True if EITHER:
    - The agent's layer ratings correctly place the primary affected
@@ -294,7 +336,12 @@ async def score_diagnosis(
 
     if network_analysis:
         user_message += (
-            f"\n\n## AGENT NETWORK ANALYSIS (layer status)\n\n{network_analysis}"
+            "\n\n## AGENT NETWORK ANALYSIS (for layer_accuracy ONLY)\n\n"
+            "This is intermediate Phase-3 reasoning, NOT the agent's final\n"
+            "diagnosis. Use it ONLY for the `layer_accuracy` dimension. For\n"
+            "`root_cause_correct`, `component_overlap`, and all other\n"
+            "dimensions, score against the AGENT DIAGNOSIS above.\n\n"
+            f"{network_analysis}"
         )
 
     try:

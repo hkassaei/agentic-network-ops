@@ -19,6 +19,7 @@ from .symptom_matching import match_symptoms, check_stack_rules, compare_to_base
 from .log_interpretation import interpret_log_message
 from .health_checks import check_component_health, get_disambiguation
 from .causal_reasoning import get_causal_chain, get_causal_chain_for_component
+from .flows import list_flows, get_flow, get_flows_through_component
 from .data_plane import get_dp_quality_gauges
 from .vonr_scope import get_vonr_components
 
@@ -35,6 +36,7 @@ __all__ = [
     "interpret_log_message",
     "check_component_health", "get_disambiguation",
     "get_causal_chain", "get_causal_chain_for_component",
+    "list_flows", "get_flow", "get_flows_through_component",
     "get_dp_quality_gauges",
     "get_vonr_components",
 ]

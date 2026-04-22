@@ -575,8 +575,19 @@ causal_chains:
   # =========================================================================
 
   subscriber_data_store_unavailable:
-    description: "5G subscriber data store (MongoDB) unavailable. New session creation fails."
-    affected_interface: "UDR → MongoDB"
+    description: |
+      5G subscriber data store (MongoDB) unavailable. The UDR loses its
+      backend; every NF that reaches subscriber data through UDR
+      (UDM, PCF) is starved. In this 5G + IMS deployment the highest-
+      impact consequence is NOT the direct 5G PDU-session failure path
+      but a two-hop cascade that fails IMS VoNR at the P-CSCF: mongo
+      down → UDR blind → PCF cannot fetch subscriber policy → P-CSCF's
+      N5 App Session Create request to PCF (via SCP) returns non-201 →
+      P-CSCF calls send_reply("412", "Register N5 QoS authorization
+      failed") → every INVITE (and every REGISTER's N5 authorization
+      on the reply path) is rejected → pcscf_sip_error_ratio → 1.00
+      on every call setup attempt.
+    affected_interface: "UDR → MongoDB (primary), with cascading impact on PCF Npcf and P-CSCF N5"
     affected_protocol: MongoDB
     failure_domain: infrastructure
     severity: degraded
@@ -590,22 +601,114 @@ causal_chains:
 
     observable_symptoms:
       immediate:
+        - symptom: "mongo container in 'exited' / 'stopped' state"
+          source: get_network_status
+        - symptom: "Multiple NFs show inactive links to MongoDB in topology"
+          source: get_network_topology
+          affected: [udr, udm, pcf]
         - log: "MongoDB connection error"
           at: udr
+
       cascading:
-        - condition: "new PDU session creation"
-          effect: "UDR cannot query subscriber data, SMF session creation fails"
-        - condition: "existing sessions"
-          effect: "May survive briefly (cached state) but new operations fail"
+        # --- Branch A: 5G PDU session creation (Open5GS SMF → PCF → UDR) ---
+        # Open5GS SMF has local default policy fallback, so the PDU session
+        # typically still comes up; the real visibility is in the PCF-side
+        # metrics stalling.
+        - branch: "smf_pdu_session"
+          condition: "New PDU session creation on the 5G core"
+          effect: |
+            SMF's Npcf_SMPolicyControl_Create call to PCF cannot be
+            fully authorized because PCF can't fetch subscriber data
+            from UDR. Open5GS SMF falls back to local default policy,
+            so the PDU session still establishes — but with whatever
+            local policy the SMF has, not the subscriber-specific one.
+          mechanism: "mongo dead → UDR blind → PCF Npcf_SMPolicyControl returns error or empty policy → SMF local-fallback"
+          source_steps:
+            - pdu_session_establishment.step_3
+          observable_metrics:
+            - fivegs_pcffunction_pa_policysmassoreq
+            - fivegs_pcffunction_pa_policysmassosucc  # will diverge from _req
+            - fivegs_pcffunction_pa_sessionnbr
+
+        # --- Branch B: IMS VoNR call setup (P-CSCF → PCF via N5) ---
+        # This is the dominant branch. N5 is a gate on INVITE forwarding,
+        # so every call attempt fails.
+        - branch: "pcscf_n5_call_setup"
+          condition: "Any VoNR INVITE — originating or terminating"
+          effect: |
+            P-CSCF's route[N5_INIT_REQ] (originating) or
+            route[N5_INIT_MT_REQ] (terminating) POSTs to
+            /npcf-policyauthorization/v1/app-sessions at PCF via SCP.
+            PCF cannot fetch subscriber policy from UDR (UDR's backend
+            is down), so it returns non-201. P-CSCF calls
+            send_reply("412", "Register N5 QoS authorization failed")
+            and stops forwarding the INVITE upstream. The call never
+            reaches the S-CSCF or UE2.
+          mechanism: "mongo dead → UDR blind → PCF returns non-201 on N5 POST → P-CSCF sends SIP 412 on every INVITE"
+          source_steps:
+            - vonr_call_setup.step_2   # orig N5 App Session Create
+            - vonr_call_setup.step_9   # term N5 App Session Create
+          observable_metrics:
+            - derived.pcscf_sip_error_ratio  # → 1.00
+            - fivegs_pcffunction_pa_policyamassoreq  # keeps incrementing (requests)
+            - fivegs_pcffunction_pa_policyamassosucc  # does NOT increment (no successes)
+            - httpclient:connfail  # at P-CSCF
+          discriminating_from: "If PCF is up but the N5 payload is the issue, _policyamassoreq still increments; if PCF itself is unreachable, httpclient:connfail spikes first."
+
+        # --- Branch C: IMS registration (P-CSCF N5 on REGISTER reply) ---
+        # N5 for REGISTER is triggered on the reply path, but a non-201
+        # still causes send_reply("412",…) — so registration effectively
+        # fails even though UAR/MAR/SAR all succeeded upstream.
+        - branch: "pcscf_n5_registration"
+          condition: "New IMS REGISTER (or re-registration) at P-CSCF"
+          effect: |
+            After the 200 OK from S-CSCF reaches P-CSCF, the reply
+            handler runs route[N5_REG_PCF_POLICY_AUTH], which POSTs
+            to PCF via SCP. On non-201, P-CSCF calls
+            send_reply("412", "Register N5 QoS authorization failed")
+            and the UE sees 412 instead of 200. Registration FAILS
+            from the UE's perspective, despite UAR/MAR/SAR all having
+            succeeded.
+          mechanism: "mongo dead → UDR blind → PCF returns non-201 → P-CSCF sends SIP 412 on REGISTER reply"
+          source_steps:
+            - ims_registration.step_9  # N5 App Session Create on REGISTER reply
+          observable_metrics:
+            - derived.pcscf_sip_error_ratio
+            - ims_usrloc_pcscf:registered_contacts  # fails to increment on new REGISTER
+            - script:register_success  # flat despite ongoing attempts
+            - script:register_time  # may still advance (script executes)
+
+        # --- Branch D: HSS (pyhss) Cx interface is UNAFFECTED ---
+        # Important negative claim to suppress the common hallucination
+        # "mongo → HSS → UAR timeouts". PyHSS uses mysql, not mongo.
+        - branch: "hss_cx_unaffected"
+          condition: "Diameter Cx signaling between I/S-CSCF and pyhss"
+          effect: |
+            PyHSS's backend is MySQL (not MongoDB — see
+            components.yaml). UAR / MAR / SAR / LIR exchanges between
+            I-CSCF/S-CSCF and pyhss remain functional. Any claim
+            that "mongo → HSS" is the causal chain is WRONG in this
+            deployment.
+          mechanism: "None — pyhss's data path does not cross mongo"
+          observable_metrics:
+            - ims_icscf:uar_timeouts  # should stay at baseline
+            - ims_auth:mar_timeouts   # should stay at baseline
+            - ims_registrar_scscf:sar_timeouts  # should stay at baseline
 
     diagnostic_approach:
       - tool: get_network_status
-        purpose: "Check database container/process status"
+        purpose: "Confirm mongo container is exited/stopped"
         priority: 1
-      - tool: measure_rtt
-        args: {container: "udr", target_ip: "172.22.0.2"}
-        purpose: "Check connectivity to database"
+      - tool: get_network_topology
+        purpose: "Identify which NFs depend on mongo (expect: udr, udm, pcf — NOT pyhss)"
         priority: 2
+      - tool: get_nf_metrics
+        purpose: "Check pcscf_sip_error_ratio and fivegs_pcffunction_pa_policyamasso* to detect the PCF-via-UDR branch; check ims_icscf:uar_timeouts to rule out the (false) HSS branch"
+        priority: 3
+      - tool: query_subscriber
+        args: {imsi: "<any_provisioned_imsi>"}
+        purpose: "Returns core_5g=null (5G core subscriber lookup fails via mongo) AND ims_subscriber={…} (IMS subscriber lookup succeeds via mysql). The split result confirms pyhss is independent of mongo."
+        priority: 4
 
   dns_resolution_failure:
     description: "IMS DNS resolution broken. Domain-based SIP routing fails."

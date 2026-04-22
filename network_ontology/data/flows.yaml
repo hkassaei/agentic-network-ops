@@ -9,6 +9,17 @@
 #   - GUI flow visualization (animated step-through)
 #   - RCA agents (mapping failures to specific steps in a procedure)
 #   - Learning tool (understanding how the network works)
+#
+# Authoring discipline (per ADR flow-based-causal-chain-reasoning.md):
+#   Every step must reflect what the code in this repo ACTUALLY does,
+#   not an idealized 3GPP sequence. Deployment-specific compile flags
+#   matter: WITH_RX is DISABLED and WITH_N5 is ENABLED in 5G mode
+#   (see network/pcscf/pcscf_init.sh), so this stack performs policy
+#   authorization via N5 (HTTP/2 SBI via SCP), not Diameter Rx.
+#   `failure_modes` must enumerate the actual error branches the code
+#   takes, not textbook fallbacks (e.g. our P-CSCF does
+#   dlg_terminate / send_reply 412 on policy failure, not "fall back
+#   to default bearer").
 
 flows:
 
@@ -296,43 +307,27 @@ flows:
 
       - order: 3
         from: pcscf
-        to: nrf
-        via: [scp]
-        protocol: SBI
-        interface: Nnrf
-        label: "Discover PCF for Rx policy"
-        description: "P-CSCF queries NRF via SCP to find the PCF instance for QoS policy."
-        detail: |
-          The P-CSCF needs to establish an Rx session with the PCF for
-          QoS policy decisions (dedicated bearers for voice). It discovers
-          the PCF by querying the NRF through the SCP using HTTP/2 SBI.
-          The SCP acts as the central message router for all SBI traffic.
-        failure_modes:
-          - "SCP latency → httpclient:connfail spikes at P-CSCF"
-          - "NRF down → P-CSCF cannot discover PCF"
-          - "SCP_BIND_IP placeholder not resolved → connection to invalid address"
-        metrics_to_watch:
-          - "httpclient:connfail"
-          - "httpclient:connok"
-
-      - order: 4
-        from: pcscf
         to: icscf
         protocol: SIP
         interface: Mw
         label: "Forward REGISTER to I-CSCF"
         description: "P-CSCF forwards the SIP REGISTER to the I-CSCF for routing into the IMS core."
         detail: |
-          The P-CSCF identifies the home network from the user's IMPU
-          (IMS Public User Identity) and forwards the REGISTER to the
-          I-CSCF, the entry point to the IMS core. The I-CSCF's address
-          is resolved via DNS NAPTR/SRV records.
+          The P-CSCF calls pcscf_save_pending to track the pending contact,
+          then forwards the REGISTER to the I-CSCF, the entry point to the
+          IMS core. The I-CSCF's container address is resolved via DNS
+          (icscf.ims.mnc...3gppnetwork.org → container IP).
+          In this 5G deployment WITH_RX is compiled out, so no Rx-AAR
+          runs before forwarding — the legacy "authorize signaling bearer
+          before forward" path does not execute. N5 policy authorization
+          for the signaling session is created later, on the 200 OK reply
+          (see step 8).
         failure_modes:
           - "I-CSCF unreachable → SIP transaction timeout (408)"
           - "DNS failure → P-CSCF cannot resolve I-CSCF address"
           - "Network partition → Mw SIP path severed"
 
-      - order: 5
+      - order: 4
         from: icscf
         to: pyhss
         protocol: Diameter
@@ -340,21 +335,22 @@ flows:
         label: "UAR — Find assigned S-CSCF"
         description: "I-CSCF sends Diameter UAR to HSS to find which S-CSCF serves this user."
         detail: |
-          The I-CSCF sends a User-Authorization-Request (UAR) to the HSS
-          over the Cx Diameter interface. The HSS checks if the user exists
-          and returns the assigned S-CSCF address (or assigns one if this
-          is the first registration). The UAR/UAA exchange is the first
-          Diameter operation in the registration flow.
+          The I-CSCF calls I_perform_user_authorization_request, which
+          sends a User-Authorization-Request (UAR) to the HSS over the
+          Cx Diameter interface. The HSS checks if the user exists and
+          returns the assigned S-CSCF address (or assigns one if this is
+          the first registration). On UAR failure the I-CSCF responds
+          with SIP 500 (`Server error on SCSCF Select (UAR)` or similar).
         failure_modes:
-          - "HSS unreachable → ims_icscf:uar_timeouts increments"
+          - "HSS unreachable → ims_icscf:uar_timeouts increments, I-CSCF returns SIP 500"
           - "HSS overloaded/slow → cdp:timeout increments"
-          - "Diameter I_Open display artifact (benign — ignore if traffic flows)"
+          - "User unknown at HSS → I-CSCF executes route[UAR_USER_UNKNOWN] and returns 403/404"
         metrics_to_watch:
           - "ims_icscf:uar_timeouts"
           - "ims_icscf:uar_avg_response_time"
           - "cdp:timeout"
 
-      - order: 6
+      - order: 5
         from: icscf
         to: scscf
         protocol: SIP
@@ -366,49 +362,56 @@ flows:
           forwards the SIP REGISTER to the S-CSCF. The S-CSCF is the
           core registrar and call controller for this user.
 
+      - order: 6
+        from: scscf
+        to: pyhss
+        protocol: Diameter
+        interface: Cx
+        label: "MAR — Challenge the UE"
+        description: "S-CSCF sends Diameter MAR to HSS, then challenges the UE with 401."
+        detail: |
+          On the first REGISTER, the S-CSCF calls ims_www_challenge,
+          which sends a Multimedia-Authentication-Request (MAR) to the
+          HSS to retrieve authentication vectors. The module itself then
+          sends a SIP 401 Unauthorized challenge back to the UE via the
+          I-CSCF and P-CSCF. The UE retries REGISTER with an
+          Authorization header carrying the digest response. In this
+          deployment MD5 Digest auth is used (not IMS-AKA) because
+          pjsua doesn't support IPsec.
+        failure_modes:
+          - "HSS unreachable → ims_auth:mar_timeouts increments; MAR failure → SIP 500 upstream"
+          - "Auth algorithm mismatch → 401/401 loop, UE eventually gives up"
+        metrics_to_watch:
+          - "ims_auth:mar_timeouts"
+          - "ims_auth:mar_avg_response_time"
+
       - order: 7
         from: scscf
         to: pyhss
         protocol: Diameter
         interface: Cx
-        label: "MAR — Authenticate user"
-        description: "S-CSCF sends Diameter MAR to HSS to get authentication vectors."
+        label: "SAR — Register serving CSCF (after UE re-REGISTERs)"
+        description: "On the UE's authenticated REGISTER, S-CSCF sends SAR to HSS and, on success, saves the contact via save()."
         detail: |
-          The S-CSCF sends a Multimedia-Authentication-Request (MAR) to
-          the HSS. The HSS returns authentication vectors. In this
-          deployment, MD5 Digest auth is used (not IMS-AKA) because
-          pjsua doesn't support IPsec. The S-CSCF challenges the UE
-          with a 401 Unauthorized and verifies the digest response.
+          The UE's second REGISTER (carrying the Authorization header)
+          is routed back through P-CSCF → I-CSCF → S-CSCF. The S-CSCF
+          validates the digest and calls save(), which internally sends
+          a Server-Assignment-Request (SAR) to the HSS to bind the user
+          to this S-CSCF instance. The HSS returns the user's service
+          profile (iFC). On SAR success the user is stored in usrloc,
+          accepted_regs increments, and the S-CSCF returns 200 OK.
+          On SAR failure the S-CSCF responds 403.
         failure_modes:
-          - "HSS unreachable → ims_auth:mar_timeouts increments"
-          - "Auth algorithm mismatch (AKA vs MD5) → 401 loop"
-          - "Wrong credentials → ims_registrar_scscf:rejected_regs increments"
-        metrics_to_watch:
-          - "ims_auth:mar_timeouts"
-          - "ims_auth:mar_avg_response_time"
-          - "ims_registrar_scscf:rejected_regs"
-
-      - order: 8
-        from: scscf
-        to: pyhss
-        protocol: Diameter
-        interface: Cx
-        label: "SAR — Register serving CSCF"
-        description: "S-CSCF sends Diameter SAR to HSS to register itself as the serving CSCF."
-        detail: |
-          After successful authentication, the S-CSCF sends a
-          Server-Assignment-Request (SAR) to the HSS. This binds the
-          user to this S-CSCF instance. The HSS downloads the user's
-          service profile including the Initial Filter Criteria (iFC)
-          which tells the S-CSCF how to process the user's SIP messages.
-        failure_modes:
-          - "SAR timeout → ims_registrar_scscf:sar_timeouts increments"
+          - "SAR timeout → ims_registrar_scscf:sar_timeouts increments, SIP 500 upstream"
+          - "SAR error → S-CSCF sends 403 Forbidden to the UE"
           - "Missing iFC → S-CSCF logs 'No REGISTER match found in filter criteria'"
         metrics_to_watch:
           - "ims_registrar_scscf:sar_timeouts"
           - "ims_registrar_scscf:sar_avg_response_time"
+          - "ims_registrar_scscf:accepted_regs"
+          - "ims_registrar_scscf:rejected_regs"
 
-      - order: 9
+      - order: 8
         from: scscf
         to: e2e_ue1
         via: [icscf, pcscf]
@@ -418,38 +421,56 @@ flows:
         description: "S-CSCF sends SIP 200 OK back through the signaling chain to the UE."
         detail: |
           The 200 OK propagates back: S-CSCF → I-CSCF → P-CSCF → UE.
-          At this point, the P-CSCF stores the UE's contact
-          (ims_usrloc_pcscf:registered_contacts increments) and the
-          S-CSCF stores the serving assignment
-          (ims_usrloc_scscf:active_contacts increments). The UE is
-          now IMS-registered and can make/receive VoNR calls.
+          At this point, the P-CSCF stores the UE's contact in
+          ims_usrloc_pcscf (registered_contacts increments) and the
+          S-CSCF stores the serving assignment in ims_usrloc_scscf
+          (active_contacts increments).
+          From the UE's perspective, registration is complete. However,
+          the P-CSCF's REGISTER_reply handler still runs the N5 QoS
+          policy authorization before returning (see step 9), and may
+          intercept the 200 OK with a 412 on N5 failure.
         metrics_to_watch:
           - "ims_usrloc_pcscf:registered_contacts"
           - "ims_usrloc_scscf:active_contacts"
           - "ims_registrar_scscf:accepted_regs"
           - "script:register_success"
 
-      - order: 10
+      - order: 9
         from: pcscf
         to: pcf
         via: [scp]
-        protocol: Diameter
-        interface: Rx
-        label: "Request dedicated QoS bearer"
-        description: "P-CSCF sends Rx AAR to PCF via SCP to set up dedicated QoS for IMS signaling."
+        protocol: HTTP/2 SBI
+        interface: N5
+        label: "N5 App Session Create — QoS policy for signaling"
+        description: "On the 200 OK reply, P-CSCF POSTs an N5 app-session to PCF (via SCP) to authorize QoS for the signaling session."
         detail: |
-          After registration, the P-CSCF requests a dedicated QoS flow
-          for the IMS signaling via the Rx interface to the PCF. The PCF
-          creates a policy authorization and pushes it to the SMF via
-          N7, which installs the QoS flow on the UPF via PFCP (N4).
-          This creates the extra bearer visible as bearers_active
-          increasing from 4 to 6 during an active call.
+          Within onreply_route[REGISTER_reply] on a 200 OK with expires>0,
+          the P-CSCF calls route[N5_REG_PCF_POLICY_AUTH], which sends
+          an HTTP/2 POST to the PCF at path
+          /npcf-policyauthorization/v1/app-sessions via SCP
+          (http://SCP_BIND_IP:SCP_BIND_PORT/...). The N5 body carries
+          the UE's IP, the P-CSCF's IP, and a CONTROL medType for the
+          SIP signaling flow. The PCF creates the policy and returns
+          HTTP 201 with the new app-session ID in the Location header,
+          which the P-CSCF stores in imsi_to_app_session_map.
+
+          In 5G mode WITH_RX is compiled out; N5 is the only policy
+          path. Note that even though N5 is triggered on the reply,
+          a non-201 PCF response causes the P-CSCF to call
+          send_reply("412","Register N5 QoS authorization failed") —
+          the UE sees 412, not 200, so registration effectively fails
+          when PCF or its dependencies (UDR → MongoDB) are down.
         failure_modes:
-          - "PCF unreachable → no QoS for voice calls"
-          - "SCP latency → Rx AAR timeout"
+          - "PCF unreachable → N5 HTTP POST times out → P-CSCF sends SIP 412 to UE, pcscf_sip_error_ratio spikes"
+          - "UDR/MongoDB down → PCF cannot fetch subscriber policy → PCF returns error → N5 POST fails → SIP 412"
+          - "SCP down or misconfigured → httpclient:connfail increments, N5 POST fails"
         metrics_to_watch:
+          - "fivegs_pcffunction_pa_policyamassoreq"
+          - "fivegs_pcffunction_pa_policyamassosucc"
           - "fivegs_pcffunction_pa_sessionnbr"
-          - "bearers_active"
+          - "httpclient:connfail"
+          - "httpclient:connok"
+          - "derived.pcscf_sip_error_ratio"
 
     outcome:
       success: "UE is IMS-registered. P-CSCF has contact, S-CSCF has assignment, QoS policy active."
@@ -500,6 +521,43 @@ flows:
 
       - order: 2
         from: pcscf
+        to: pcf
+        via: [scp]
+        protocol: HTTP/2 SBI
+        interface: N5
+        label: "N5 App Session Create (originating) — QoS authorization"
+        description: "Before forwarding the INVITE upstream, P-CSCF POSTs an N5 app-session to PCF via SCP to authorize QoS for the voice media."
+        detail: |
+          In 5G mode (WITH_N5 compiled in, WITH_RX compiled out), the
+          P-CSCF's MO route calls route[N5_INIT_REQ] on every INVITE.
+          This sends an HTTP/2 POST to
+          /npcf-policyauthorization/v1/app-sessions via SCP
+          (http://SCP_BIND_IP:SCP_BIND_PORT/...). The body contains
+          the origiting UE's IP/port and an mmtel service profile.
+          The PCF must authorize the session and return HTTP 201
+          with the new app-session ID in the Location header, which
+          P-CSCF stores in imsi_to_app_session_map for later use.
+
+          **This step gates INVITE forwarding.** If the PCF returns
+          anything other than 201, the P-CSCF calls
+          send_reply("412","Register N5 QoS authorization failed")
+          and exits — the INVITE is never relayed upstream and UE1
+          sees SIP 412. Consequently, any failure in the PCF's data
+          path (e.g. UDR → MongoDB down so PCF cannot fetch subscriber
+          policy) surfaces as 100% SIP error ratio at P-CSCF.
+        failure_modes:
+          - "PCF unreachable → N5 POST times out → P-CSCF sends SIP 412, pcscf_sip_error_ratio spikes"
+          - "UDR/MongoDB down → PCF cannot fetch subscriber policy → non-201 → SIP 412"
+          - "SCP down or misconfigured → httpclient:connfail increments"
+        metrics_to_watch:
+          - "fivegs_pcffunction_pa_policyamassoreq"
+          - "fivegs_pcffunction_pa_policyamassosucc"
+          - "fivegs_pcffunction_pa_sessionnbr"
+          - "httpclient:connfail"
+          - "derived.pcscf_sip_error_ratio"
+
+      - order: 3
+        from: pcscf
         to: rtpengine
         protocol: ng
         interface: ng
@@ -513,9 +571,9 @@ flows:
         failure_modes:
           - "RTPEngine down → no media relay, call may fail or have no audio"
         metrics_to_watch:
-          - "rtpengine:current_sessions"
+          - "rtpengine_sessions"
 
-      - order: 3
+      - order: 4
         from: pcscf
         to: scscf
         protocol: SIP
@@ -523,12 +581,12 @@ flows:
         label: "Forward INVITE to originating S-CSCF"
         description: "P-CSCF forwards the INVITE to the S-CSCF serving UE1 (originating leg)."
         detail: |
-          The P-CSCF looks up the serving S-CSCF for UE1 from its
-          registration data and forwards the INVITE. The S-CSCF
+          After the N5 authorization succeeds and RTPEngine allocates
+          the media relay, the P-CSCF forwards the INVITE. The S-CSCF
           evaluates the Initial Filter Criteria (iFC) for the
           originating user.
 
-      - order: 4
+      - order: 5
         from: scscf
         to: icscf
         protocol: SIP
@@ -540,7 +598,7 @@ flows:
           and sends the INVITE to the I-CSCF, which will look up the
           terminating S-CSCF for UE2.
 
-      - order: 5
+      - order: 6
         from: icscf
         to: pyhss
         protocol: Diameter
@@ -548,18 +606,19 @@ flows:
         label: "LIR — Find terminating S-CSCF"
         description: "I-CSCF sends Diameter LIR to HSS to find which S-CSCF serves UE2."
         detail: |
-          The I-CSCF sends a Location-Info-Request (LIR) to the HSS
-          for the callee's IMPU. The HSS returns the S-CSCF address
-          where UE2 is registered. If UE2 is not registered, the HSS
-          returns an error.
+          The I-CSCF calls I_perform_location_information_request,
+          which sends a Location-Info-Request (LIR) to the HSS for the
+          callee's IMPU. The HSS returns the S-CSCF address where UE2
+          is registered. On LIR error the I-CSCF returns SIP 500
+          (`Server error on LIR select next S-CSCF`).
         failure_modes:
-          - "HSS unreachable → ims_icscf:lir_timeouts increments"
+          - "HSS unreachable → ims_icscf:lir_timeouts increments, SIP 500 upstream"
           - "UE2 not registered → 500 'Server error on LIR select next S-CSCF'"
         metrics_to_watch:
           - "ims_icscf:lir_timeouts"
           - "ims_icscf:lir_avg_response_time"
 
-      - order: 6
+      - order: 7
         from: icscf
         to: scscf
         protocol: SIP
@@ -567,7 +626,7 @@ flows:
         label: "Forward INVITE to terminating S-CSCF"
         description: "I-CSCF forwards the INVITE to the S-CSCF serving UE2."
 
-      - order: 7
+      - order: 8
         from: scscf
         to: pcscf
         protocol: SIP
@@ -579,7 +638,30 @@ flows:
           and forwards the INVITE to the P-CSCF, which will deliver
           it to UE2 via the GTP-U data plane.
 
-      - order: 8
+      - order: 9
+        from: pcscf
+        to: pcf
+        via: [scp]
+        protocol: HTTP/2 SBI
+        interface: N5
+        label: "N5 App Session Create (terminating) — QoS authorization"
+        description: "Before delivering the INVITE to UE2, the terminating P-CSCF POSTs an N5 app-session to PCF via SCP (mirror of step 2)."
+        detail: |
+          The terminating P-CSCF's MT route calls route[N5_INIT_MT_REQ]
+          on every INVITE. Same semantics as the originating side in
+          step 2: POST to /npcf-policyauthorization/v1/app-sessions;
+          on non-201 response, send_reply("412",...) and stop
+          delivery to UE2. Both sides must succeed for the call to
+          progress end-to-end.
+        failure_modes:
+          - "PCF unreachable → N5 POST times out → terminating P-CSCF sends SIP 412, call fails"
+          - "UDR/MongoDB down on terminating side → non-201 → SIP 412"
+        metrics_to_watch:
+          - "fivegs_pcffunction_pa_sessionnbr"
+          - "httpclient:connfail"
+          - "derived.pcscf_sip_error_ratio"
+
+      - order: 10
         from: pcscf
         to: e2e_ue2
         via: [upf, nr_gnb]
@@ -596,46 +678,40 @@ flows:
           - "GTP-U data plane issue → INVITE never reaches UE2"
           - "UE2 not listening → SIP timeout (408)"
 
-      - order: 9
+      - order: 11
         from: e2e_ue2
         to: e2e_ue1
         via: [nr_gnb, upf, pcscf, scscf, icscf, scscf, pcscf, upf, nr_gnb]
         protocol: SIP
         interface: Mw
-        label: "200 OK + ACK — Call established"
-        description: "UE2 answers (200 OK), the response propagates back, UE1 sends ACK."
+        label: "180/183/200 → N5 PATCH → ACK — Call established"
+        description: "UE2's response propagates back; each P-CSCF patches its N5 session with media details; UE1 sends ACK."
         detail: |
-          UE2's 200 OK travels back through the signaling chain to UE1.
-          UE1 sends ACK to confirm. At this point the SIP dialog is
-          established: dialog_ng:active increments at P-CSCF and S-CSCF.
-          The call state changes to CONFIRMED.
+          When UE2's 180/183/200 response carrying SDP reaches a P-CSCF
+          on the return path, the P-CSCF's reply route runs
+          route[N5_PATCH_MT_REQ] on the terminating side and
+          route[N5_PATCH_REQ] on the originating side. These HTTP/2
+          PATCH requests update the existing N5 app-sessions at PCF
+          with the agreed media parameters (ports, codecs) so the PCF
+          can program QoS for the media flow (5QI=1 for conversational
+          voice). On PATCH failure the P-CSCF sends
+          send_reply("412","MOC N5 QoS Session modify faild") and the
+          call fails at this point.
+
+          After both N5 PATCH calls succeed, the 200 OK completes its
+          trip back to UE1, which sends ACK. dialog_ng:active
+          increments at P-CSCF and S-CSCF; the call state is CONFIRMED.
+          bearers_active on the SMF rises from its baseline (typically
+          4 default bearers → 6 with the two voice QoS flows installed).
+        failure_modes:
+          - "PCF issue during PATCH → P-CSCF sends SIP 412 on the reply path, call fails"
+          - "Signaling path latency → 200 OK retransmitted, call may still succeed"
         metrics_to_watch:
           - "dialog_ng:active"
           - "dialog_ng:processed"
-
-      - order: 10
-        from: pcscf
-        to: pcf
-        via: [scp]
-        protocol: Diameter
-        interface: Rx
-        label: "Rx AAR — Dedicated QoS for voice"
-        description: "P-CSCF requests dedicated QoS bearers from PCF for the voice media."
-        detail: |
-          The P-CSCF sends an Rx AA-Request to the PCF for both the
-          originating and terminating legs. The PCF creates policy
-          decisions and pushes them to the SMF, which installs
-          dedicated QoS flows (5QI=1 for conversational voice) on
-          the UPF via PFCP. This is why bearers_active rises from
-          4 to 6 during an active call.
-        failure_modes:
-          - "PCF unreachable → no dedicated QoS, voice uses default bearer"
-          - "SMF/UPF PFCP failure → QoS flow not installed"
-        metrics_to_watch:
           - "bearers_active"
-          - "fivegs_pcffunction_pa_sessionnbr"
 
-      - order: 11
+      - order: 12
         from: e2e_ue1
         to: e2e_ue2
         via: [nr_gnb, upf, rtpengine, upf, nr_gnb]
@@ -656,7 +732,7 @@ flows:
         metrics_to_watch:
           - "fivegs_ep_n3_gtp_indatapktn3upf"
           - "fivegs_ep_n3_gtp_outdatapktn3upf"
-          - "rtpengine:current_sessions"
+          - "rtpengine_sessions"
 
     outcome:
       success: "Voice call is active between UE1 and UE2 with dedicated QoS bearers."
@@ -761,19 +837,26 @@ flows:
         from: pcscf
         to: pcf
         via: [scp]
-        protocol: Diameter
-        interface: Rx
-        label: "Rx STR — Release dedicated QoS"
-        description: "P-CSCF sends Rx Session-Termination to PCF to release the voice QoS bearers."
+        protocol: HTTP/2 SBI
+        interface: N5
+        label: "N5 App Session Delete — Release dedicated QoS"
+        description: "P-CSCF POSTs to .../app-sessions/<id>/delete at PCF (via SCP) to release the voice QoS bearers."
         detail: |
-          The P-CSCF sends an Rx Session-Termination-Request (STR) to the PCF
-          for both the originating and terminating legs. The PCF removes the
-          policy authorizations and notifies the SMF, which tears down the
-          dedicated QoS flows (5QI=1) via PFCP to the UPF. bearers_active
-          drops from 6 back to 4.
+          In 5G mode the P-CSCF's BYE handling calls route[N5_MOC_TERM]
+          (originating) or route[N5_MTC_TERM] (terminating). Each
+          issues an HTTP/2 POST to the PCF at path
+          /npcf-policyauthorization/v1/app-sessions/<app_session>/delete
+          via SCP. The app-session ID is looked up from
+          imsi_to_app_session_map by UE IMSI. The PCF removes the
+          policy authorization and notifies the SMF, which tears down
+          the dedicated QoS flows (5QI=1) via PFCP on the UPF.
+          bearers_active drops from 6 back to 4.
+          In 5G mode WITH_RX is compiled out, so there is no Rx STR;
+          all policy teardown is via N5.
         failure_modes:
-          - "PCF unreachable → dedicated QoS lingers (resource leak)"
-          - "PFCP failure → QoS flow not removed from UPF"
+          - "PCF unreachable → N5 DELETE fails → dedicated QoS lingers on UPF (resource leak until SMF times out)"
+          - "App-session ID missing from hash table → teardown skipped silently (P-CSCF logs 'we dont have AppSessionID')"
+          - "PFCP failure between SMF and UPF → QoS flow not removed from UPF"
         metrics_to_watch:
           - "bearers_active"
           - "fivegs_pcffunction_pa_sessionnbr"
@@ -825,15 +908,18 @@ flows:
       - order: 2
         from: amf
         to: smf
+        via: [scp]
         protocol: SBI
         interface: Nsmf
         label: "SMF Session Create (Nsmf)"
-        description: "AMF selects an SMF and sends a session create request via SBI."
+        description: "AMF selects an SMF and sends a session create request via SBI (routed through SCP)."
         detail: |
           The AMF selects an SMF based on the requested DNN and S-NSSAI
-          (network slice). It sends an Nsmf_PDUSession_CreateSMContext request
-          via the SBI (HTTP/2 through SCP). The SMF is responsible for managing
-          the PDU session lifecycle, including UPF selection and QoS.
+          (network slice). It sends an Nsmf_PDUSession_CreateSMContext
+          request via HTTP/2 SBI through the SCP (indirect/delegated
+          model — confirmed by `scp:` entry in amf.yaml's
+          `sbi.client`). The SMF is responsible for managing the PDU
+          session lifecycle, including UPF selection and QoS.
         failure_modes:
           - "SMF selection failure → no SMF for requested DNN"
           - "SBI/SCP timeout → session creation stalls"
@@ -843,19 +929,26 @@ flows:
       - order: 3
         from: smf
         to: pcf
+        via: [scp]
         protocol: SBI
         interface: Npcf
         label: "Policy authorization from PCF"
-        description: "SMF requests session policy and QoS rules from the PCF."
+        description: "SMF requests session policy and QoS rules from the PCF via SCP."
         detail: |
-          The SMF sends an Npcf_SMPolicyControl_Create request to the PCF.
-          The PCF returns the authorized QoS rules (default 5QI, AMBR limits,
-          etc.) and any PCC rules. The SMF uses these to configure the session's
-          QoS parameters.
+          The SMF sends an Npcf_SMPolicyControl_Create request to the PCF
+          (routed through SCP on our SBA deployment). The PCF in turn
+          queries the UDR for the subscriber's policy data — and the UDR
+          reads from MongoDB. On success the PCF returns authorized QoS
+          rules (default 5QI, AMBR limits, PCC rules); on failure, Open5GS
+          SMF falls back to local default policy for this PDU session.
         failure_modes:
-          - "PCF unreachable → SMF uses local default policy"
+          - "PCF unreachable → SMF uses local default policy (session still created)"
+          - "UDR → MongoDB down → PCF cannot fetch subscriber policy, SMF falls back to local"
+          - "SCP down → SMF cannot reach PCF via SBI"
         metrics_to_watch:
           - "fivegs_pcffunction_pa_sessionnbr"
+          - "fivegs_pcffunction_pa_policysmassoreq"
+          - "fivegs_pcffunction_pa_policysmassosucc"
 
       - order: 4
         from: smf
@@ -882,18 +975,20 @@ flows:
       - order: 5
         from: smf
         to: amf
+        via: [scp]
         protocol: SBI
         interface: Nsmf
         label: "Session Create Response"
-        description: "SMF returns N2 tunnel info (UPF's TEID and IP) to the AMF."
+        description: "SMF returns N2 tunnel info (UPF's TEID and IP) to the AMF via SCP."
         detail: |
           The SMF sends the Nsmf_PDUSession_CreateSMContext response back
-          to the AMF. This response carries the N2 SM Information —
-          including the UPF's GTP-U tunnel endpoint (IP and TEID) and the
-          QoS flow parameters. The AMF needs this information to instruct
-          the gNB to set up its end of the N3 GTP-U tunnel in the next step.
+          to the AMF, routed through SCP. This response carries the N2
+          SM Information — including the UPF's GTP-U tunnel endpoint
+          (IP and TEID) and the QoS flow parameters. The AMF needs this
+          information to instruct the gNB to set up its end of the N3
+          GTP-U tunnel in the next step.
         failure_modes:
-          - "SBI timeout → AMF never receives tunnel info, session stalls"
+          - "SBI/SCP timeout → AMF never receives tunnel info, session stalls"
 
       - order: 6
         from: amf
@@ -933,18 +1028,20 @@ flows:
       - order: 8
         from: amf
         to: smf
+        via: [scp]
         protocol: SBI
         interface: Nsmf
         label: "N2 Info to SMF (gNB tunnel)"
-        description: "AMF forwards the gNB's GTP-U endpoint to the SMF."
+        description: "AMF forwards the gNB's GTP-U endpoint to the SMF via SCP."
         detail: |
-          The AMF sends Nsmf_PDUSession_UpdateSMContext to the SMF with
-          the N2 SM Information received from the gNB — specifically the
-          gNB's GTP-U tunnel endpoint. The SMF now has both ends of the
-          N3 tunnel (UPF endpoint from step 4, gNB endpoint from this step)
-          and can finalize the user plane path.
+          The AMF sends Nsmf_PDUSession_UpdateSMContext to the SMF
+          (routed through SCP) with the N2 SM Information received from
+          the gNB — specifically the gNB's GTP-U tunnel endpoint. The
+          SMF now has both ends of the N3 tunnel (UPF endpoint from
+          step 4, gNB endpoint from this step) and can finalize the
+          user plane path.
         failure_modes:
-          - "SBI timeout → SMF never receives gNB endpoint, tunnel incomplete"
+          - "SBI/SCP timeout → SMF never receives gNB endpoint, tunnel incomplete"
 
       - order: 9
         from: smf
@@ -1027,15 +1124,17 @@ flows:
       - order: 2
         from: amf
         to: smf
+        via: [scp]
         protocol: SBI
         interface: Nsmf
         label: "Release all PDU sessions"
-        description: "AMF instructs SMF to release all PDU sessions for this UE."
+        description: "AMF instructs SMF (via SCP) to release all PDU sessions for this UE."
         detail: |
-          The AMF sends Nsmf_PDUSession_ReleaseSMContext for each of the UE's
-          active PDU sessions. The SMF initiates teardown of the user plane
-          tunnels and QoS resources. For 2 PDU sessions (internet + IMS APN),
-          this is called twice.
+          The AMF sends Nsmf_PDUSession_ReleaseSMContext for each of
+          the UE's active PDU sessions, routed through SCP. The SMF
+          initiates teardown of the user plane tunnels and QoS
+          resources. For 2 PDU sessions (internet + IMS APN), this is
+          called twice.
         metrics_to_watch:
           - "fivegs_smffunction_sm_sessionnbr"
 
@@ -1076,15 +1175,17 @@ flows:
       - order: 5
         from: amf
         to: udm
+        via: [scp]
         protocol: SBI
         interface: Nudm
         label: "UDM context release"
-        description: "AMF notifies UDM that the UE context is released."
+        description: "AMF notifies UDM (via SCP) that the UE context is released."
         detail: |
-          The AMF sends an Nudm_UECM_Deregistration to the UDM, which
-          updates the UE's context in the UDR. The UDM clears the serving
-          AMF assignment. If the UE registers again, it will go through
-          the full registration procedure from scratch.
+          The AMF sends an Nudm_UECM_Deregistration to the UDM (routed
+          through SCP), which updates the UE's context in the UDR. The
+          UDM clears the serving AMF assignment. If the UE registers
+          again, it will go through the full registration procedure
+          from scratch.
 
     outcome:
       success: "UE fully deregistered. All PDU sessions released, NAS context cleared."
@@ -1115,24 +1216,33 @@ flows:
         to: pyhss
         protocol: Diameter
         interface: Cx
-        label: "UAR — User-Authorization-Request"
-        description: "I-CSCF asks HSS if the user exists and which S-CSCF is assigned."
+        label: "UAR — User-Authorization-Request (conditional)"
+        description: "I-CSCF asks HSS if the user exists and which S-CSCF is assigned. Skipped on fast-path re-registrations when the I-CSCF already has an S-CSCF list for this user."
         detail: |
-          The I-CSCF sends a User-Authorization-Request (UAR) with the user's
-          IMPU (Public User Identity, e.g., sip:001010123456789@ims.domain)
-          and the visited network identity. The HSS checks:
+          The I-CSCF's REGISTER route (icscf.cfg) first checks whether
+          it already has an S-CSCF list for this user (via
+          `I_scscf_select`). If yes, the UAR is SKIPPED and the
+          REGISTER is routed directly to the cached S-CSCF. If no
+          (first registration, or cache expired), the I-CSCF calls
+          `I_perform_user_authorization_request`, which sends a
+          User-Authorization-Request (UAR) with the user's IMPU
+          (sip:001010123456789@ims.domain) and visited network
+          identity. The HSS checks:
           1. Does this user exist?
           2. Is the user already registered? If so, which S-CSCF?
           3. If not registered, should the I-CSCF select an S-CSCF?
 
-          The HSS returns a UAA (User-Authorization-Answer) with the result
-          code and optionally the S-CSCF address.
+          The HSS returns a UAA (User-Authorization-Answer) with the
+          result code and optionally the S-CSCF address. On error the
+          I-CSCF returns SIP 500 ("Server error on SCSCF Select (UAR)"
+          or similar).
         failure_modes:
-          - "HSS unreachable → ims_icscf:uar_timeouts increments"
-          - "Unknown user → Diameter RESULT_CODE 5001 (DIAMETER_ERROR_USER_UNKNOWN)"
+          - "HSS unreachable → ims_icscf:uar_timeouts increments, I-CSCF returns SIP 500"
+          - "Unknown user → route[UAR_USER_UNKNOWN] executes, I-CSCF returns 403/404"
           - "Diameter connection lost → cdp:timeout increments"
         metrics_to_watch:
           - "ims_icscf:uar_timeouts"
+          - "ims_icscf:uar_replies_received"
           - "cdp:timeout"
           - "cdp:average_response_time"
 
@@ -1213,4 +1323,4 @@ flows:
       observable_metrics:
         - "ims_usrloc_scscf:active_contacts increases by 1"
         - "ims_registrar_scscf:accepted_regs increases by 1"
-        - "cdp:replies_received increases by 3 (UAA + MAA + SAA)"
+        - "cdp:replies_received increases by 3 on first registration (UAA + MAA + SAA). On re-registrations the I-CSCF skips UAR if it has a cached S-CSCF list, so only MAA + SAA (2 round-trips) fire."

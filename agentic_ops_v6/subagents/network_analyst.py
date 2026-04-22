@@ -44,6 +44,13 @@ def create_network_analyst() -> LlmAgent:
             tools.check_stack_rules,
             tools.compare_to_baseline,
             tools.get_causal_chain_for_component,
+            # Flow tools: use `get_flows_through_component` to understand
+            # what's downstream of a suspect NF when forming hypotheses.
+            # `list_flows` surfaces the available flow ids so the agent
+            # doesn't invent them. Deep flow walks belong in the
+            # Investigator; NA should stay at the overview level.
+            tools.list_flows,
+            tools.get_flows_through_component,
             AgentTool(ontology, skip_summarization=True),
         ],
     )

@@ -25,8 +25,18 @@ The orchestrator will spawn one parallel Investigator sub-agent per plan. Each s
    - Third-target probe from the same source: `measure_rtt` from A to a known-good target C whose path does not cross B
    - Third-source probe to the same target: `measure_rtt` from a known-good X to B's IP
    Without a triangulation probe, a directional result is attributable to *either* endpoint and cannot by itself falsify a hypothesis that named only one of them.
-7. **Activity-vs-drops discriminator.** When a hypothesis claims a component is dropping or failing traffic, the plan MUST include one probe that distinguishes **local drops** (component is receiving work and losing it) from **upstream starvation** (component is receiving no work to lose). Any probe that establishes the upstream component actually generated traffic — recent session setup logs, session-count gauges, incoming request counters — qualifies. Low throughput alone does not imply drops.
+7. **Activity-vs-drops discriminator.** Applies only to hypotheses claiming an NF is *dropping / silently failing / not responding* based on low or zero traffic AT THAT NF. For those, the plan must include one probe that reads the upstream NF's outbound counter for the same traffic class (e.g., gNB's GTP-U out for UPF-N3; P-CSCF's `httpclient:connok` for PCF-N5). Skip this rule for hypotheses that name a component as the root cause for non-silence reasons (container exited, config error, etc.) — there is no "upstream" to check.
 8. **Negative-result falsification weight.** If a probe is expected to produce an error/log/metric when the hypothesis holds, a clean/empty result from that probe is a *contradiction*, not a neutral data point. Write probes so that their negative result is genuinely incompatible with the hypothesis — i.e. the pattern must be broad enough that a real failure of this mode would hit it.
+9. **Flow-anchored probes (strongly preferred).** Before writing a plan, call `get_flows_through_component(nf)` on the hypothesis's `primary_suspect_nf` to see every flow that touches it, then `get_flow(flow_id)` on the most relevant one. Each step's `failure_modes` entries describe what the implementation *actually does* on error (SIP response codes, log strings, metric spikes). Write probes that look for those specific observables. A plan whose probes correspond to authored `failure_modes` is stronger than one assembled from generic 3GPP priors.
+
+## Flow tools for plan construction
+
+You have access to:
+- `list_flows()` — returns the list of flow ids and names.
+- `get_flow(flow_id)` — returns ordered steps with `failure_modes` and `metrics_to_watch`.
+- `get_flows_through_component(nf)` — returns every flow touching a given NF, with step positions.
+
+Use these before writing probes for any hypothesis. They are cheap and they anchor your plan to what the code actually does rather than to what 3GPP specs say should happen.
 
 ## Investigator's available tools
 

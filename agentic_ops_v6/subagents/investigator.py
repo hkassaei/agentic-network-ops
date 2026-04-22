@@ -54,6 +54,14 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
             tools.search_logs,
             tools.read_env_config,
             tools.query_subscriber,
+            # Flow tools for mechanism-walk falsification: pull the
+            # full flow for the procedure the hypothesis implicates,
+            # then step through its `failure_modes` to identify the
+            # exact log line / metric / SIP response code you should
+            # see at each step if the hypothesis is true.
+            tools.list_flows,
+            tools.get_flow,
+            tools.get_flows_through_component,
             AgentTool(ontology, skip_summarization=True),
         ],
     )

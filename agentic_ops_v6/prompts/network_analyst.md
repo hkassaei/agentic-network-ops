@@ -30,6 +30,8 @@ Before producing the final `NetworkAnalystReport`, you MUST call at least **THRE
 
 If you need more confidence, also call `measure_rtt`, `check_stack_rules`, `compare_to_baseline`, or `get_causal_chain_for_component` for suspect NFs.
 
+When forming a hypothesis that names an NF as the fault source, call `get_flows_through_component(nf)` to understand which procedures touch it — this establishes what *else* should be broken if the hypothesis is true (useful for writing `supporting_events` and for ranking specificity). Use `list_flows()` to discover available flow ids if you don't know them. Do not walk full flows yourself — that's the Investigator's job; stay at the overview level.
+
 Only after the mandatory tools have returned should you emit the structured `NetworkAnalystReport`. Emitting it before calling the tools produces a low-quality report that downstream agents cannot act on.
 
 ## Your mandate

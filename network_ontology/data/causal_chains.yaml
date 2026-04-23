@@ -17,7 +17,15 @@ causal_chains:
   # =========================================================================
 
   n2_connectivity_loss:
-    description: "Loss of N2 (NGAP/SCTP) connectivity between gNB and AMF. UEs lose 5G radio access."
+    description: |
+      Loss of N2 (NGAP over SCTP) connectivity between gNB and AMF. The
+      gNB cannot reach the AMF for control-plane signaling, so UEs cannot
+      register (or stay registered) with the 5G core. In Open5GS, when
+      the SCTP association to a gNB drops, `amf_gnb_remove()` clears every
+      UE associated with that gNB and both the `ran_ue` and `gnb`
+      gauges decrement accordingly. The N3 GTP-U tunnel endpoints on the
+      gNB side become stale but the UPF's N3 counters simply stop
+      incrementing — UPF itself is not broken.
     affected_interface: N2
     affected_protocol: NGAP/SCTP
     failure_domain: ran
@@ -26,72 +34,162 @@ causal_chains:
     possible_causes:
       - "gNB hardware or software failure"
       - "Transport network failure between gNB and AMF (fiber cut, switch failure)"
-      - "SCTP association timeout or misconfiguration"
+      - "SCTP association timeout or misconfiguration (gNB IP changed, TAI mismatch)"
       - "gNB overload or resource exhaustion"
       - "Power outage at cell site"
       - "Network partition isolating the RAN from the core"
 
     observable_symptoms:
       immediate:
-        - metric: ran_ue
-          becomes: 0
+        - symptom: "ran_ue counter at AMF drops to 0"
+          source: get_nf_metrics
           at: amf
           lag: "<5s"
-          description: "AMF reports zero connected UEs"
-        - metric: gnb
-          becomes: 0
+        - symptom: "gnb counter at AMF drops to 0"
+          source: get_nf_metrics
           at: amf
           lag: "<5s"
-          description: "AMF reports zero connected gNBs"
-        - log: "SCTP association closed or connection refused"
-          at: amf
-          direction: OUTBOUND
-          description: "AMF's NGAP layer reports loss of SCTP connection to gNB"
+        - symptom: "gNB container missing or in 'exited' state"
+          source: get_network_status
+          note: "Only one of several possible causes — container may still be running with a broken SCTP association"
 
       cascading:
-        - condition: "existing PDU sessions"
-          effect: "sm_sessionnbr stays at previous value (stale) but GTP-U traffic stops"
-          lag: "immediate"
-          description: "Control plane state is stale — sessions exist but no data flows"
-        - condition: "GTP-U data plane"
-          effect: "gtp_indatapktn3upf and gtp_outdatapktn3upf stop incrementing"
-          lag: "<5s"
-          description: "No radio link means no user plane traffic"
-        - condition: "active VoNR call"
-          effect: "RTP media stops, jitter buffer resets on UE"
-          lag: "<2s"
-        - condition: "IMS registration timer expires"
-          effect: "P-CSCF registered_contacts drops when re-registration fails (no data plane)"
-          lag: "minutes (depends on re-reg timer)"
+        # --- Branch A: UE 5G attach (NGAP Initial UE Message fails) ---
+        - branch: "ue_5g_attach"
+          condition: "Any UE attempting initial registration or re-attach"
+          effect: |
+            The gNB's NGAP InitialUEMessage carrying the NAS Registration
+            Request cannot reach the AMF. The UE stays in RRC_IDLE or
+            retries indefinitely on the air interface. No new entries
+            appear in AMF state.
+          mechanism: "N2 SCTP association down → gNB cannot forward NAS upstream → no registration"
+          source_steps:
+            - ue_registration.step_2  # gNB → AMF NGAP InitialUEMessage
+          observable_metrics:
+            - ran_ue                      # flat at 0
+            - gnb                         # flat at 0
+            - fivegs_amffunction_amf_authreq   # no new auth attempts start
 
-    does_NOT_mean:
-      - "AMF is down or misconfigured — AMF is the node REPORTING the loss, not the node that failed"
-      - "UPF has a data plane issue — GTP-U stops because the gNB endpoint is gone, not because the UPF is broken"
-      - "IMS has a signaling problem — all IMS symptoms are SECONDARY to the RAN being unreachable"
+        # --- Branch B: Zombied PDU sessions + silent N3 data plane ---
+        # SMF/UPF control plane remained connected to each other via N4,
+        # so sm_sessionnbr stays at its pre-failure value. But GTP-U
+        # packets from the gNB never arrive at UPF — not because UPF
+        # is broken, but because the gNB endpoint is effectively gone.
+        - branch: "n3_data_plane_silent"
+          condition: "Existing PDU sessions at SMF/UPF before the N2 loss"
+          effect: |
+            Open5GS SMF does not tear down PFCP sessions on N2 loss by
+            default; it waits for the AMF to signal UE deregistration
+            (which never comes because NGAP is broken). The sessions
+            become zombied: they appear in `fivegs_smffunction_sm_sessionnbr`
+            and `fivegs_upffunction_upf_sessionnbr` but no GTP-U packets
+            are exchanged on N3 because the gNB's outer GTP-U endpoint
+            is unreachable.
+          mechanism: "N2 gone → AMF never issues session release to SMF → SMF keeps PFCP state → UPF keeps rules but sees no ingress"
+          source_steps:
+            - pdu_session_establishment.step_6   # NGAP PDU Session Resource Setup — fails for new sessions
+            - pdu_session_establishment.step_9   # Existing PFCP sessions remain (N4 SMF↔UPF not impacted)
+          observable_metrics:
+            - fivegs_smffunction_sm_sessionnbr   # stays at pre-failure value
+            - fivegs_upffunction_upf_sessionnbr  # stays at pre-failure value
+            - normalized.upf.gtp_indatapktn3upf_per_ue   # drops toward 0 (upstream starvation)
+            - normalized.upf.gtp_outdatapktn3upf_per_ue  # drops toward 0
+
+        # --- Branch C: VoNR media stops ---
+        - branch: "vonr_media_stops"
+          condition: "Active VoNR call at the moment of N2 loss"
+          effect: |
+            RTP packets from either UE cannot reach the UPF (their own
+            radio link is effectively down for control plane; PDU session
+            bearer service is gone). RTPEngine's session count stays at
+            its pre-failure value briefly, then decreases as RTP timeout
+            expires. UE jitter buffers reset on both sides.
+          mechanism: "No NAS → UE loses bearer service → no RTP on N3 → media path silent"
+          source_steps:
+            - vonr_call_setup.step_12   # RTP media via N3 — this step can no longer happen
+          observable_metrics:
+            - rtpengine_sessions
+            - ims_usrloc_pcscf:registered_contacts  # eventually decrements when re-REGISTER fails
+
+        # --- Branch D: IMS re-registration eventually fails ---
+        - branch: "ims_rereg_fails"
+          condition: "UE's IMS re-registration timer fires (typically 3600s or less)"
+          effect: |
+            Re-REGISTER requires the UE's IMS PDU session to carry SIP
+            to the P-CSCF. With no N3, the UE cannot send any SIP to
+            P-CSCF. The P-CSCF's usrloc entry expires on its
+            registration lifetime and `ims_usrloc_pcscf:registered_contacts`
+            decreases accordingly.
+          mechanism: "UE cannot send SIP via N3 → P-CSCF doesn't see re-REGISTER → usrloc entry expires"
+          source_steps:
+            - ims_registration.step_2   # UE → P-CSCF SIP via GTP-U — can't happen
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts   # decreases after re-reg timer
+            - script:register_success                # flat (no new successful regs)
+
+        # --- Branch E: Negative — AMF itself is NOT broken ---
+        - branch: "amf_unaffected"
+          condition: "AMF's own SBI endpoints toward AUSF, UDM, PCF"
+          effect: |
+            AMF continues to respond on its SBI port (7777); its
+            registration with NRF (if scp-delegated) remains valid;
+            authentication to AUSF for in-flight or later UEs from
+            OTHER gNBs (if any) works normally. Claims that "AMF is
+            broken" because `ran_ue=0` are WRONG — AMF is the node
+            REPORTING the loss, not the node that failed.
+          mechanism: "None — AMF's SBI plane is independent of N2 transport"
+          observable_metrics:
+            - fivegs_amffunction_amf_authreq   # can still increment if another gNB is present
+
+        # --- Branch F: Negative — UPF itself is NOT broken ---
+        - branch: "upf_unaffected"
+          condition: "UPF's N4 link to SMF and its internal packet-processing"
+          effect: |
+            UPF's PFCP listener remains healthy; its per-session rules
+            remain installed; N3 drops to zero simply because the gNB
+            endpoint is no longer sourcing GTP-U traffic. `check_process_listeners`
+            on UPF confirms the process is alive and listening. "UPF
+            silently dropping packets" is a mis-read.
+          mechanism: "None — UPF's interfaces are healthy; upstream starvation mimics local failure"
+          observable_metrics:
+            - pfcp_sessions_active       # stays at pre-failure value
 
     diagnostic_approach:
       - tool: get_nf_metrics
-        purpose: "Check ran_ue and gnb counters at AMF — both at 0 confirms RAN failure"
+        purpose: "Check ran_ue and gnb at AMF — both at 0 confirms RAN/N2 failure from AMF's vantage"
         priority: 1
+      - tool: get_network_status
+        purpose: "Check gNB container state — 'exited' or missing is one common cause (but not the only one)"
+        priority: 2
       - tool: measure_rtt
         args: {container: "amf", target_ip: "172.22.0.23"}
-        purpose: "Verify basic IP connectivity from AMF to gNB — 100% loss confirms unreachability"
-        priority: 2
-      - tool: read_container_logs
-        args: {container: "amf", grep: "NGAP"}
-        purpose: "Check NGAP state change logs for details on when and why the association was lost"
+        purpose: "Verify basic IP reachability from AMF to gNB. 100% packet loss confirms network-level unreachability."
         priority: 3
+      - tool: measure_rtt
+        args: {container: "nr_gnb", target_ip: "172.22.0.11"}
+        purpose: "Reverse-direction RTT. Clean result with AMF→gNB loss asymmetric means gNB's egress path is broken; both-ways lossy means a transport partition."
+        priority: 4
 
     key_diagnostic_signal:
-      - "ran_ue = 0 AND gnb = 0 is the DEFINITIVE indicator for N2 connectivity loss"
-      - "sm_sessionnbr > 0 with GTP packets stalled = stale sessions from before the failure"
+      - "ran_ue = 0 AND gnb = 0 at AMF is the definitive N2-loss signature"
+      - "fivegs_smffunction_sm_sessionnbr > 0 while N3 counters flat = zombied sessions from before N2 loss"
+      - "UPF counters flat does NOT mean UPF is broken — upstream starvation from gNB reachability loss"
+      - "If AMF's SCTP listener (check_process_listeners) is healthy but gnb=0, root cause is on the gNB side or transport"
 
   # =========================================================================
   # DATA PLANE FAILURE MODES
   # =========================================================================
 
   n3_data_plane_degradation:
-    description: "Packet loss or degradation on the N3 (GTP-U) data plane between gNB and UPF."
+    description: |
+      Packet loss or degradation on the N3 (GTP-U) data plane between
+      gNB and UPF. GTP-U tunneling still works, but a fraction of
+      packets is lost or delayed in transit. Because all UE-sourced
+      traffic — including UE SIP signaling carried inside the IMS PDU
+      session and RTP media — crosses N3, UPF-level loss manifests
+      SIMULTANEOUSLY as IMS signaling retransmissions AND RTP quality
+      degradation. Control-plane NF-to-NF traffic (Cx/Mw/Rx/SBI) does
+      NOT transit N3 and is unaffected.
     affected_interface: N3
     affected_protocol: GTP-U
     failure_domain: data_plane
@@ -108,127 +206,245 @@ causal_chains:
 
     observable_symptoms:
       immediate:
-        - metric: gtp_indatapktn3upf
-          becomes: "still incrementing but erratic or slower than expected"
+        - symptom: "GTP-U per-UE rates at UPF drop below healthy typical range but remain non-zero"
+          source: get_nf_metrics
           at: upf
-          lag: "<5s"
-          description: "Incoming GTP-U packet rate is irregular"
-        - metric: gtp_outdatapktn3upf
-          becomes: "still incrementing but erratic or slower"
-          at: upf
-          lag: "<5s"
-          description: "Outgoing GTP-U packet rate is irregular"
+        - symptom: "RTPEngine data-plane gauges show elevated packet loss / reduced pps"
+          source: get_dp_quality_gauges
+          at: rtpengine
+        - symptom: "SIP retransmission rate elevates across ALL three CSCFs simultaneously"
+          source: get_nf_metrics
+          at: [pcscf, icscf, scscf]
 
       cascading:
-        - condition: "active VoNR call"
-          effect: "RTP media degradation, jitter buffer resets on UE, audible quality issues"
-          lag: "<2s"
-          description: "Voice call quality degrades proportionally to packet loss"
-        - condition: "UE SIP signaling (REGISTER, INVITE) in flight"
-          effect: "SIP messages from UEs are dropped/delayed, causing retransmissions that appear as an IMS signaling storm at all CSCFs (P-CSCF, I-CSCF, S-CSCF)"
-          lag: "<1s"
-          description: "UE SIP traffic rides inside GTP-U tunnels through the UPF. Packet loss on the UPF causes SIP retransmissions that look like an IMS-layer problem but are actually a user plane problem."
-        - condition: "PFCP heartbeat between SMF and UPF"
-          effect: "May fail if loss is severe (>50%), causing session teardown"
-          lag: "10-30s"
+        # --- Branch A: VoNR RTP media degradation ---
+        - branch: "vonr_rtp_degradation"
+          condition: "Active VoNR call during the window of packet loss"
+          effect: |
+            RTP packets traverse UE1→gNB→UPF→RTPEngine→UPF→gNB→UE2
+            (and reverse). Any loss on N3 affects both the source leg
+            and the return leg because both cross UPF. MOS drops, jitter
+            increases, audible artifacts on both ends. This is
+            symmetric to call_quality_degradation in observable
+            symptoms — only localization (UPF vs. RTPEngine) differs.
+          mechanism: "N3 loss → RTP packets miss → MOS drops at RTPEngine → user-audible degradation"
+          source_steps:
+            - vonr_call_setup.step_12    # RTP media via N3
+          observable_metrics:
+            - normalized.upf.gtp_indatapktn3upf_per_ue
+            - normalized.upf.gtp_outdatapktn3upf_per_ue
+            - rtpengine_sessions
+          discriminating_from: "RTPEngine fault — use measure_rtt FROM gNB TO upf. If lossy → N3. If clean → RTPEngine's own boundary."
+
+        # --- Branch B: UE SIP traffic rides inside GTP-U ---
+        # Easy to misread as an IMS signaling issue. The SIP traffic
+        # from UEs crosses UPF; the SIP traffic between CSCFs does not.
+        - branch: "ue_sip_retrans_storm"
+          condition: "UE attempts REGISTER, INVITE, BYE during loss window"
+          effect: |
+            UE→gNB→UPF→P-CSCF SIP messages hit the same GTP-U packet
+            loss as media. SIP retransmissions fire at the UE when the
+            Kamailio T1 timer (500ms) expires without a response. The
+            P-CSCF sees elevated `core:rcv_requests_register` /
+            `rcv_requests_invite` (retransmissions count as incoming
+            messages). At a glance this looks like a "registration
+            storm at IMS" — but the source is UE SIP packet loss at
+            the UPF boundary, not any fault in the IMS components.
+          mechanism: "N3 loss → UE SIP retries → inflated request rate at P-CSCF (and onward at I/S-CSCF)"
+          source_steps:
+            - ims_registration.step_2    # UE → P-CSCF SIP via GTP-U
+            - vonr_call_setup.step_1     # UE INVITE via GTP-U
+          observable_metrics:
+            - core:rcv_requests_register    # inflated at P-CSCF
+            - core:rcv_requests_invite      # inflated at P-CSCF
+            - normalized.pcscf.rcv_requests_register_per_ue
+            - tmx:active_transactions       # accumulates at P-CSCF
+
+        # --- Branch C: PFCP heartbeat on N4 is UNAFFECTED ---
+        # Misreading potential: operators may assume PFCP dies when
+        # "the data plane is broken". In this stack PFCP runs on the
+        # container network (N4), not N3 — it's completely unaffected.
+        - branch: "pfcp_unaffected"
+          condition: "SMF ↔ UPF N4 PFCP session management"
+          effect: |
+            N4 PFCP traffic flows on the container network directly
+            between SMF and UPF (not through N3 GTP-U). PFCP heartbeats,
+            session establishment, and modifications all remain healthy.
+            pfcp_sessions_active stays at pre-fault value; the SMF
+            sees no session teardowns.
+          mechanism: "None — N4 is a separate link independent of N3"
+          observable_metrics:
+            - pfcp_sessions_active            # stays at pre-fault value
+            - fivegs_smffunction_sm_sessionnbr
+
+        # --- Branch D: NF-to-NF control plane is UNAFFECTED ---
+        - branch: "nf_control_plane_unaffected"
+          condition: "SBI between 5G core NFs, Cx/Mw/N5 between IMS NFs"
+          effect: |
+            All NF-to-NF traffic (P-CSCF↔PCF on N5 via SCP, I-CSCF/S-CSCF↔pyhss
+            on Cx via Diameter, P-CSCF↔I-CSCF on Mw via SIP) rides the
+            container bridge network, not the GTP-U data plane. N3
+            packet loss has ZERO effect on these flows. `cdp:timeout`
+            at I-CSCF, `httpclient:connfail` at P-CSCF, and all
+            Diameter peer health metrics stay nominal.
+          mechanism: "None — control-plane paths do not transit UPF"
+          observable_metrics:
+            - cdp:timeout                      # stays at baseline
+            - ims_icscf:uar_timeouts           # stays at baseline
+            - httpclient:connfail              # stays at baseline
 
     convergence_point:
-      description: "The UPF is the convergence point for both UE signaling and media paths. When UPF is degraded, BOTH IMS signaling (SIP from UEs) AND RTP media quality degrade simultaneously. However, RTPEngine itself can also cause packet loss independently — use measure_rtt to distinguish."
+      description: "UPF is the convergence point for BOTH UE signaling and UE media. Simultaneous IMS signaling retransmission + RTP quality degradation is the signature of an N3/UPF fault. However, RTPEngine alone can also cause RTP-only degradation without affecting SIP — use measure_rtt to discriminate."
       paths_through_upf:
-        - "UE SIP signaling: UE → gNB → UPF → P-CSCF (SIP REGISTER, INVITE)"
+        - "UE SIP signaling: UE → gNB → UPF → P-CSCF (REGISTER, INVITE, BYE)"
         - "RTP media: UE → gNB → UPF → RTPEngine (voice audio)"
       paths_NOT_through_upf:
-        - "P-CSCF → PCF (Rx Diameter): direct on container network"
-        - "P-CSCF → I-CSCF (Mw SIP): direct on container network"
-        - "I-CSCF → HSS (Cx Diameter): direct on container network"
-        - "S-CSCF → HSS (Cx Diameter): direct on container network"
-        - "SMF → UPF (N4 PFCP): direct on container network (control plane, not GTP-U)"
-        - "All SBI traffic between 5G core NFs: direct via SCP"
-      how_to_localize: "Run measure_rtt TO the suspected component from multiple neighbors. If multiple sources show packet loss TO rtpengine, the fault is at RTPEngine itself (its own interface is lossy). If multiple sources show packet loss TO upf, the fault is at UPF. Do NOT assume UPF is the cause without verifying with measure_rtt."
-
-    does_NOT_mean:
-      - "IMS signaling issue — SIP retransmissions from UEs look like IMS problems but are caused by UE SIP traffic being dropped at the UPF"
-      - "P-CSCF config issue — cascading metric changes in IMS nodes are SECONDARY effects of UPF loss"
-      - "P-CSCF → PCF (Rx) failure — the Rx interface is direct between P-CSCF and PCF, not through the UPF"
-      - "httpclient:connfail increase — this is pre-existing noise, unrelated to data plane"
-      - "Diameter peer issue at I-CSCF or S-CSCF — Cx interface is direct to HSS, not through UPF"
+        - "P-CSCF → PCF (N5 HTTP/2 via SCP): container bridge"
+        - "P-CSCF → I-CSCF (Mw SIP): container bridge"
+        - "I-CSCF ↔ pyhss (Cx Diameter): container bridge"
+        - "S-CSCF ↔ pyhss (Cx Diameter): container bridge"
+        - "SMF ↔ UPF (N4 PFCP): container bridge — control plane, not GTP-U"
+        - "All SBI traffic between 5G core NFs: container bridge via SCP"
 
     diagnostic_approach:
       - tool: measure_rtt
         args: {container: "nr_gnb", target_ip: "172.22.0.8"}
-        purpose: "Measure RTT and packet loss from gNB to UPF — elevated values confirm transport issue"
+        purpose: "RTT gNB → UPF. Elevated loss/latency confirms N3 transport issue."
         priority: 1
       - tool: get_dp_quality_gauges
-        purpose: "Check RTPEngine packet loss and UPF throughput — simultaneous degradation confirms UPF convergence point fault"
+        purpose: "Check RTPEngine AND UPF rates in one call. Simultaneous RTP + N3 degradation confirms UPF convergence-point fault; RTP-only degradation points at RTPEngine."
         priority: 2
       - tool: get_nf_metrics
-        purpose: "Check GTP-U counters at UPF — compare rate to baseline"
+        purpose: "Confirm normalized UPF per-UE rates are below typical range (0.5-10 pps per UE). Check CSCF control-plane metrics stay nominal."
         priority: 3
-      - tool: read_container_logs
-        args: {container: "upf", grep: "error"}
-        purpose: "Check for interface errors, PFCP issues, or forwarding plane errors"
-        priority: 4
 
     key_diagnostic_signal:
-      - "SIMULTANEOUS IMS signaling storm AND RTPEngine packet loss = UPF convergence point fault"
-      - "GTP counters still incrementing (not zero) distinguishes degradation from total outage"
-      - "Elevated RTT or packet loss between gNB and UPF confirms transport-level issue"
-      - "NF-to-NF control plane (Rx, Cx, Mw, SBI) is NOT affected by UPF faults — only UE-originated traffic is"
+      - "SIMULTANEOUS IMS signaling retransmission storm + RTPEngine packet loss = UPF convergence-point fault"
+      - "GTP-U counters still incrementing (not zero) distinguishes degradation from total outage"
+      - "Elevated measure_rtt loss from gNB to UPF confirms transport-level issue"
+      - "Control-plane metrics (Cx/Mw/N5) stay nominal — if they degrade too, look upstream of UPF"
 
   n3_data_plane_outage:
-    description: "Complete loss of N3 (GTP-U) data plane — no user traffic flowing."
+    description: |
+      Complete loss of N3 (GTP-U) data plane — no user traffic flowing
+      at all. Distinct from `n3_data_plane_degradation` (packet loss but
+      still non-zero throughput) and from `n2_connectivity_loss` (N2 NGAP
+      lost, so gNB has no UEs to source traffic for). Either UPF itself
+      is down/unreachable, or the GTP-U path between a healthy gNB and
+      UPF is severed.
     affected_interface: N3
     affected_protocol: GTP-U
     failure_domain: data_plane
     severity: down
 
     possible_causes:
-      - "UPF failure or unreachability"
+      - "UPF container exited or process crashed"
+      - "UPF's ogstun interface down or misconfigured"
       - "Complete transport failure between gNB and UPF"
-      - "GTP-U tunnel state lost (PFCP session de-synchronization)"
-      - "N2 connectivity loss (gNB down — no endpoint to send/receive GTP-U)"
-      - "UPF interface misconfiguration (ogstun interface down)"
+      - "GTP-U tunnel state lost (PFCP session de-synchronization between SMF and UPF)"
       - "Routing failure preventing GTP-U encapsulated traffic from reaching UPF"
+      - "UPF reached resource exhaustion and is no longer processing packets"
 
     observable_symptoms:
       immediate:
-        - metric: gtp_indatapktn3upf
-          becomes: "0 or stopped incrementing"
+        - symptom: "UPF GTP-U counters completely flat (zero delta over the observation window)"
+          source: get_nf_metrics
           at: upf
-          description: "No incoming GTP-U traffic at all"
-        - metric: gtp_outdatapktn3upf
-          becomes: "0 or stopped incrementing"
-          at: upf
-          description: "No outgoing GTP-U traffic at all"
+        - symptom: "Either UPF container is 'exited' OR container is running but ogstun/N3 endpoint is broken"
+          source: get_network_status
+          note: "check_process_listeners on UPF discriminates: if listening on 2152/udp, container is up; fault is N3 transport or PFCP rule-set"
+        - symptom: "RAN still attached (ran_ue > 0) — distinguishes N3 outage from N2 loss"
+          source: get_nf_metrics
+          at: amf
 
       cascading:
-        - condition: "PDU sessions exist (sm_sessionnbr > 0)"
-          effect: "Sessions are 'zombied' — control plane says they exist but no data flows"
-          description: "This is the signature of a pure data plane failure with healthy control plane"
-        - condition: "active VoNR call"
-          effect: "Call audio completely stops, eventual timeout"
-        - condition: "IMS re-registration"
-          effect: "May fail if SIP signaling path depends on data plane connectivity"
+        # --- Branch A: Zombied PDU sessions ---
+        - branch: "zombied_pdu_sessions"
+          condition: "PDU sessions that existed before the outage"
+          effect: |
+            SMF's PFCP state is intact (N4 runs on container bridge,
+            separate from N3). `fivegs_smffunction_sm_sessionnbr` and
+            `fivegs_upffunction_upf_sessionnbr` stay at pre-outage
+            values. But `fivegs_ep_n3_gtp_{in,out}datapktn3upf` go to 0.
+            This zombied-session pattern is the signature of a pure N3
+            outage as distinct from N2 loss.
+          mechanism: "Control plane (N4 PFCP) healthy; data plane (N3 GTP-U) severed; session state diverges from traffic state"
+          source_steps:
+            - pdu_session_establishment.step_9    # N3 tunnel completion — can't carry traffic anymore
+          observable_metrics:
+            - fivegs_smffunction_sm_sessionnbr    # stays at pre-failure value
+            - fivegs_upffunction_upf_sessionnbr   # stays at pre-failure value
+            - pfcp_sessions_active                # stays
+            - normalized.upf.gtp_indatapktn3upf_per_ue    # → 0
+            - normalized.upf.gtp_outdatapktn3upf_per_ue   # → 0
 
-    does_NOT_mean:
-      - "SMF or AMF is broken — control plane (N4, SBI) may be perfectly healthy"
-      - "SIP timeout is the root cause — it's a CONSEQUENCE of no data plane"
+        # --- Branch B: VoNR media stops ---
+        - branch: "vonr_media_stops"
+          condition: "Active VoNR call"
+          effect: |
+            RTP packets cannot reach RTPEngine (because the path is UE
+            → gNB → UPF → RTPEngine, and UPF is not forwarding).
+            RTPEngine's session count decreases on the session timeout.
+            Call audio goes silent on both ends.
+          mechanism: "RTP packets dropped at the UPF boundary → RTPEngine sees no traffic → session timeout"
+          source_steps:
+            - vonr_call_setup.step_12    # RTP media via N3 — fully stopped
+          observable_metrics:
+            - rtpengine_sessions          # decreases on timeout
+            - derived.upf_activity_during_calls   # → 0 / flat
+
+        # --- Branch C: IMS re-registration fails (UE cannot send SIP) ---
+        - branch: "ims_rereg_fails"
+          condition: "UE's IMS re-registration timer fires while N3 is out"
+          effect: |
+            UE SIP rides inside its IMS PDU session. No N3 means no
+            SIP from UE to P-CSCF. `ims_usrloc_pcscf:registered_contacts`
+            decrements on usrloc expiry; `script:register_success` stays
+            flat.
+          mechanism: "UE → P-CSCF SIP can't transit → P-CSCF registration entries expire on timer"
+          source_steps:
+            - ims_registration.step_2    # UE → P-CSCF SIP via GTP-U
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts
+            - script:register_success
+
+        # --- Branch D: Negative — SMF/AMF/control plane NOT broken ---
+        - branch: "control_plane_unaffected"
+          condition: "N4 PFCP, SBI (AMF↔SMF↔PCF), NAS (AMF↔UE via N2)"
+          effect: |
+            All control-plane flows remain healthy. PFCP sessions
+            stay established, AMF continues to signal NAS on N2 to
+            the gNB (which is still attached — this is not N2 loss),
+            SMF can still accept new PDU-session requests (although
+            their GTP-U endpoints won't carry traffic). Claims that
+            "SMF failed" or "AMF failed" because traffic is zero are
+            WRONG — those NFs are the observers, not the failure point.
+          mechanism: "None — control plane and N3 data plane are independent in this stack"
+          observable_metrics:
+            - pfcp_sessions_active
+            - ran_ue                      # stays > 0 (distinguishes from N2 loss)
+            - gnb                         # stays > 0
 
     diagnostic_approach:
       - tool: get_nf_metrics
-        purpose: "Confirm GTP counters at 0 while session counts > 0 — confirms zombied state"
+        purpose: "Confirm GTP counters flat, sm_sessionnbr > 0 (zombied state), ran_ue > 0 (distinguishes from N2 loss)"
         priority: 1
+      - tool: get_network_status
+        purpose: "Check UPF container — 'exited' is one cause; 'running' + flat counters suggests transport or interface fault"
+        priority: 2
+      - tool: check_process_listeners
+        args: {container: "upf"}
+        purpose: "Verify UPF's GTP-U listener on 2152/udp. If absent, process is alive but N3 endpoint is broken."
+        priority: 3
       - tool: measure_rtt
         args: {container: "nr_gnb", target_ip: "172.22.0.8"}
-        purpose: "Check basic IP reachability between gNB and UPF"
-        priority: 2
-      - tool: get_network_status
-        purpose: "Check if all containers are running — a down gNB causes the same GTP=0 symptom"
-        priority: 3
+        purpose: "Basic IP reachability gNB → UPF. Complete loss confirms transport severed."
+        priority: 4
 
     key_diagnostic_signal:
-      - "GTP packets = 0 WITH sm_sessionnbr > 0 = zombied tunnels (data plane dead, control plane alive)"
-      - "If ran_ue is also 0, the root cause is N2 connectivity loss, not a UPF issue"
+      - "GTP counters flat WITH sm_sessionnbr > 0 AND ran_ue > 0 = zombied N3 (data plane severed; control planes healthy)"
+      - "GTP flat with ran_ue = 0 means the root cause is N2 loss (`n2_connectivity_loss`), not an N3 outage"
+      - "check_process_listeners distinguishes process crash (no listener) from transport failure (listener up, no traffic)"
 
   # =========================================================================
   # IMS SIGNALING FAILURE MODES
@@ -259,50 +475,107 @@ causal_chains:
 
     observable_symptoms:
       immediate:
-        - metric: "core:rcv_requests_register"
-          becomes: "rate spikes dramatically (retransmission storm)"
+        - symptom: "`core:rcv_requests_register` at P-CSCF rate spikes (retransmission storm)"
+          source: get_nf_metrics
           at: pcscf
-          description: "UEs retransmit REGISTER when 200 OK doesn't arrive within SIP T1 timer (500ms). This is the most visible signal."
-        - metric: "tmx:active_transactions"
-          becomes: "> 0 and growing"
+          note: "Primary signal. UEs retransmit REGISTER when 200 OK doesn't arrive within SIP T1 timer (500ms)."
+        - symptom: "`tmx:active_transactions` > 0 and growing at one or more CSCFs"
+          source: get_nf_metrics
           at: [pcscf, icscf, scscf]
-          description: "SIP transactions accumulating at one or more IMS components"
-        - log: "SIP 408 Request Timeout"
-          at: [pcscf, e2e_ue1, e2e_ue2]
-          description: "SIP transactions timing out"
+        - symptom: "`derived.pcscf_avg_register_time_ms` exceeds healthy range (typical 150-350 ms)"
+          source: get_nf_metrics
+          at: pcscf
 
       cascading:
-        - condition: "SIP transaction timeout propagates through the chain"
-          effect: >
-            The entire IMS signaling chain is sequential: UE → P-CSCF → I-CSCF →
-            S-CSCF → HSS (Diameter) → back. A bottleneck at ANY point causes the
-            full chain to slow down, producing cascading symptoms at OTHER components:
-              - A slow P-CSCF causes I-CSCF to see delayed REGISTERs and may cause
-                Diameter queries to time out (cdp:timeout at I-CSCF)
-              - A slow I-CSCF causes S-CSCF to never receive forwarded REGISTERs
-              - A slow S-CSCF causes Diameter MAR/SAR queries to appear slow
-              - A slow HSS causes Diameter timeouts at I-CSCF and S-CSCF
-            IMPORTANT: The component REPORTING the timeout is not necessarily the
-            component CAUSING the problem. Diameter timeouts at I-CSCF (cdp:timeout)
-            can be caused by P-CSCF latency, I-CSCF issues, HSS issues, or even
-            network problems between any of them.
-        - condition: "UE SIP re-registration timer"
-          effect: "UE appears unregistered after re-registration fails"
-        - condition: "Kamailio T1 timer (500ms)"
-          effect: "SIP transactions start timing out — any added latency >= 500ms on any hop breaks SIP"
+        # --- Branch A: Bottleneck at P-CSCF ---
+        - branch: "pcscf_bottleneck"
+          condition: "P-CSCF is the slow hop (its own egress / processing)"
+          effect: |
+            `derived.pcscf_avg_register_time_ms` spikes at P-CSCF (>500 ms,
+            possibly >2000 ms). Because the SIP chain is sequential, I-CSCF's
+            eventual receipt of REGISTERs is delayed AND any Diameter
+            queries I-CSCF initiates may cross the SIP T1 timer → the I-CSCF
+            also registers timeouts (cdp:timeout, ims_icscf:uar_timeouts).
+            Classic misattribution risk: looks like HSS problem because
+            that's where the timeout is reported.
+          mechanism: "P-CSCF slow → SIP T1 timer expires at upstream UE → retransmission storm → I-CSCF sees amplified load, Diameter clock also expires"
+          source_steps:
+            - ims_registration.step_3     # P-CSCF → I-CSCF Mw
+            - vonr_call_setup.step_4      # P-CSCF → S-CSCF Mw (orig)
+          observable_metrics:
+            - derived.pcscf_avg_register_time_ms   # elevated
+            - script:register_time                 # rate elevated
+            - icscf.cdp:average_response_time      # may also appear elevated as cascading effect
+
+        # --- Branch B: Bottleneck at I-CSCF or HSS (Cx slow) ---
+        - branch: "icscf_or_hss_cx_slow"
+          condition: "I-CSCF Cx query path (UAR/LIR to HSS) is slow"
+          effect: |
+            `icscf.cdp:average_response_time` elevates above healthy
+            range (~50 ms). `ims_icscf:uar_timeouts` / `lir_timeouts`
+            start incrementing if the Diameter Tw timer (default 30s)
+            is exceeded. S-CSCF's own Cx (MAR/SAR) may look healthy
+            from its own vantage — discriminate by looking at both
+            CSCFs' Cx response-time metrics.
+          mechanism: "I-CSCF → HSS Cx slow → I-CSCF blocks waiting for UAR response → SIP registration stalls upstream"
+          source_steps:
+            - diameter_cx_authentication.step_1   # I-CSCF UAR
+            - vonr_call_setup.step_6              # I-CSCF LIR
+          observable_metrics:
+            - ims_icscf:uar_timeouts
+            - ims_icscf:uar_avg_response_time
+            - icscf.cdp:average_response_time
+            - cdp:timeout at icscf
+          discriminating_from: "If S-CSCF's `ims_auth:mar_avg_response_time` is nominal, the HSS is healthy to S-CSCF — this is specifically an I-CSCF↔HSS issue (could be network or HSS-side per-peer)."
+
+        # --- Branch C: Bottleneck at S-CSCF or HSS (MAR/SAR slow) ---
+        - branch: "scscf_or_hss_mar_sar_slow"
+          condition: "S-CSCF Cx queries (MAR, SAR) to HSS are slow"
+          effect: |
+            `ims_auth:mar_avg_response_time` and/or `ims_registrar_scscf:sar_avg_response_time`
+            elevate. MAR-timeouts and SAR-timeouts start incrementing.
+            The 401 auth-challenge path stalls; second-REGISTER (with
+            digest) never completes. `ims_registrar_scscf:accepted_regs`
+            flattens.
+          mechanism: "S-CSCF → HSS Cx slow → MAR/SAR waits blow past Diameter timer → SIP 500 propagates upstream"
+          source_steps:
+            - diameter_cx_authentication.step_2   # S-CSCF MAR
+            - diameter_cx_authentication.step_3   # S-CSCF SAR
+          observable_metrics:
+            - ims_auth:mar_timeouts
+            - ims_auth:mar_avg_response_time
+            - ims_registrar_scscf:sar_timeouts
+            - ims_registrar_scscf:sar_avg_response_time
+            - ims_registrar_scscf:accepted_regs
+
+        # --- Branch D: Network-latency hop (>= T1 timer) on any link ---
+        - branch: "network_latency_on_any_hop"
+          condition: "Any pairwise RTT between Gm / Mw / Cx endpoints exceeds SIP T1 (500 ms)"
+          effect: |
+            Network latency on ANY hop in the chain pushes the total
+            SIP round-trip past the T1 retransmission timer (500 ms
+            default in Kamailio), triggering UE-level retransmissions.
+            Baseline container-bridge RTT is sub-millisecond; any
+            sustained elevation of measure_rtt above ~10 ms between
+            neighboring IMS components is a flag.
+          mechanism: "Latency > T1 on any hop → retransmission → chain-wide apparent slowdown"
+          observable_metrics:
+            - derived.pcscf_avg_register_time_ms  # elevated no matter which hop is slow
+          discriminating_from: "Triangulate via measure_rtt from each IMS component to its neighbors to localize which hop is the slow one."
 
     does_NOT_mean:
-      - >
-        cdp:timeout at I-CSCF means HSS is the root cause. Diameter timeouts
-        can be a cascading symptom of latency or failure ANYWHERE upstream
-        on the SIP signaling chain. The Diameter path between I-CSCF and HSS
-        may be perfectly healthy while the overall SIP transaction times out
-        due to delays elsewhere.
-      - >
-        The component reporting the error is the component with the problem.
-        In a sequential signaling chain, symptoms propagate: a slow P-CSCF
-        causes timeouts reported at I-CSCF; a slow I-CSCF causes stalls
-        reported at S-CSCF. Always probe each component independently.
+      - |
+        cdp:timeout at I-CSCF means HSS is the root cause. Diameter
+        timeouts can be a cascading symptom of latency or failure
+        ANYWHERE upstream on the SIP signaling chain. The Diameter
+        path between I-CSCF and HSS may be perfectly healthy while
+        the overall SIP transaction times out due to delays elsewhere.
+      - |
+        The component reporting the error is the component with the
+        problem. In a sequential signaling chain, symptoms propagate:
+        a slow P-CSCF causes timeouts reported at I-CSCF; a slow I-CSCF
+        causes stalls reported at S-CSCF. Always probe each component
+        independently with measure_rtt.
 
     diagnostic_approach:
       - step: "Identify the failure domain"
@@ -346,229 +619,608 @@ causal_chains:
       - "If all RTTs are normal, the problem is application-level (process hang, overload, database) — check logs and process state"
 
   scscf_unreachable:
-    description: "S-CSCF unreachable — IMS registration and call control stops."
+    description: |
+      S-CSCF unreachable — IMS registration and call control stop.
+      The S-CSCF is the core SIP registrar and call controller; when
+      its SIP listener (port 5060) is unavailable, the I-CSCF can
+      route REGISTERs and INVITEs to it on paper but cannot deliver
+      them. HSS Cx queries (UAR/LIR) from I-CSCF continue to succeed
+      because they are independent of S-CSCF reachability. However,
+      S-CSCF's own Cx queries (MAR/SAR) stop because the S-CSCF
+      process is either absent or unreachable — this is a diagnostic
+      signature.
     affected_interface: Mw
     affected_protocol: SIP
     failure_domain: ims_signaling
     severity: down
 
     possible_causes:
-      - "S-CSCF process crash or unresponsive"
+      - "S-CSCF container 'exited' or process crashed"
+      - "S-CSCF overload (connection limit, memory exhaustion, SHM corruption)"
       - "Transport failure between I-CSCF/P-CSCF and S-CSCF"
-      - "S-CSCF overload (connection limit, memory exhaustion)"
       - "Network partition isolating S-CSCF"
       - "S-CSCF misconfiguration (wrong listen address, port conflict)"
 
     observable_symptoms:
       immediate:
-        - log: "500 Server error on LIR select next S-CSCF"
-          at: icscf
-          description: "I-CSCF can route to S-CSCF but S-CSCF is unreachable"
-        - metric: "ims_usrloc_scscf:active_contacts"
-          becomes: "0 or stale"
+        - symptom: "S-CSCF container is 'exited' OR running-but-not-listening on its SIP port"
+          source: get_network_status
+          note: "check_process_listeners(scscf) discriminates: no 5060 listener means process crashed; listener up + unreachable means transport"
+        - symptom: "`ims_usrloc_scscf:active_contacts` is 0 / flat at baseline"
+          source: get_nf_metrics
           at: scscf
-          description: "No active registered contacts at S-CSCF"
+        - symptom: "I-CSCF's outgoing SIP forwarding to S-CSCF timing out or returning 500"
+          source: get_nf_metrics
+          at: icscf
 
       cascading:
-        - condition: "new SIP REGISTER"
-          effect: "I-CSCF finds S-CSCF address via LIR but cannot reach it → 500/408"
-        - condition: "new SIP INVITE"
-          effect: "Call setup fails — S-CSCF is the call controller"
-        - condition: "active SIP dialogs"
-          effect: "Dialogs expire (dialog timer), established calls may persist briefly"
+        # --- Branch A: REGISTER flow fails at the I-CSCF → S-CSCF Mw hop ---
+        - branch: "register_fails_at_mw_to_scscf"
+          condition: "Any new IMS REGISTER reaching the I-CSCF"
+          effect: |
+            I-CSCF successfully performs Cx UAR against HSS and gets a
+            serving-S-CSCF URI in response. I-CSCF then attempts to
+            forward the REGISTER to that S-CSCF over Mw. The forward
+            times out (408) or returns 500. From the P-CSCF's view the
+            REGISTER never completes; the UE re-REGISTERs; cascading
+            retransmissions.
+          mechanism: "I-CSCF routes to S-CSCF via Mw, S-CSCF silent, I-CSCF emits 500/408 after SIP retransmit window"
+          source_steps:
+            - ims_registration.step_5    # I-CSCF → S-CSCF Mw (forward REGISTER)
+          observable_metrics:
+            - ims_registrar_scscf:accepted_regs          # flat (no new successful regs)
+            - script:register_success                    # flat at P-CSCF
+            - script:register_failed                     # may increment
+            - tmx:active_transactions at icscf          # accumulates
+
+        # --- Branch B: INVITE fails at the I-CSCF → S-CSCF(term) Mw hop ---
+        - branch: "invite_fails_at_mw_to_scscf"
+          condition: "Any new VoNR INVITE requiring terminating S-CSCF routing"
+          effect: |
+            At call setup the I-CSCF issues an LIR to the HSS to find
+            UE2's serving S-CSCF, then forwards INVITE via Mw. If
+            the terminating S-CSCF is unreachable the forward fails
+            and the originating P-CSCF sees a 408/500. No dialogs
+            are established.
+          mechanism: "I-CSCF LIR succeeds; Mw forward to terminating S-CSCF fails; call rejected"
+          source_steps:
+            - vonr_call_setup.step_7    # I-CSCF → S-CSCF(term) Mw forward
+          observable_metrics:
+            - dialog_ng:active at scscf    # flat at 0
+            - dialog_ng:processed at scscf # flat
+            - core:rcv_requests_invite at scscf  # flat (no INVITEs arrive)
+
+        # --- Branch C: S-CSCF's own Cx queries (MAR/SAR) stop ---
+        # Important discriminator: if S-CSCF is crashed, IT isn't sending
+        # Diameter traffic anymore — the MAR/SAR counters stay flat.
+        - branch: "scscf_cx_egress_silent"
+          condition: "S-CSCF's own Diameter traffic toward HSS"
+          effect: |
+            S-CSCF isn't processing REGISTERs, so it doesn't issue MAR
+            (no 401 challenges) or SAR (no authenticated second-REGISTER
+            completes). `ims_auth:mar_replies_received` and
+            `ims_registrar_scscf:sar_replies_received` flatline. This
+            distinguishes S-CSCF-dead from HSS-dead: in S-CSCF-dead,
+            I-CSCF's UAR/LIR to HSS still work.
+          mechanism: "S-CSCF silent → no MAR/SAR emitted → cdp peer traffic from S-CSCF stops"
+          source_steps:
+            - diameter_cx_authentication.step_2   # S-CSCF MAR
+            - diameter_cx_authentication.step_3   # S-CSCF SAR
+          observable_metrics:
+            - ims_auth:mar_replies_received at scscf       # flat
+            - ims_registrar_scscf:sar_replies_received     # flat
+          discriminating_from: "hss_unreachable — in hss_unreachable, I-CSCF's uar_timeouts and S-CSCF's mar_timeouts BOTH increment; in scscf_unreachable, I-CSCF Cx is normal and S-CSCF Cx egress is just absent."
+
+        # --- Branch D: Active dialogs persist briefly then time out ---
+        - branch: "dialogs_time_out"
+          condition: "Pre-existing established SIP dialogs"
+          effect: |
+            Active calls survive briefly because RTP media flows via
+            UPF/RTPEngine (no S-CSCF involvement). But any re-INVITE
+            or BYE arriving at the chain will fail; dialogs eventually
+            expire on the dialog timer.
+          mechanism: "Media path independent of signaling path → audio persists briefly, re-negotiation fails"
+          source_steps:
+            - vonr_call_teardown.step_3    # BYE forward to S-CSCF fails
+
+        # --- Branch E: Negative — I-CSCF is NOT broken ---
+        - branch: "icscf_unaffected"
+          condition: "I-CSCF's Cx queries to HSS"
+          effect: |
+            I-CSCF's UAR/LIR to HSS continue to succeed (Cx is
+            independent of S-CSCF). 500-response logs at I-CSCF
+            ("Server error on LIR select next S-CSCF") are SYMPTOMS
+            of downstream S-CSCF unreachability, not evidence of
+            I-CSCF fault.
+          mechanism: "None — I-CSCF is the observer of S-CSCF unreachability, not the node that failed"
+          observable_metrics:
+            - ims_icscf:uar_replies_received   # stays at nominal rate
+            - ims_icscf:lir_replies_received
 
     does_NOT_mean:
-      - "I-CSCF has an error — the 500 at I-CSCF is a SYMPTOM of S-CSCF unreachability"
-      - "HSS is broken — Diameter from I-CSCF to HSS (UAR/LIR) may still work fine"
+      - "I-CSCF has an error — 500-responses at I-CSCF are SYMPTOMS of S-CSCF unreachability"
+      - "HSS is broken — I-CSCF's UAR/LIR queries continue to succeed; S-CSCF's MAR/SAR are absent because S-CSCF isn't running, not because HSS is failing"
+      - "RAN or N3 is broken — dialogs-expiring and 0-INVITE-at-S-CSCF are signaling-path failures, not data-plane"
 
     diagnostic_approach:
+      - tool: get_network_status
+        purpose: "Check scscf container state — 'exited' is the most common root cause"
+        priority: 1
+      - tool: check_process_listeners
+        args: {container: "scscf"}
+        purpose: "If container running, verify SIP 5060 listener exists. Missing listener → process crashed or misconfigured"
+        priority: 2
       - tool: measure_rtt
         args: {container: "icscf", target_ip: "172.22.0.20"}
-        purpose: "Check basic connectivity from I-CSCF to S-CSCF"
-        priority: 1
-      - tool: get_network_status
-        purpose: "Check S-CSCF container/process status"
-        priority: 2
+        purpose: "Verify I-CSCF → S-CSCF reachability at IP level. Loss/high RTT with listener up → transport partition"
+        priority: 3
       - tool: run_kamcmd
         args: {container: "icscf", command: "cdp.list_peers"}
-        purpose: "Check if Diameter is still functioning (separate from SIP path)"
-        priority: 3
+        purpose: "Confirm I-CSCF↔HSS Diameter peer is healthy (proves HSS side is not the issue)"
+        priority: 4
 
   hss_unreachable:
-    description: "IMS HSS unreachable — Diameter Cx queries failing, subscriber resolution broken."
+    description: |
+      IMS HSS (pyhss) unreachable — Diameter Cx queries time out at
+      both I-CSCF (UAR, LIR) and S-CSCF (MAR, SAR). PyHSS's backend
+      is MySQL (not MongoDB — see components.yaml), so this failure
+      mode is distinct from `subscriber_data_store_unavailable`.
+      The signature: BOTH I-CSCF and S-CSCF Cx response times elevate
+      and/or their timeout counters increment — not just one side.
+      If only one side shows Cx trouble while the other is nominal,
+      this is not hss_unreachable; see `ims_signaling_chain_degraded`
+      or `scscf_unreachable`.
     affected_interface: Cx
     affected_protocol: Diameter
     failure_domain: ims_signaling
     severity: down
 
     possible_causes:
-      - "HSS process crash or hang"
-      - "HSS database backend (MySQL) failure"
-      - "Transport failure between I-CSCF/S-CSCF and HSS"
-      - "HSS overload (query backlog, connection limit)"
-      - "Diameter peer misconfiguration or certificate expiry"
-      - "Network partition isolating HSS"
+      - "pyhss process crash or hang"
+      - "pyhss MySQL backend failure or hang (pyhss/config.yaml's db_type: mysql)"
+      - "pyhss overloaded (query backlog, connection limit exceeded)"
+      - "Transport failure between I-CSCF/S-CSCF and pyhss"
+      - "Diameter peer misconfiguration or reset"
+      - "Network partition isolating pyhss"
 
     observable_symptoms:
       immediate:
-        - metric: "cdp:timeout"
-          becomes: "> 0"
+        - symptom: "`cdp:timeout` incrementing at BOTH icscf and scscf"
+          source: get_nf_metrics
           at: [icscf, scscf]
-          lag: "5-30s (Diameter Tw timer)"
-          description: "Diameter Cx requests timing out"
-        - metric: "ims_icscf:uar_timeouts"
-          becomes: "> 0"
+          note: "'Tw' Diameter watchdog timer triggers at ~30s of silence. Both sides incrementing discriminates this from per-peer partitions."
+        - symptom: "`ims_icscf:uar_timeouts` and/or `ims_icscf:lir_timeouts` incrementing"
+          source: get_nf_metrics
           at: icscf
-        - metric: "ims_auth:mar_timeouts"
-          becomes: "> 0"
+        - symptom: "`ims_auth:mar_timeouts` and/or `ims_registrar_scscf:sar_timeouts` incrementing"
+          source: get_nf_metrics
           at: scscf
+        - symptom: "pyhss container 'exited' OR Diameter listener missing on pyhss"
+          source: get_network_status, check_process_listeners
 
       cascading:
-        - condition: "new SIP REGISTER"
-          effect: "Stalls waiting for Diameter response, eventually times out"
-        - condition: "all IMS authentication"
-          effect: "Cannot complete — S-CSCF needs MAR/MAA from HSS"
-        - condition: "existing registrations"
-          effect: "Expire when re-registration timer fires and re-auth fails"
+        # --- Branch A: UAR fails (first Cx interaction on REGISTER) ---
+        - branch: "icscf_uar_fails"
+          condition: "New IMS REGISTER reaching the I-CSCF with empty S-CSCF cache"
+          effect: |
+            I-CSCF calls `I_perform_user_authorization_request` which
+            emits a UAR over the Cx peer. No UAA comes back within the
+            Diameter timer; I-CSCF returns SIP 500 upstream
+            ("Server error on SCSCF Select (UAR)"). The P-CSCF sees
+            500, the UE re-REGISTERs, cascade retransmissions.
+          mechanism: "I-CSCF → HSS Cx UAR times out → SIP 500 propagates upstream"
+          source_steps:
+            - ims_registration.step_4    # I-CSCF UAR to pyhss
+            - diameter_cx_authentication.step_1
+          observable_metrics:
+            - ims_icscf:uar_timeouts        # incrementing
+            - ims_icscf:uar_replies_received  # flat
+            - script:register_failed at pcscf
+
+        # --- Branch B: MAR fails (S-CSCF auth challenge) ---
+        - branch: "scscf_mar_fails"
+          condition: "REGISTER reaches S-CSCF (after I-CSCF cached S-CSCF list, so UAR was skipped or succeeded earlier)"
+          effect: |
+            S-CSCF calls `ims_www_challenge` which emits a MAR to HSS
+            for auth vectors. No MAA → S-CSCF cannot send the 401
+            challenge back to the UE. The UE never receives the
+            challenge; registration stalls.
+          mechanism: "S-CSCF → HSS Cx MAR times out → 401 challenge never emitted → UE retransmits original REGISTER"
+          source_steps:
+            - ims_registration.step_6     # S-CSCF MAR + 401 challenge
+            - diameter_cx_authentication.step_2
+          observable_metrics:
+            - ims_auth:mar_timeouts
+            - ims_auth:mar_replies_received  # flat
+            - ims_registrar_scscf:accepted_regs  # flat
+
+        # --- Branch C: SAR fails (second REGISTER after digest) ---
+        - branch: "scscf_sar_fails"
+          condition: "UE's second REGISTER with digest response reaching S-CSCF (MAR already succeeded pre-failure)"
+          effect: |
+            S-CSCF calls `save()` which emits SAR to bind the user to
+            this S-CSCF. No SAA → S-CSCF cannot store the contact in
+            usrloc; sends SIP 500 (or 403 per scscf.cfg's SAR fallback
+            route). UE sees failure despite having successfully responded
+            to the 401.
+          mechanism: "S-CSCF → HSS Cx SAR times out → 500/403 upstream → registration fails at final step"
+          source_steps:
+            - ims_registration.step_7    # S-CSCF SAR
+            - diameter_cx_authentication.step_3
+          observable_metrics:
+            - ims_registrar_scscf:sar_timeouts
+            - ims_registrar_scscf:sar_replies_received
+            - ims_usrloc_scscf:active_contacts  # flat
+
+        # --- Branch D: LIR fails (call setup) ---
+        - branch: "icscf_lir_fails"
+          condition: "New VoNR INVITE requiring I-CSCF to resolve terminating S-CSCF"
+          effect: |
+            I-CSCF calls `I_perform_location_information_request` which
+            emits LIR to HSS for the callee's S-CSCF address. No LIA →
+            I-CSCF cannot route INVITE; returns SIP 500 to P-CSCF.
+            Calls fail to set up.
+          mechanism: "I-CSCF → HSS Cx LIR times out → can't resolve S-CSCF → 500 upstream → no INVITE routing"
+          source_steps:
+            - vonr_call_setup.step_6    # I-CSCF LIR at call setup
+          observable_metrics:
+            - ims_icscf:lir_timeouts
+            - ims_icscf:lir_replies_received
+
+        # --- Branch E: Existing registrations expire ---
+        - branch: "existing_regs_expire"
+          condition: "Already-registered UEs reaching re-registration timer (typically 3600s)"
+          effect: |
+            Re-REGISTER requires fresh MAR/SAR (auth re-challenge).
+            With HSS down, these fail; S-CSCF usrloc entries expire;
+            P-CSCF registered_contacts decrement as entries time out.
+          mechanism: "Re-registration fires → MAR/SAR fail → usrloc expires → gradual user-base erosion"
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts   # decrements over minutes
+            - ims_usrloc_scscf:active_contacts
+
+        # --- Branch F: Negative — P-CSCF N5 to PCF is unaffected ---
+        - branch: "pcscf_n5_unaffected"
+          condition: "P-CSCF → PCF N5 policy authorization"
+          effect: |
+            PCF's data path (Npcf → UDR → MongoDB) is independent of
+            pyhss. N5 App Session Create requests from P-CSCF still
+            succeed — IF the calls ever reach P-CSCF (which they
+            won't because REGISTER is blocked upstream). This is a
+            negative claim: do NOT attribute N5/httpclient counter
+            changes at P-CSCF to HSS unreachability.
+          mechanism: "None — N5/PCF/UDR/MongoDB form a separate chain"
+          observable_metrics:
+            - httpclient:connfail at pcscf  # stays at baseline
+            - fivegs_pcffunction_pa_policyamassoreq  # rate follows upstream INVITE flow
 
     does_NOT_mean:
-      - "I-CSCF or S-CSCF has a bug — they are waiting for a response that never comes"
-      - "SIP signaling is broken — SIP transport may be fine, it's the backend query that fails"
-      - >
-        cdp:timeout at I-CSCF necessarily means HSS is the root cause. Diameter
-        timeouts can be a cascading symptom of problems ANYWHERE on the IMS
-        signaling chain (P-CSCF latency, I-CSCF overload, network issues).
-        Before concluding HSS is the cause, rule out upstream bottlenecks by
-        probing each component with measure_rtt. See ims_signaling_chain_degraded
-        for the systematic diagnostic approach.
+      - |
+        cdp:timeout at I-CSCF ALONE means HSS is the root cause. Diameter
+        timeouts can be a cascading symptom of problems upstream on the
+        IMS signaling chain (P-CSCF latency, I-CSCF overload, network
+        issues between any pair). Before concluding HSS-unreachable,
+        verify BOTH I-CSCF and S-CSCF Cx are affected and rule out
+        upstream bottlenecks with measure_rtt. See
+        ims_signaling_chain_degraded for the systematic approach.
+      - |
+        pyhss's MySQL backend being down is the same as MongoDB being
+        down. pyhss uses MySQL (db_type: mysql in pyhss/config.yaml).
+        Open5GS 5G core components (UDR/UDM/PCF) use MongoDB. They are
+        separate stores. MongoDB failure is `subscriber_data_store_unavailable`
+        and does NOT cause HSS/Cx timeouts.
 
     diagnostic_approach:
-      - tool: measure_rtt
-        args: {container: "icscf", target_ip: "172.22.0.18"}
-        purpose: "Check connectivity from I-CSCF to HSS — elevated RTT or loss confirms transport issue to HSS"
+      - tool: get_network_status
+        purpose: "Check pyhss container state. 'exited' is the clearest cause."
         priority: 1
-      - tool: run_kamcmd
-        args: {container: "icscf", command: "cdp.list_peers"}
-        purpose: "Check Diameter peer state and connection health to HSS"
-        priority: 2
-      - tool: read_container_logs
-        args: {container: "pyhss", grep: "error"}
-        purpose: "Check HSS application logs for errors or unresponsiveness"
-        priority: 3
       - tool: check_process_listeners
         args: {container: "pyhss"}
-        purpose: "Verify HSS Diameter process is running and listening"
+        purpose: "Verify pyhss Diameter listener is up on 3868/tcp"
+        priority: 2
+      - tool: measure_rtt
+        args: {container: "icscf", target_ip: "172.22.0.18"}
+        purpose: "Check transport reachability from I-CSCF to pyhss"
+        priority: 3
+      - tool: run_kamcmd
+        args: {container: "icscf", command: "cdp.list_peers"}
+        purpose: "Query the Kamailio Diameter peer table directly. 'Closed' state confirms the Diameter association is dead."
         priority: 4
+      - tool: get_nf_metrics
+        purpose: "Confirm BOTH I-CSCF and S-CSCF Cx timeout counters are incrementing (distinguishes hss_unreachable from per-peer or hop-specific issues)"
+        priority: 5
 
-    hypothesis_testing: >
-      BEFORE concluding HSS is the root cause, generate and test these
-      hypotheses:
-        Hypothesis A: HSS is genuinely unreachable or broken.
-          Test: measure_rtt(icscf, pyhss_ip). If loss or elevated RTT → transport issue.
-                read_container_logs(pyhss). If errors → application issue.
-                check_process_listeners(pyhss). If no Diameter listener → process crashed.
-        Hypothesis B: The Diameter timeouts are a CASCADING symptom of an
-          upstream IMS signaling chain problem (see ims_signaling_chain_degraded).
-          Test: measure_rtt FROM each IMS component (pcscf, icscf, scscf).
-                If any has elevated egress RTT → that component is the bottleneck,
-                not HSS. Check register_rate at pcscf — a retransmission storm
-                indicates the chain is degraded, not just the HSS.
+    hypothesis_testing: |
+      BEFORE concluding HSS is the root cause, generate and test:
+        Hypothesis A: pyhss is genuinely unreachable or broken.
+          Test: get_network_status (container state), check_process_listeners
+                (3868/tcp up?), measure_rtt(icscf, pyhss_ip), run_kamcmd(icscf,
+                cdp.list_peers). If any of: exited container, no listener,
+                100% RTT loss, or "Closed" Diameter peer — Hypothesis A holds.
+        Hypothesis B: Diameter timeouts are cascading symptoms of an upstream
+          IMS signaling chain problem (see ims_signaling_chain_degraded).
+          Test: measure_rtt FROM each IMS component (pcscf, icscf, scscf)
+                to its neighbors. If any hop has elevated egress RTT, that
+                hop is the bottleneck, not HSS. Check register_rate at pcscf —
+                a retransmission storm indicates the chain is degraded end-
+                to-end, not just the HSS leg.
+        Hypothesis C: MongoDB/UDR failure (subscriber_data_store_unavailable).
+          Test: query_subscriber(<any imsi>). If IMS side returns data but
+                core_5g side returns null, pyhss is fine and mongo is down.
+                If both return data, neither data-store is broken.
       Only conclude hss_unreachable if Hypothesis A is confirmed AND
-      Hypothesis B is ruled out.
+      Hypotheses B and C are ruled out.
 
   ims_signaling_partition:
-    description: "P-CSCF isolated from I-CSCF and S-CSCF — IMS SIP signaling path severed."
+    description: |
+      P-CSCF severed from I-CSCF / S-CSCF (Mw interface partitioned).
+      SIP signaling from UEs reaches P-CSCF normally (Gm is healthy,
+      UE SIP rides the IMS PDU session through UPF), but forwarding
+      onward on Mw fails. This scenario's signature is asymmetric:
+      the Cx path between I/S-CSCF and HSS may be perfectly healthy
+      (HSS is reachable from I/S-CSCF even if P-CSCF can't reach
+      them), but REGISTERs and INVITEs never get upstream because
+      the Mw hop is dead.
     affected_interface: Mw
     affected_protocol: SIP
     failure_domain: ims_signaling
     severity: down
 
     possible_causes:
-      - "Network partition between P-CSCF and IMS core"
+      - "Network partition between P-CSCF and IMS core (one-way or bidirectional)"
+      - "netem loss/delay injected on P-CSCF ↔ I-CSCF container bridge link"
       - "Firewall rule blocking SIP traffic between P-CSCF and CSCFs"
       - "Routing failure in the transport network"
       - "P-CSCF interface failure (link down on CSCF-facing interface)"
-      - "Switch or router failure on the IMS internal network segment"
 
     observable_symptoms:
       immediate:
-        - metric: "tmx:active_transactions"
-          becomes: "> 0 and growing"
+        - symptom: "`tmx:active_transactions` accumulates at P-CSCF (transactions with no responses)"
+          source: get_nf_metrics
           at: pcscf
-          description: "SIP transactions accumulating at P-CSCF with no responses"
-        - log: "SIP transaction timeout"
-          at: pcscf
+        - symptom: "measure_rtt from P-CSCF to I-CSCF shows 100% packet loss or severe RTT"
+          source: measure_rtt
+          from: pcscf
+          to: icscf
+        - symptom: "I-CSCF's `core:rcv_requests_register` and `core:rcv_requests_invite` stay flat — the Mw forward never arrives"
+          source: get_nf_metrics
+          at: icscf
+        - symptom: "HSS Cx traffic from I-CSCF/S-CSCF remains healthy (discriminates from hss_unreachable)"
+          source: get_nf_metrics
+          at: [icscf, scscf]
 
       cascading:
-        - condition: "new SIP REGISTER"
-          effect: "P-CSCF cannot reach I-CSCF, registration times out"
-        - condition: "new SIP INVITE"
-          effect: "Call setup fails, P-CSCF cannot route to I/S-CSCF"
-        - condition: "active calls"
-          effect: "RTP media may continue (via UPF, not through CSCFs) but re-INVITE fails"
+        # --- Branch A: REGISTER forward fails at Mw ---
+        - branch: "register_forward_fails_at_mw"
+          condition: "Any UE attempting IMS REGISTER"
+          effect: |
+            P-CSCF receives REGISTER from the UE, runs
+            route[N5_REG_PCF_POLICY_AUTH] / pcscf_save_pending, then
+            attempts to forward REGISTER to I-CSCF over Mw. The forward
+            fails (timeout or no response). SIP T1 timer at P-CSCF
+            expires, retransmissions kick in. UE sees no response,
+            re-REGISTERs; `tmx:active_transactions` at P-CSCF grows.
+          mechanism: "P-CSCF → I-CSCF Mw forward fails → transaction stalls at P-CSCF → UE retransmits → storm at P-CSCF's `rcv_requests_register`"
+          source_steps:
+            - ims_registration.step_3    # P-CSCF → I-CSCF forward REGISTER
+          observable_metrics:
+            - tmx:active_transactions at pcscf    # accumulates
+            - core:rcv_requests_register at pcscf  # inflated by retransmissions
+            - core:rcv_requests_register at icscf  # stays at baseline
+            - ims_usrloc_pcscf:registered_contacts # fails to increment
+          discriminating_from: "hss_unreachable — in hss_unreachable I-CSCF sees REGISTERs arrive (uar_timeouts increments); in ims_signaling_partition I-CSCF's rcv_requests_register stays flat because REGISTERs never arrive"
+
+        # --- Branch B: INVITE forward fails at Mw ---
+        - branch: "invite_forward_fails_at_mw"
+          condition: "Any UE attempting a VoNR call"
+          effect: |
+            P-CSCF receives INVITE from UE1, runs N5_INIT_REQ (which
+            succeeds if PCF is reachable — the partition is on Mw,
+            not on N5), then attempts Mw forward to S-CSCF(orig). The
+            forward fails. Call setup never progresses past step 4.
+          mechanism: "P-CSCF's N5 succeeds; Mw forward to S-CSCF fails; call rejected at P-CSCF"
+          source_steps:
+            - vonr_call_setup.step_4    # P-CSCF → S-CSCF(orig) forward INVITE
+          observable_metrics:
+            - core:rcv_requests_invite at pcscf  # UE-side INVITE reaches P-CSCF
+            - core:rcv_requests_invite at scscf  # never arrives
+            - dialog_ng:active at pcscf  # flat at 0
+            - dialog_ng:active at scscf  # flat at 0
+
+        # --- Branch C: Response path also fails (if partition bidirectional) ---
+        - branch: "response_path_fails_at_mw"
+          condition: "In the edge case where a forward succeeds but the response can't come back"
+          effect: |
+            Rare in practice with symmetric partitions (netem applied
+            to a container's interface affects both directions), but
+            asymmetric partitions (ingress firewall, one-way routing)
+            can cause forwarded requests to land at I-CSCF while
+            responses can't return. Symptoms: I-CSCF sees inbound SIP
+            but P-CSCF still times out — discriminate via measure_rtt
+            in BOTH directions.
+          mechanism: "Return-path packet drop → SIP response never reaches P-CSCF → same UE retransmit storm as branch A"
+          source_steps:
+            - ims_registration.step_8    # 200 OK return path through P-CSCF
+
+        # --- Branch D: Active call media may persist briefly ---
+        - branch: "rtp_media_persists_briefly"
+          condition: "Call that was already established before the partition"
+          effect: |
+            RTP media flows UE → gNB → UPF → RTPEngine → UPF → gNB → UE.
+            None of this path crosses the P-CSCF ↔ I-CSCF Mw link.
+            So RTP continues unaffected. Any re-INVITE (hold/resume,
+            codec renegotiation) will fail because it needs Mw. BYE
+            eventually can't propagate upstream either.
+          mechanism: "Data plane is independent of Mw → established calls' audio persists"
+          observable_metrics:
+            - rtpengine_sessions          # pre-existing sessions persist
+            - normalized.upf.gtp_indatapktn3upf_per_ue   # continues at baseline
+
+        # --- Branch E: Negative — I-CSCF ↔ HSS Cx is UNAFFECTED ---
+        - branch: "cx_unaffected"
+          condition: "Cx Diameter path between I-CSCF/S-CSCF and pyhss"
+          effect: |
+            The partition is on Mw (P-CSCF ↔ I-CSCF/S-CSCF bridge).
+            I-CSCF ↔ pyhss and S-CSCF ↔ pyhss Diameter associations
+            are independent links on the container network. If a probe
+            from I-CSCF to pyhss returns clean, this is NOT evidence
+            that "HSS is fine so the fault is elsewhere in IMS" — the
+            partition is on a different hop entirely. Measure P-CSCF
+            ↔ I-CSCF directly.
+          mechanism: "None — Mw and Cx are separate links; partition on one leaves the other intact"
+          observable_metrics:
+            - cdp:timeout at icscf          # stays at baseline
+            - ims_icscf:uar_timeouts        # stays at baseline
+            - ims_auth:mar_timeouts at scscf # stays at baseline
+
+    does_NOT_mean:
+      - "HSS is broken — Cx traffic from I/S-CSCF to HSS is on a different link and typically remains healthy"
+      - "I-CSCF has an internal fault — I-CSCF's rcv_requests_register/invite stays flat because nothing is arriving, not because it's broken"
+      - "PCF/N5 failure — P-CSCF's N5 to PCF (via SCP) runs on a different link than Mw; check httpclient:connok to rule in or out"
 
     diagnostic_approach:
       - tool: measure_rtt
         args: {container: "pcscf", target_ip: "172.22.0.19"}
-        purpose: "Check connectivity from P-CSCF to I-CSCF — 100% loss confirms partition"
+        purpose: "P-CSCF → I-CSCF reachability. 100% loss confirms Mw partition."
         priority: 1
       - tool: measure_rtt
-        args: {container: "pcscf", target_ip: "172.22.0.20"}
-        purpose: "Check connectivity from P-CSCF to S-CSCF"
+        args: {container: "icscf", target_ip: "172.22.0.21"}
+        purpose: "Reverse direction: I-CSCF → P-CSCF. Discriminates symmetric partition from asymmetric."
         priority: 2
+      - tool: measure_rtt
+        args: {container: "icscf", target_ip: "172.22.0.18"}
+        purpose: "I-CSCF → pyhss. Clean RTT here proves Cx path is healthy and partition is specifically on Mw."
+        priority: 3
+      - tool: get_nf_metrics
+        purpose: "Confirm I-CSCF's `core:rcv_requests_register` is flat (proving REGISTERs aren't arriving) while P-CSCF's same counter is elevated with retransmissions."
+        priority: 4
+
+    key_diagnostic_signal:
+      - "P-CSCF → I-CSCF measure_rtt shows 100% packet loss while I-CSCF → pyhss measure_rtt is clean: Mw-specific partition"
+      - "P-CSCF's core:rcv_requests_register inflated AND I-CSCF's core:rcv_requests_register flat = REGISTERs never crossing Mw"
+      - "cdp:timeout at I-CSCF stays at baseline (Cx healthy) AND tmx:active_transactions grows at P-CSCF (Mw broken)"
 
   sip_transport_mismatch:
-    description: "SIP message delivery failure due to TCP/UDP protocol mismatch at the receiving endpoint."
+    description: |
+      SIP message delivery failure due to TCP/UDP protocol mismatch at
+      a receiving endpoint. Kamailio P-CSCF is configured with
+      `udp_mtu_try_proto=TCP`, which causes outbound SIP messages
+      larger than the configured UDP MTU (default 1300 bytes) to be
+      upgraded to TCP for transmission. If the receiver — typically
+      the UE — doesn't have a TCP listener on the SIP port, the
+      upgraded message is silently dropped at the transport layer.
+      Small SIP messages (REGISTER, OPTIONS) ride UDP and succeed;
+      large messages (INVITE with SDP) get promoted to TCP and fail.
+      The signature is message-size-dependent delivery.
     affected_interface: Gm
     affected_protocol: SIP
     failure_domain: ims_signaling
     severity: down
 
     possible_causes:
-      - "SIP proxy configured to switch to TCP for large messages (udp_mtu_try_proto=TCP) but UE only supports UDP"
+      - "P-CSCF configured with `udp_mtu_try_proto=TCP` (default in Kamailio IMS configs) but UE only listens on UDP"
       - "MTU-based fallback to TCP when receiver has no TCP listener"
+      - "NAT or firewall allowing UDP but blocking TCP on SIP port (5060)"
       - "Misconfigured transport preferences between SIP entities"
-      - "NAT or firewall allowing UDP but blocking TCP on SIP port"
 
     observable_symptoms:
       immediate:
-        - log: "SIP INVITE sent but no response received"
+        - symptom: "Large SIP INVITEs (with SDP) reach P-CSCF but never appear at UE2's pjsua"
+          source: check_process_listeners or pjsua trace
+          at: e2e_ue2
+          note: "Small SIP messages (OPTIONS, small REGISTER) work fine — size-dependent failure is the key signal"
+        - symptom: "P-CSCF's udp_mtu_try_proto is set to TCP in kamailio_pcscf.cfg"
+          source: read_running_config
           at: pcscf
-          description: "P-CSCF sent a large SIP message but never got a response"
-        - log: "500 Server error on LIR select next S-CSCF"
-          at: icscf
-          description: "Timeout propagates back through I-CSCF as 500"
+        - symptom: "UE container only has UDP listener on 5060, no TCP listener"
+          source: check_process_listeners
+          at: [e2e_ue1, e2e_ue2]
 
       cascading:
-        - condition: "SIP INVITE with SDP (>1300 bytes)"
-          effect: "Large messages fail, small messages (OPTIONS, etc.) may succeed"
-          description: "This is the signature — message-size-dependent failures"
-        - condition: "timeout propagation"
-          effect: "500 error cascades back through the SIP signaling chain"
+        # --- Branch A: Large INVITE fails to UE ---
+        - branch: "large_invite_fails_to_ue"
+          condition: "Terminating P-CSCF attempting to deliver INVITE with SDP to UE"
+          effect: |
+            The INVITE+SDP payload is typically 1300-2000 bytes. Kamailio
+            checks payload size, sees > udp_mtu, upgrades the outgoing
+            transport to TCP, and sends a TCP SYN to UE:5060. The UE has
+            no TCP listener on 5060 (pjsua binds UDP only) → RST, message
+            dropped. No INVITE log line ever appears in the UE's trace.
+            The originating P-CSCF sees no 200 OK within the T1 timer
+            and eventually returns 408 to UE1.
+          mechanism: "INVITE > udp_mtu → TCP upgrade → UE has no TCP listener → silent drop → 408 at orig P-CSCF"
+          source_steps:
+            - vonr_call_setup.step_10    # P-CSCF → UE2 SIP (Gm)
+          observable_metrics:
+            - core:rcv_requests_invite at pcscf   # incoming INVITEs received
+            - dialog_ng:active at pcscf           # flat at 0 (never established)
+            - sl:4xx_replies at pcscf             # 4xx/408 generated
+
+        # --- Branch B: Small messages succeed (size-dependent) ---
+        - branch: "small_sip_messages_work"
+          condition: "SIP OPTIONS, MESSAGE, or small REGISTER"
+          effect: |
+            Messages under the udp_mtu threshold stay on UDP and deliver
+            normally. This is the diagnostic signature: registrations
+            might work (REGISTER is small when no large headers attached)
+            while calls fail. Distinguishing from ims_signaling_partition:
+            in a partition, EVERYTHING fails; in sip_transport_mismatch,
+            only large messages fail.
+          mechanism: "UDP-only messages take the working path"
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts   # may be > 0 (REGISTER succeeded)
+            - core:rcv_requests_register at pcscf    # normal rate
+          discriminating_from: "ims_signaling_partition — registrations succeed here but fail in partition"
+
+        # --- Branch C: 500 error cascades upstream on timeout ---
+        - branch: "500_cascades_upstream"
+          condition: "Originating side waiting for response to forwarded INVITE"
+          effect: |
+            Terminating P-CSCF's 408 / no-response propagates back
+            through the Mw chain. The originating I-CSCF may log
+            "500 Server error on LIR select next S-CSCF" (misleading —
+            the LIR actually succeeded; the error is the eventual
+            timeout propagating through the signaling chain).
+          mechanism: "Timeout at terminating hop → 500 generated → back through Mw"
+          source_steps:
+            - vonr_call_setup.step_11    # Response propagation back through chain
+
+        # --- Branch D: Negative — HSS and Cx are not involved ---
+        - branch: "hss_cx_unaffected"
+          condition: "Diameter Cx path between CSCFs and HSS"
+          effect: |
+            UAR/LIR for call setup succeed normally. MAR/SAR for
+            registration succeed normally. The 500 that shows up at
+            I-CSCF is NOT a Cx failure — it is a cascading SIP-layer
+            timeout.
+          mechanism: "None — Cx works fine; only the final SIP delivery hop fails"
+          observable_metrics:
+            - ims_icscf:uar_timeouts        # stays at baseline
+            - cdp:timeout at icscf          # stays at baseline
 
     does_NOT_mean:
-      - "I-CSCF has a Diameter or routing error — the 500 is a propagated timeout"
-      - "S-CSCF authentication failed — auth succeeded, INVITE delivery failed"
+      - "I-CSCF has a Diameter or routing error — 500 at I-CSCF is a cascading timeout from the delivery-failure at the UE hop"
+      - "S-CSCF authentication failed — auth succeeded, INVITE delivery failed at the last hop"
       - "HSS returned wrong data — Cx interface is working correctly"
+      - "Network partition on Mw — partition would fail registration too; size-dependent failure is diagnostic"
 
     diagnostic_approach:
       - tool: read_running_config
-        args: {container: "pcscf", grep: "udp_mtu"}
-        purpose: "Check if P-CSCF switches to TCP for large SIP messages"
+        args: {container: "pcscf"}
+        purpose: "Check kamailio_pcscf.cfg for udp_mtu_try_proto=TCP setting"
         priority: 1
       - tool: check_process_listeners
         args: {container: "e2e_ue2"}
-        purpose: "Verify what transport protocols the UE is listening on"
+        purpose: "Verify UE has ONLY UDP listener on 5060 (confirms mismatch)"
         priority: 2
-      - tool: read_container_logs
-        args: {container: "e2e_ue2", grep: "INVITE"}
-        purpose: "Check if the INVITE ever reached UE2 (absence = delivery failure)"
+      - tool: get_nf_metrics
+        purpose: "Confirm REGISTERs succeed (ims_usrloc_pcscf:registered_contacts > 0) while INVITEs fail (dialog_ng:active = 0)"
         priority: 3
 
     key_diagnostic_signal:
-      - "INVITE sent by one node but NEVER received by the next hop = delivery failure"
-      - "Large SIP messages fail while small ones succeed = MTU/transport issue"
-      - "Absence of the SIP message at the destination is the critical evidence"
+      - "Registrations work but calls fail = message-size-dependent transport failure"
+      - "P-CSCF's udp_mtu_try_proto=TCP + UE has only UDP listener = smoking gun"
+      - "UE-side trace shows NO inbound INVITE while P-CSCF shows outbound — transport-layer drop"
 
   # =========================================================================
   # INFRASTRUCTURE FAILURE MODES
@@ -711,42 +1363,140 @@ causal_chains:
         priority: 4
 
   dns_resolution_failure:
-    description: "IMS DNS resolution broken. Domain-based SIP routing fails."
+    description: |
+      IMS DNS server unavailable. Kamailio's resolver is used for NAPTR/SRV
+      lookups during SIP routing resolution — particularly for the IMS
+      domain (`ims.mnc0XX.mccXXX.3gppnetwork.org`). In this deployment
+      the DNS container serves those IMS-domain records; when it's
+      down, freshly-initiated SIP transactions that must resolve
+      hostnames fail. Some components may have cached routes via
+      dispatcher.list or internal caching, so the impact is not
+      immediate — existing active traffic may continue until caches
+      expire, and new re-registrations start failing.
     affected_interface: DNS
     affected_protocol: DNS
     failure_domain: infrastructure
     severity: down
 
     possible_causes:
-      - "DNS server process crash or unreachable"
+      - "DNS server container 'exited' or process crashed"
       - "DNS zone file misconfiguration (missing NAPTR/SRV records)"
       - "Network connectivity loss to DNS server"
-      - "DNS cache poisoning or stale records"
-      - "DNS server overload or rate limiting"
+      - "DNS server overload or hang"
+      - "Resolver config at clients pointing at wrong IP (less likely in a static stack)"
 
     observable_symptoms:
       immediate:
-        - log: "DNS lookup error"
-          at: [pcscf, icscf, scscf]
+        - symptom: "DNS container is in 'exited' state"
+          source: get_network_status
+        - symptom: "measure_rtt from any CSCF to DNS IP shows 100% loss (process gone)"
+          source: measure_rtt
+        - symptom: "IMS registration rate at I-CSCF and S-CSCF drops as re-registration attempts can't resolve routing"
+          source: get_nf_metrics
+          at: [icscf, scscf]
+
       cascading:
-        - condition: "SIP routing requiring DNS"
-          effect: "NAPTR/SRV lookups fail, SIP routing breaks"
-        - condition: "existing registrations"
-          effect: "May survive until re-registration (cached routes)"
+        # --- Branch A: New IMS registration fails when DNS is needed ---
+        - branch: "ims_register_dns_lookup"
+          condition: "New IMS REGISTER requiring resolution of the IMS domain (ims.mnc0XX.mccXXX.3gppnetwork.org)"
+          effect: |
+            P-CSCF's request-URI after the REGISTER might include the IMS
+            domain; I-CSCF's routing to S-CSCF and CSCFs' resolver calls
+            for various SIP-header hosts require NAPTR/SRV. With DNS
+            down those lookups fail; the transaction returns SIP 503
+            (Service Unavailable) or times out. Effect surfaces more
+            strongly at I-CSCF, which does more hostname resolution
+            than P-CSCF in our deployment.
+          mechanism: "DNS query times out → Kamailio's resolver returns error → SIP transaction fails upstream with 503/500"
+          source_steps:
+            - ims_registration.step_3     # P-CSCF → I-CSCF forward (host resolution on Mw destination)
+            - ims_registration.step_5     # I-CSCF → S-CSCF forward
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts   # flat (no new regs complete)
+            - script:register_success                # flat at P-CSCF
+            - ims_icscf:uar_timeouts                 # may increment (cascading)
+
+        # --- Branch B: Diameter peer resolution on Cx ---
+        - branch: "diameter_peer_resolution"
+          condition: "Kamailio CDP (C Diameter Peer) attempts to re-resolve peer addresses"
+          effect: |
+            cdp.list_peers may show established peers stay connected
+            (they were resolved at startup), but any renegotiation or
+            new peer connection attempts that go through DNS will fail.
+            In practice the IPs are container-stable in this stack so
+            existing Diameter associations persist — Cx timeouts from
+            DNS loss are rare unless a peer reset occurs.
+          mechanism: "Existing Diameter peers typically cached by IP — impact is limited"
+          observable_metrics:
+            - cdp:timeout                # may or may not increment (depends on peer reset)
+
+        # --- Branch C: Active registrations expire on timer ---
+        - branch: "existing_regs_expire"
+          condition: "Registration expiry timer fires for already-registered UEs"
+          effect: |
+            Re-REGISTER needs the routing resolution to succeed. With
+            DNS down, re-registration fails; usrloc entries expire on
+            their lifetime. Over minutes, `ims_usrloc_pcscf:registered_contacts`
+            decrements as entries time out.
+          mechanism: "Re-REGISTER fails to resolve → P-CSCF usrloc entry times out on its lifetime"
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts   # decrements over time
+            - ims_usrloc_scscf:active_contacts
+
+        # --- Branch D: Negative — data plane unaffected ---
+        - branch: "data_plane_unaffected"
+          condition: "UE PDU session, UPF GTP-U, RTP media"
+          effect: |
+            Data plane works on IP addresses, not DNS. PDU sessions
+            continue, RTP media continues (if calls were established
+            before DNS loss), GTP-U counters keep ticking. Claims of
+            "data plane broken" are not supported by a DNS outage
+            unless IMS signaling failure has kept UEs from establishing
+            calls in the first place.
+          mechanism: "None — data plane is IP-based, doesn't need DNS"
+
+    does_NOT_mean:
+      - "HSS is broken — Cx is IP-based, already-connected Diameter peers keep working"
+      - "UPF is dropping traffic — data plane is independent of DNS"
+      - "The P-CSCF is misconfigured — it's making a DNS request that isn't being answered"
 
     diagnostic_approach:
       - tool: get_network_status
-        purpose: "Check DNS server status"
+        purpose: "Check dns container state — 'exited' is the clearest root cause"
         priority: 1
       - tool: measure_rtt
         args: {container: "pcscf", target_ip: "172.22.0.15"}
-        purpose: "Check connectivity to DNS server"
+        purpose: "Verify transport reachability to DNS. 100% loss + container exited = DNS-server failure."
         priority: 2
+      - tool: check_process_listeners
+        args: {container: "dns"}
+        purpose: "Confirm DNS server's listener on 53/udp. Missing listener while container running = DNS process crashed."
+        priority: 3
+
+    key_diagnostic_signal:
+      - "dns container 'exited' + IMS registration rate drop = classic DNS-failure signature"
+      - "Existing active calls with media continuing proves data plane is independent"
+      - "Cx (I/S-CSCF↔HSS) typically remains healthy because Diameter peers cached by IP"
 
   amf_service_disruption:
-    description: "AMF temporarily unavailable — UEs deregistered, must re-attach."
-    affected_interface: N2
-    affected_protocol: NGAP/SBI
+    description: |
+      AMF temporarily unavailable — process restart, crash/recover, or
+      SCTP reset. In Open5GS, when the AMF's SCTP association with
+      a gNB drops, amf_gnb_remove() walks every ran_ue under that gNB
+      and deregisters them (ran_ue → 0). On a clean AMF restart the
+      gNB sees its SCTP peer disappear and must re-establish N2Setup
+      before any UE signaling can resume. 5G registration, PDU session
+      requests, and NAS-level mobility all stall until N2 is back.
+      The user-plane (N3 GTP-U) has no control-plane dependency during
+      the blip: existing PDU sessions continue to forward packets
+      as long as the UE stays in CM-CONNECTED — but as soon as a UE
+      needs new NAS signaling (periodic registration, service request,
+      PDU create/release), it fails. IMS registrations outlive the
+      blip in the P-CSCF's usrloc until their re-REGISTER timer fires
+      against a PDU session that may or may not still be carrying
+      signaling.
+    affected_interface: [N2, N1, Namf-SBI]
+    affected_protocol: [NGAP, NAS, SBI]
     failure_domain: core_control_plane
     severity: degraded
 
@@ -754,74 +1504,283 @@ causal_chains:
       - "AMF process restart (upgrade, crash recovery)"
       - "AMF overload causing temporary unresponsiveness"
       - "SBI communication failure with NRF (AMF deregistered from service mesh)"
-      - "SCTP association reset"
+      - "SCTP association reset between AMF and gNB"
 
     observable_symptoms:
       immediate:
+        - symptom: "AMF container in 'exited' / just-restarted state"
+          source: get_network_status
         - metric: ran_ue
           becomes: 0
           at: amf
           lag: "<5s"
-          description: "UEs deregistered during AMF disruption"
-        - log: "NGAP association dropped"
-          at: nr_gnb
+          description: "Open5GS amf_gnb_remove() deregisters every UE under the lost gNB; ran_ue goes to 0 immediately on SCTP drop"
+        - metric: gnb
+          becomes: 0
+          at: amf
+          lag: "<5s"
+          description: "gNB association count drops when SCTP peer disappears"
 
       cascading:
-        - condition: "UEs attached"
-          effect: "NAS connection lost, UEs must re-attach after AMF recovers"
-        - condition: "active PDU sessions"
-          effect: "Temporary disruption until AMF recovers and UEs re-register"
+        # --- Branch A: N2 association torn down, new registrations stall ---
+        - branch: "n2_association_reset"
+          condition: "AMF process is down OR just restarted and N2Setup hasn't reconverged"
+          effect: |
+            The gNB's SCTP peer disappears. In Open5GS the AMF side
+            runs ogs_sctp_destroy() which fires amf_gnb_remove() —
+            this walks the gNB's ran_ue_list and deregisters every
+            UE, so ran_ue and gnb both fall to 0 at the AMF. On the
+            gNB side, the SCTP INIT to the AMF is refused (AMF
+            listener gone) or the association goes COMM_LOST. Until
+            the AMF comes back AND the gNB successfully retries
+            N2Setup, no NGAP Initial UE Message can reach AMF, so
+            every new UE Registration Request stalls at step 2.
+          mechanism: "amf down → SCTP INIT refused / COMM_LOST on gNB → no NGAP → Initial UE Message never delivered"
+          source_steps:
+            - ue_registration.step_2   # gNB → AMF NGAP Initial UE Message
+          observable_metrics:
+            - ran_ue   # at amf: → 0 on the drop
+            - gnb      # at amf: → 0 on the drop
+            - amf_session  # → 0 once deregistration completes
+          discriminating_from: "If the AMF process is up but ran_ue is still 0, the break is on the N2 path itself (SCTP reachability, gNB side) — see n2_connectivity_loss."
+
+        # --- Branch B: active PDU sessions and SBI-side cascade ---
+        - branch: "pdu_session_blocked_during_blip"
+          condition: "UE attempts a new PDU session (or PDU release / service request) while AMF is down"
+          effect: |
+            Step 1 of pdu_session_establishment is a NAS message from
+            UE to AMF (via gNB over N2). With AMF dead, that NAS
+            message has no receiver; the UE's NAS timer expires and
+            the attempt is abandoned. SMF never sees an
+            Nsmf_PDUSession_CreateSMContext and its own per-session
+            counters stay flat. Note: already-established PDU
+            sessions do NOT collapse during a short AMF blip — their
+            PFCP and UPF forwarding state live on SMF/UPF and are
+            not tied to AMF liveness.
+          mechanism: "AMF dead → NAS PDU Session Establishment Request never reaches AMF → SMF never receives Nsmf create → session counters stall"
+          source_steps:
+            - pdu_session_establishment.step_1   # UE NAS PDU request to AMF
+            - pdu_session_establishment.step_2   # AMF → SMF Nsmf create
+          observable_metrics:
+            - fivegs_smffunction_sm_pdusessioncreationreq  # flat during outage for new attempts
+            - fivegs_smffunction_sm_sessionnbr            # flat during outage
+            - amf_session                                  # low / 0
+          discriminating_from: "If existing PDU sessions are clearly broken (no GTP-U forwarding) but AMF itself is up, look at the UPF/N3 layer — amf_service_disruption does NOT by itself stop user-plane forwarding of already-up sessions."
+
+        # --- Branch C: IMS impact is indirect and delayed ---
+        - branch: "ims_registrations_outlive_blip"
+          condition: "UEs with existing IMS registrations during a short AMF disruption"
+          effect: |
+            ims_usrloc_pcscf:registered_contacts reflects the last
+            successful REGISTER and survives an AMF blip until each
+            contact's re-REGISTER timer fires. When the re-REGISTER
+            fires AND the UE's PDU session is no longer delivering
+            SIP signaling (because the UE had to re-attach and
+            hasn't re-registered IMS yet), the contact expires and
+            decrements. So IMS impact is DELAYED by whatever the
+            UE's re-REGISTER interval is, not immediate.
+          mechanism: "P-CSCF usrloc is state-based, not liveness-probed per call — it decays on expiry, not on AMF state"
+          source_steps:
+            - ims_registration.step_1  # UE → P-CSCF REGISTER (next re-REGISTER window)
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts   # decays only on re-REGISTER expiry, not on AMF drop
+            - core:rcv_requests_register             # at pcscf, drops only when UEs actually stop reaching it
+
+        # --- Branch D: SBI NRF deregistration on graceful restart ---
+        - branch: "nrf_deregistration"
+          condition: "AMF was gracefully restarted (not hard-crashed)"
+          effect: |
+            On orderly shutdown Open5GS AMF deregisters itself from
+            NRF; peer NFs re-resolve the AMF profile when they next
+            need it. On unclean crash the stale NRF entry persists
+            until heartbeat expiry, which can cause a brief window
+            where SCP still routes Namf requests to a dead instance
+            and sees SBI timeouts.
+          mechanism: "AMF exit path → NRF Nnrf_NFManagement_NFDeregister (graceful) OR stale record (crash)"
+          observable_metrics:
+            - "httpclient:connfail at peers that call Namf (rare in this stack — most flows run through SCP)"
+
+        # --- Branch E: NEGATIVE — data plane is not directly affected ---
+        - branch: "data_plane_unaffected_during_blip"
+          condition: "UPF GTP-U forwarding for PDU sessions that existed before the AMF outage"
+          effect: |
+            PFCP rules installed on the UPF before the AMF went
+            down continue to forward uplink and downlink traffic.
+            upf_n3_rx_pps and upf_gtp_rx_total_rate do NOT drop
+            just because the AMF is gone. Any claim that an AMF
+            outage "kills user-plane forwarding" is WRONG in this
+            deployment. User-plane only degrades if the gNB/UPF N3
+            path itself is affected (see n3_data_plane_outage).
+          mechanism: "None — UPF forwarding is governed by SMF/PFCP state, not AMF liveness"
+          observable_metrics:
+            - upf_n3_rx_pps            # should stay at baseline
+            - upf_gtp_rx_total_rate    # should stay at baseline
+            - pfcp_sessions_active     # unchanged during a short AMF blip
 
     diagnostic_approach:
       - tool: get_network_status
-        purpose: "Check AMF status — may show recently restarted"
+        purpose: "Check AMF container state — may show 'exited' or recently restarted (uptime seconds)"
         priority: 1
-      - tool: query_prometheus
-        args: {query: "ran_ue"}
-        purpose: "Check if UEs re-attached after disruption"
+      - tool: get_nf_metrics
+        purpose: "Check ran_ue and gnb at AMF (should be 0 during outage, recovering after); check upf_n3_rx_pps to confirm data plane is unaffected (suppresses the 'AMF down → UPF dead' hallucination)"
         priority: 2
+      - tool: check_process_listeners
+        args: {container: "amf"}
+        purpose: "Confirm AMF's SCTP listener (port 38412) is bound; if absent, AMF is truly down, not just overloaded"
+        priority: 3
+      - tool: measure_rtt
+        args: {container: "nr_gnb", target_ip: "<amf_ip>"}
+        purpose: "Distinguish 'AMF process dead' (listener gone, connection refused) from 'N2 partition' (listener up, packets dropped)"
+        priority: 4
 
     key_diagnostic_signal:
-      - "ran_ue drops to 0 then recovers = transient AMF disruption"
-      - "ran_ue stays at 0 = sustained failure (may be N2 connectivity loss instead)"
+      - "ran_ue drops to 0 then recovers after AMF restart = transient amf_service_disruption"
+      - "ran_ue stays at 0 AND AMF listener is up = N2 partition (see n2_connectivity_loss), NOT this chain"
+      - "upf_n3_rx_pps unchanged through the event confirms data-plane independence — a true amf_service_disruption should not move N3 counters"
 
   cascading_ims_outage:
-    description: "Multiple IMS component failures — total IMS service outage."
+    description: |
+      Multiple IMS components fail simultaneously — e.g., pyhss down
+      AND S-CSCF latency, or a shared-infra event that knocks out both
+      the Diameter Cx path and the SIP Mw path. The signature is that
+      BOTH the Diameter backbone (UAR/MAR/SAR on Cx) and the intra-IMS
+      SIP routing (Mw between P/I/S-CSCF) fail concurrently, producing
+      an error surface that a single-fault chain cannot explain. The
+      diagnostic danger is claiming a single root cause when two
+      independent faults are contributing — the plan must be to
+      detect the compound nature, not to force-fit one cause.
     affected_interface: [Cx, Mw]
     affected_protocol: [Diameter, SIP]
     failure_domain: ims_signaling
     severity: down
 
     possible_causes:
-      - "HSS failure combined with S-CSCF overload (cascading failure pattern)"
-      - "Database failure affecting both HSS and S-CSCF state"
+      - "HSS (pyhss) failure combined with S-CSCF overload or restart"
+      - "Shared infrastructure event taking out both Diameter and SIP paths"
       - "Network event causing multiple IMS nodes to lose connectivity simultaneously"
-      - "Coordinated maintenance window gone wrong"
+      - "Coordinated maintenance window gone wrong (two nodes drained at once)"
 
     observable_symptoms:
       immediate:
         - metric: "cdp:timeout"
           becomes: "> 0"
           at: [icscf, scscf]
-          description: "Diameter completely broken"
-        - metric: "ims_usrloc_pcscf:registered_contacts"
-          becomes: 0
-          at: pcscf
-          description: "All UEs lose IMS registration"
+          description: "Diameter Cx backbone completely broken — both ends see peer timeouts"
+        - metric: "core:rcv_requests_register"
+          becomes: "flat or 0 at S-CSCF"
+          at: scscf
+          description: "S-CSCF not receiving REGISTERs despite P-CSCF getting them — Mw path broken on top of Cx"
 
       cascading:
-        - condition: "any IMS operation"
-          effect: "Total IMS failure — no auth, no registration, no calls"
+        # --- Branch A: Cx is down at every Diameter peer simultaneously ---
+        - branch: "cx_timeouts_at_all_peers"
+          condition: "Any IMS Diameter operation (UAR, MAR, SAR, LIR)"
+          effect: |
+            With pyhss unreachable, the Kamailio Diameter client on
+            I-CSCF and S-CSCF both see cdp:timeout increment. I-CSCF's
+            I_perform_user_authorization_request() returns timeout
+            on every REGISTER; S-CSCF's ims_www_challenge (MAR) and
+            save() (SAR) return timeout on every REGISTER it DOES
+            receive. ims_icscf:uar_timeouts and
+            ims_registrar_scscf:sar_timeouts both climb together —
+            this co-movement is the single-fault hss_unreachable
+            signature.
+          mechanism: "pyhss dead → cdp Tw (~30s) expires at every Cx peer → UAR/MAR/SAR all timeout"
+          source_steps:
+            - ims_registration.step_3   # I-CSCF UAR to HSS
+            - ims_registration.step_4   # S-CSCF MAR to HSS
+            - ims_registration.step_8   # S-CSCF SAR to HSS
+            - diameter_cx_authentication.step_1
+            - diameter_cx_authentication.step_2
+            - diameter_cx_authentication.step_3
+            - diameter_cx_authentication.step_4
+          observable_metrics:
+            - cdp:timeout
+            - ims_icscf:uar_timeouts
+            - ims_auth:mar_timeouts
+            - ims_registrar_scscf:sar_timeouts
+
+        # --- Branch B: Mw routing breaks CONCURRENTLY with Cx ---
+        # This branch is what lifts the incident above a pure
+        # hss_unreachable. S-CSCF latency/unreachability means
+        # REGISTER never even reaches the point of asking HSS.
+        - branch: "mw_routing_fails_at_pcscf_or_icscf"
+          condition: "P-CSCF forwards REGISTER toward I-CSCF, or I-CSCF toward S-CSCF, but the peer doesn't respond in time"
+          effect: |
+            Kamailio's t_relay() on the Mw hop arms T1 (500ms). If
+            S-CSCF is overloaded/restarting, the 100 Trying never
+            arrives, T1 retransmits, the transaction eventually 408
+            timeouts. From P-CSCF's perspective, the REGISTER count
+            goes up but pcscf_avg_register_time_ms climbs toward
+            the 408 timeout and pcscf_sip_error_ratio rises. But
+            critically, S-CSCF's core:rcv_requests_register stays
+            flat — proof that the SIP path broke BEFORE hitting
+            S-CSCF, which is independent of the Diameter fault.
+          mechanism: "scscf unreachable/slow → Kamailio T1 on the Mw hop → 408 on REGISTER/INVITE → P-CSCF timing climbs"
+          source_steps:
+            - ims_registration.step_2   # P-CSCF → I-CSCF REGISTER forward
+            - ims_registration.step_3   # I-CSCF → S-CSCF REGISTER forward (after LIR)
+            - vonr_call_setup.step_4    # P-CSCF → S-CSCF INVITE forward
+          observable_metrics:
+            - derived.pcscf_avg_register_time_ms   # climbs toward T1 timeout
+            - derived.pcscf_sip_error_ratio        # rises with 408s
+            - core:rcv_requests_register           # flat at S-CSCF (didn't arrive)
+            - ims_icscf:fwd_requests_register      # may increment at I-CSCF if I-CSCF is OK but S-CSCF is the gap
+          discriminating_from: "Pure hss_unreachable produces Cx timeouts but the SIP hop BETWEEN P-CSCF and S-CSCF is still healthy — S-CSCF's core:rcv_requests_register keeps climbing. Here, it does NOT. That's the compound-fault signal."
+
+        # --- Branch C: P-CSCF usrloc collapse as contacts expire ---
+        - branch: "pcscf_usrloc_drains"
+          condition: "Over a window longer than the re-REGISTER interval"
+          effect: |
+            Every re-REGISTER fails (either at the Cx stage OR at
+            the Mw stage — both paths are broken). Contacts in
+            P-CSCF's usrloc expire and are not refreshed. Call
+            setup (INVITE) that depends on a looked-up contact
+            fails with 480 or 408. ims_usrloc_pcscf:registered_contacts
+            trends toward 0.
+          mechanism: "continued failed re-REGISTER → usrloc entries time out → no contact to forward INVITE to"
+          source_steps:
+            - ims_registration.step_1   # UE re-REGISTER that will fail
+            - vonr_call_setup.step_5    # S-CSCF → P-CSCF forward (no contact)
+          observable_metrics:
+            - ims_usrloc_pcscf:registered_contacts    # trends to 0 slowly
+            - ims_usrloc_pcscf:expires                # increments on each expiry
+
+        # --- Branch D: Compound latency + unreachable signature ---
+        - branch: "compound_error_surface"
+          condition: "The two single-fault signatures appear together in the same window"
+          effect: |
+            hss_unreachable alone explains timeouts on UAR/MAR/SAR.
+            scscf_unreachable alone explains S-CSCF's
+            rcv_requests_register going flat and P-CSCF's register
+            timing climbing. When BOTH co-occur — cdp:timeout AND
+            core:rcv_requests_register flat — neither single chain
+            fully explains the data. This is the unique cascading
+            signature: the whole is more than either part.
+          mechanism: "two faults superpose → evidence for both chains → neither alone suffices"
+          observable_metrics:
+            - "cdp:timeout > 0 AT icscf AND scscf (supports hss_unreachable)"
+            - "core:rcv_requests_register flat at scscf (supports scscf_unreachable)"
+            - "derived.pcscf_sip_error_ratio > 0.5 (supports either)"
+          discriminating_from: "If ONLY cdp:timeout climbs but core:rcv_requests_register still increments, it is hss_unreachable. If ONLY core:rcv_requests_register stalls but cdp:timeout stays at 0, it is scscf_unreachable. The presence of BOTH is what makes this cascading, not a single chain."
 
     diagnostic_approach:
-      - tool: get_nf_metrics
-        purpose: "Full metrics snapshot to identify which IMS components are affected"
+      - tool: get_network_status
+        purpose: "Check which IMS containers are up/exited — identifying two simultaneously broken NFs is the fastest cascade confirmation"
         priority: 1
+      - tool: get_nf_metrics
+        purpose: "Collect cdp:timeout (hss path signal) AND core:rcv_requests_register at S-CSCF (Mw path signal) in one snapshot — the co-movement defines this chain"
+        priority: 2
       - tool: run_kamcmd
         args: {container: "icscf", command: "cdp.list_peers"}
-        purpose: "Check Diameter peer health"
-        priority: 2
-      - tool: measure_rtt
-        args: {container: "pcscf", target_ip: "172.22.0.20"}
-        purpose: "Check connectivity between IMS nodes"
+        purpose: "Confirm Diameter peer state — CLOSED at I-CSCF contextualizes the Cx side of the compound fault"
         priority: 3
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "<scscf_ip>"}
+        purpose: "Probe the Mw hop independently of Cx to confirm the SIP-path fault is a real partition, not just a downstream Cx-induced 408"
+        priority: 4
+
+    key_diagnostic_signal:
+      - "cdp:timeout > 0 AND core:rcv_requests_register flat at S-CSCF = compound fault (this chain)"
+      - "Only cdp:timeout > 0 with S-CSCF still receiving SIP = pure hss_unreachable"
+      - "Only S-CSCF SIP flat with cdp clean = pure scscf_unreachable"

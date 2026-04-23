@@ -1,7 +1,7 @@
 # ADR: Flow-Based Causal-Chain Reasoning — Two Complementary Views, Both Implementation-Anchored
 
-**Date:** 2026-04-21
-**Status:** Partially shipped — tool layer and initial ontology corrections landed; cross-reference discipline rollout in progress; loader/CI enforcement still pending. See [Implementation manifest](#implementation-manifest) for specifics.
+**Date:** 2026-04-21 (revised 2026-04-23)
+**Status:** Partially shipped — tool layer, ontology corrections, and `source_steps` rollout across all 12 causal chains landed. Remaining work is loader support and the structured `failure_modes` migration with its accompanying IG/reverse-lookup tooling. See [Implementation manifest](#implementation-manifest) for specifics.
 
 **Context source (the run that prompted this):**
 - [`docs/critical-observations/run_20260421_030339_mongodb_gone.md`](../critical-observations/run_20260421_030339_mongodb_gone.md) — MongoDB container kill; v6 agent scored 30% by hallucinating a `mongo → HSS` dependency the ontology doesn't assert and missing the real `mongo → UDR → PCF → N5 App Session Create → SIP 412 at P-CSCF` chain entirely.
@@ -104,7 +104,7 @@ subscriber_data_store_unavailable:
         mechanism: "UDR blind → PCF returns non-201 on N5 POST → P-CSCF send_reply('412')"
 ```
 
-The `source_steps` cross-reference is what keeps the two files from drifting. An observable symptom in a causal chain must be traceable to a concrete flow-step `failure_mode`. A future `causal_chains.yaml` linter can enforce this mechanically.
+The `source_steps` cross-reference is what keeps the two files from drifting. An observable symptom in a causal chain must be traceable to a concrete flow-step `failure_mode`. Discipline during authoring — plus the fact that an unreferenced step becomes invisible to `get_flows_through_component` — is the current enforcement mechanism.
 
 ### 3. Expose flows to agents through dedicated tools
 
@@ -136,12 +136,12 @@ Exported through `agentic_ops_common/tools/__init__.py`, wired into the NetworkA
 
 - **The ontology becomes trustworthy as a reference for reasoning.** Implementation-anchored flows + cross-referenced causal chains mean the agent can consult the ontology with confidence that what it finds reflects the code, not a textbook abstraction. Hallucination pressure drops because the agent has an authoritative answer to reach for instead of generic priors.
 - **Each reasoning phase gets the right shape of data.** NA gets pre-computed symptom→cause indexes (fast hypothesis generation). Investigator gets forward-walking mechanism detail (precise falsification). No phase is forced to do work in a representation that's wrong for its task.
-- **Divergences between ontology and code become mechanically detectable** via the `source_steps` cross-reference — future tooling can flag causal-chain symptoms that don't correspond to any flow failure_mode, or flow failure_modes not named in any causal chain.
+- **Divergences between ontology and code become easier to spot.** With `source_steps` in place, a causal-chain branch points at a concrete flow step; a reader (or a future tool) can walk from branch to step and compare the declared `observable_metrics` against the step's `failure_modes`. Still manual for now — automated enforcement is not in scope at this stage.
 - **The `mongodb_gone` 30% score is addressable at the ontology layer.** Add the `vonr_call_setup.step_9a` Rx AAR step with its real `failure_modes`; add the `source_steps: [...step_9a...]` entry to `subscriber_data_store_unavailable.observable_symptoms`; expose flows through the new tools. NA will then find the correct chain; Investigator will verify via real code-path observables.
 
 ### Negative / risk
 
-- **Authoring cost rises.** Every flow step now needs an `implementation_ref` review pass; every causal-chain observable_symptom needs a `source_steps` cross-reference. This is mostly one-off work to bring current content up to standard, then ongoing discipline on new entries. Without CI enforcement it will drift.
+- **Authoring cost rises.** Every flow step eventually needs an `implementation_ref` review pass; every causal-chain observable_symptom needs a `source_steps` cross-reference. This is mostly one-off work to bring current content up to standard, then ongoing discipline on new entries. Drift risk is real and mitigated only by author discipline at this stage.
 - **Requires the Neo4j ontology loader to understand the new fields.** `implementation_ref`, `source_steps`, and the structured `failure_modes.{when, action, observable}` shape need loader support in `network_ontology/loader.py` so they survive the YAML → Neo4j → query roundtrip.
 - **`implementation_ref` line numbers will churn.** Keeping line numbers up to date is brittle. Policy: author the `file` and `symbol` fields; omit `lines`. A reader can grep for the symbol.
 - **The `get_flow()` / `get_flows_through_component()` outputs will be larger than causal-chain outputs.** A 10-step flow with nested `failure_modes` is non-trivial JSON. Worth a `verbosity` arg on `get_flow` (e.g. `summary` vs `full`) if token budget becomes an issue.
@@ -182,23 +182,103 @@ Exported through `agentic_ops_common/tools/__init__.py`, wired into the NetworkA
 
 **Causal-chain content correction** (`network_ontology/data/causal_chains.yaml`)
 - `subscriber_data_store_unavailable` rewritten as a four-branch entry (`smf_pdu_session`, `pcscf_n5_call_setup`, `pcscf_n5_registration`, `hss_cx_unaffected` — the last is an explicit anti-hallucination negative claim). Every `observable_symptoms` entry that references a flow step carries a `source_steps` cross-reference into the corrected flows.
-
-### In progress (partial)
-
-- **`source_steps` cross-references on the remaining causal chains.** Only `subscriber_data_store_unavailable` has them; the other 11 (`n2_connectivity_loss`, `n3_data_plane_{degradation,outage}`, `ims_signaling_chain_degraded`, `scscf_unreachable`, `hss_unreachable`, `ims_signaling_partition`, `sip_transport_mismatch`, `dns_resolution_failure`, `amf_service_disruption`, `cascading_ims_outage`) still use the older flat `condition` / `effect` shape without flow references. Upgrade them opportunistically as scenarios expose them, or in a proactive sweep of the four IMS chains first since their referenced flows are already corrected.
-- **Structured `failure_modes.{when, action, observable}` shape.** The rewritten flow steps partially use this shape (notably the N5 ones); most older `failure_modes` entries are still plain strings. The loader doesn't yet require the structured shape, so the transition can be incremental.
+- **All 11 remaining causal chains upgraded to the same multi-branch + `source_steps` shape** (2026-04-23). Chains upgraded: `n2_connectivity_loss` (6 branches), `n3_data_plane_degradation` (4), `n3_data_plane_outage` (4), `ims_signaling_chain_degraded` (4), `scscf_unreachable` (5), `hss_unreachable` (6), `ims_signaling_partition` (5), `sip_transport_mismatch` (4), `dns_resolution_failure` (4), `amf_service_disruption` (5), `cascading_ims_outage` (4). Each branch carries `mechanism`, `observable_metrics`, and where applicable `discriminating_from` hints grounded in the actual Kamailio route config (`mo.cfg`, `mt.cfg`, `register.cfg`, I-CSCF UAR/LIR, S-CSCF MAR/SAR) and Open5GS source behavior (e.g. `amf_gnb_remove()` on SCTP loss, SMF local-policy fallback, UDR/PyHSS backend split). Each chain includes at least one explicit negative branch (e.g. `hss_cx_unaffected`, `data_plane_unaffected_during_blip`, `cx_unaffected`) to suppress common LLM hallucinations observed in prior batch runs. 104 ontology-common tests still pass.
 
 ### Not yet started
 
 - **`implementation_ref` fields on flow steps.** No flow step carries one today. Policy (per this ADR): author `{file, symbol}`, omit line numbers. Ordering of rollout: start with the flows we've already rewritten (`vonr_call_setup`, `ims_registration`, `vonr_call_teardown`), then expand.
-- **Loader support for the new fields.** `network_ontology/loader.py` needs to understand `implementation_ref`, `source_steps`, and the structured `failure_modes` shape so they survive the YAML → Neo4j → query roundtrip. Until the loader knows about a field, it's invisible to the agent-facing tools. This is the choke point for everything above.
-- **CI check enforcing the cross-reference.** Every `observable_symptoms` entry in `causal_chains.yaml` must reference a valid `flow.step` path, and the referenced step's `failure_modes` must contain a matching observable. Flag orphans on both sides. This is the primary mechanism preventing drift between the two files and is worth building once we have enough authored cross-references to make it useful.
+- **Loader support for the new fields.** `network_ontology/loader.py` needs to understand `implementation_ref`, `source_steps`, and the structured `failure_modes` shape so they survive the YAML → Neo4j → query roundtrip. Until the loader knows about a field, it's invisible to the agent-facing tools. This is the choke point for everything below.
+- **Structured `failure_modes.{when, action, observable}` migration in `flows.yaml`.** See the dedicated section below — not started (the earlier claim that N5 steps already used this shape was stale; a grep confirms every `failure_modes` entry in the file today is a plain arrow-separated string). This is a larger piece of work with its own design questions and is scoped separately.
 
 ---
 
 ## Follow-on work
 
-- **Loader + `implementation_ref` rollout.** Land the loader change for `implementation_ref` / `source_steps` / structured `failure_modes`, then start annotating the already-audited IMS flows (`vonr_call_setup`, `ims_registration`, `vonr_call_teardown`). This is the highest-leverage follow-on because (a) it unblocks the CI cross-reference check, and (b) it removes the "plausible but unverifiable" quality from flow content the agent currently has to take on faith.
-- **Upgrade the four IMS causal chains** (`scscf_unreachable`, `hss_unreachable`, `ims_signaling_partition`, `ims_signaling_chain_degraded`) to the new multi-branch + `source_steps` shape, since the IMS flows they reference are already corrected. The 5G-core chains (`n2_connectivity_loss`, `n3_data_plane_*`, `amf_service_disruption`) should wait until the 5G-core flows get an equivalent pass.
+- **Loader + `implementation_ref` rollout.** Land the loader change for `implementation_ref` / `source_steps` / structured `failure_modes`, then start annotating the already-audited IMS flows (`vonr_call_setup`, `ims_registration`, `vonr_call_teardown`). This removes the "plausible but unverifiable" quality from flow content the agent currently has to take on faith.
+- **Structured `failure_modes` migration in `flows.yaml`** — see the [next section](#structured-failure_modes-migration-design-notes) for the scoped design. This is the highest-leverage remaining piece because it unlocks both deterministic IG probe generation and the reverse-lookup tool.
 - **Revisit `metrics.yaml` `meaning.*` blocks under the same discipline** — where a metric's reading depends on specific code behavior (like `pcscf_avg_register_time_ms`'s stall-signature semantics), anchor the `meaning.{spike,drop,zero}` text to the actual code path that produces it.
 - **`components.yaml` dependency edges as typed graph edges** — they're currently prose-only (e.g. *"Provides data access to MongoDB for UDM and PCF"*). Structuring these would let `get_flows_through_component` extend into `get_dependents_of_component` without re-parsing English, and would catch "mongo → HSS"-style hallucinations mechanically (the edge simply wouldn't exist).
+
+---
+
+## Structured `failure_modes` migration (design notes)
+
+**Not started. Design-only; implementation deferred.**
+
+### Current state
+
+Every `failure_modes` entry in `network_ontology/data/flows.yaml` is today a plain arrow-separated string. Example (`vonr_call_setup.step_2`, the N5 App Session Create):
+
+```yaml
+failure_modes:
+  - "PCF unreachable → N5 POST times out → P-CSCF sends SIP 412, pcscf_sip_error_ratio spikes"
+  - "UDR/MongoDB down → PCF cannot fetch subscriber policy → non-201 → SIP 412"
+  - "SCP down or misconfigured → httpclient:connfail increments"
+```
+
+The causal antecedent, the code-path reaction, and the resulting observable are all concatenated into one string. Agents currently parse these with an LLM and extract the pieces on demand.
+
+### Target state
+
+```yaml
+failure_modes:
+  - when: "PCF unreachable (connect refused or HTTP/2 GOAWAY from SCP)"
+    action: |
+      P-CSCF's route[N5_INIT_REQ] treats the non-201 branch as a
+      hard failure and calls send_reply("412","Register N5 QoS
+      authorization failed"). INVITE is never relayed upstream.
+    observable:
+      metrics:
+        - derived.pcscf_sip_error_ratio     # → 1.00
+        - httpclient:connfail               # increments per attempt
+      sip_response: 412
+  - when: "UDR/MongoDB down, PCF reachable"
+    action: |
+      PCF accepts the N5 POST but cannot fetch subscriber policy
+      from UDR; responds with non-201 (typically 500 or 404).
+      P-CSCF same send_reply("412") branch.
+    observable:
+      metrics:
+        - derived.pcscf_sip_error_ratio
+        - fivegs_pcffunction_pa_policyamassoreq  # keeps incrementing
+        - fivegs_pcffunction_pa_policyamassosucc # does NOT increment
+      sip_response: 412
+      discriminating_from: "PCF-unreachable branch: here connfail does NOT spike; the request lands at PCF but returns non-201."
+```
+
+### Why this is worth doing
+
+The pure LLM-parsing delta is small — LLMs extract metric names from arrow-separated strings reliably. The value is in *what the structure lets us build around the LLM*:
+
+**1. Deterministic IG probe generation.** The Instruction Generator currently extracts metric names from prose to populate probes. With structured `observable.metrics` it lifts the list verbatim. That tightens rule #8 in `prompts/instruction_generator.md` ("Negative-result falsification weight") — a probe is demonstrably keyed to a declared observable, not an LLM guess about what to watch. It also lets us pre-render, at loader time, a `probes_hint` block inside each step that IG can paste into its plan without any LLM re-synthesis.
+
+**2. Reverse lookup.** A new tool of shape:
+
+```python
+async def get_flow_steps_with_observable(metric: str) -> str:
+    """Given a metric name (or substring), return every flow step
+    whose failure_modes declare this metric as an observable, with
+    the associated `when` (cause) for each match."""
+```
+
+…would answer "which failure modes is this fired anomaly consistent with?" as a deterministic index lookup rather than an LLM inference over the full flow corpus. This feeds NA hypothesis generation directly: when the correlator reports `derived.pcscf_sip_error_ratio = 1.00`, the reverse-lookup returns every `when:` that lists it, and NA's candidate set starts from ground truth instead of from prior matching.
+
+Today the same question requires NA to scan prose across many flow steps and pattern-match the metric name buried in a string — error-prone and token-heavy. The structured form makes it a dict lookup.
+
+### What needs to happen (in order)
+
+1. **Loader accepts both shapes.** `network_ontology/loader.py` must handle a `failure_modes` entry being either a string (keep the legacy arrow-format as a single opaque `description`) or a dict with `{when, action, observable}`. Survives YAML → Neo4j → query roundtrip. No schema break — both forms coexist during migration.
+2. **`get_flow()` / `get_flows_through_component()` surface the structure.** Currently these wrappers pass through whatever the Neo4j client returns. Once the loader emits structured dicts, the wrappers need to preserve them without collapsing to strings. A `verbosity` arg on `get_flow` (mentioned as a Consequence risk above) becomes relevant here — the full structured form is larger.
+3. **Migrate a focused first tranche.** Pick the 6–8 highest-value steps: the four N5 steps (`vonr_call_setup.step_2`, `.step_9`, `ims_registration.step_9`, `vonr_call_teardown.step_6`), the Cx steps (`ims_registration.step_3`/`.step_4`/`.step_8`, `diameter_cx_authentication.*`), and the NGAP handover step (`ue_registration.step_2`). These are the ones every recent scoring failure has touched. Migrate opportunistically beyond that.
+4. **Add `get_flow_steps_with_observable` reverse-lookup tool.** New function in `agentic_ops_common/tools/flows.py`, wired to Neo4j, exposed to NA (and possibly IG). Tests that mock the client. Requires step 1 (loader) and at least a partial step 3 (enough structured content to return useful results).
+5. **Update IG prompt** to lift `observable.metrics` directly into probes when a step has structured failure_modes, falling back to string-parsing when it doesn't. Small prompt delta; the real work is upstream.
+
+### Explicit non-goals (at this stage)
+
+- **No CI enforcement.** Per-user direction, we are relying on authoring discipline rather than building a cross-reference linter. Drift risk is acknowledged and accepted at this stage.
+- **No full-corpus migration in one pass.** Both shapes coexist in the loader. A step stays on plain strings until someone has a reason to audit it. The reverse-lookup tool returns useful results as soon as the first tranche is structured; later tranches incrementally improve its recall.
+- **No schema enforcement of `observable.metrics` against `metric_kb`.** That is a natural follow-on but depends on this work landing first; deferred.
+
+### Risk
+
+Structuring `failure_modes` without also building the reverse-lookup tool and updating the IG prompt to consume the new shape is **pure reformatting**. The LLM's ability to read the old strings is not the bottleneck. The gain comes from the tools that sit on top of the structure — if those tools don't ship, the structural work is wasted effort. Treat the migration + tool + prompt update as a single deliverable, not three independent ones.

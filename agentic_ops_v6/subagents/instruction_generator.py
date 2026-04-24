@@ -37,7 +37,14 @@ def create_instruction_generator() -> LlmAgent:
         output_key="falsification_plan_set",
         output_schema=FalsificationPlanSet,
         tools=[
+            tools.get_causal_chain,
             tools.get_causal_chain_for_component,
+            # Reverse lookup: pull the branch whose observable_metrics
+            # matches a deviated metric mentioned in the hypothesis;
+            # its `observable_metrics` list feeds directly into probe
+            # design, and its `discriminating_from` hint sharpens
+            # falsification.
+            tools.find_chains_by_observable_metric,
             tools.get_network_topology,
             tools.get_vonr_components,
             # Flow tools help design probes: `get_flows_through_component`

@@ -44,6 +44,12 @@ def create_network_analyst() -> LlmAgent:
             tools.check_stack_rules,
             tools.compare_to_baseline,
             tools.get_causal_chain_for_component,
+            # Reverse lookup: given a deviated metric, find the causal-chain
+            # branches whose observable_metrics name it — plus the flow
+            # steps each branch is anchored to. Strong support for
+            # anchoring hypotheses in authored ontology branches rather
+            # than LLM priors.
+            tools.find_chains_by_observable_metric,
             # Flow tools: use `get_flows_through_component` to understand
             # what's downstream of a suspect NF when forming hypotheses.
             # `list_flows` surfaces the available flow ids so the agent

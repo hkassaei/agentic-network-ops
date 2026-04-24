@@ -48,6 +48,11 @@ class Source(str, Enum):
     MONGOSH = "mongosh"
     API = "api"
     DERIVED = "derived"
+    # Pre-computed data-plane quality rates (packets/sec, KB/s, MOS,
+    # loss, jitter) surfaced through the get_dp_quality_gauges tool.
+    # Used by RTPEngine + UPF metrics whose values are rolling-window
+    # rates rather than raw Prometheus counters.
+    GET_DP_QUALITY_GAUGES = "get_dp_quality_gauges"
 
 
 class RelationshipType(str, Enum):
@@ -85,6 +90,16 @@ class Healthy(BaseModel):
     typical_range: Optional[tuple[float, float]] = None
     invariant: Optional[str] = None
     pre_existing_noise: Optional[str] = None
+    # Qualifier stating when the expected / typical_range value is
+    # the right baseline (e.g. "during an active call").
+    condition: Optional[str] = None
+    # Expected value specifically during an active VoNR call. Used by
+    # metrics whose steady-state is very different from their during-
+    # call state (e.g. upf_kbps, dialog_ng:active).
+    during_call: Optional[float | int | str] = None
+    # Richer threshold map for metrics with graded state bands (e.g.
+    # rtpengine_mos has {excellent, good, acceptable, poor, unusable}).
+    thresholds: Optional[dict[str, str]] = None
 
     @model_validator(mode="after")
     def _check_invariant(self) -> "Healthy":
@@ -227,6 +242,18 @@ class MetricEntry(BaseModel):
     applicable_use_cases: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     deprecated: bool = False
+
+    # --- Baseline-comparison fields (migrated from baselines.yaml) ---
+    # Consumed by `compare_to_baseline` and the v4/v5 diagnose() path.
+    # Optional because many KB entries (derived metrics, per-UE rates)
+    # express their healthy expectation through `healthy.typical_range`
+    # alone.
+    expected: Optional[float | int | str] = None
+    alarm_if: Optional[str] = None
+    # Free-form extra commentary on top of `description`. Historically
+    # used in baselines.yaml to flag known-quirky behavior ("ram
+    # residual after restart — OK to ignore if < 5").
+    note: Optional[str] = None
 
 
 class NFBlock(BaseModel):

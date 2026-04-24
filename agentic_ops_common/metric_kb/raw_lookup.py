@@ -54,16 +54,25 @@ class AnnotatedMetric:
 def resolve_raw(nf: str, raw_name: str, kb: MetricsKB) -> AnnotatedMetric:
     """Resolve `(nf, raw_name)` against the KB.
 
-    Resolution order:
-      1. Direct — `<layer>.<nf>.<raw_name>` is a KB metric.
-      2. Direct with name-normalization — common rewrites (strip
+    Resolution order (derived-preferred):
+      1. Derived — any KB entry under this NF lists `raw_name` in its
+         `raw_sources`. Preferred because the derived form carries
+         per-UE / rate / ratio semantics that a raw cumulative counter
+         lacks on its own.
+      2. Direct — `<layer>.<nf>.<raw_name>` is a KB metric (used for
+         metrics that are diagnosed in raw form — `ran_ue`, `gnb`,
+         `rtpengine_mos` — and for the migrated baseline metrics that
+         don't have a derived per-UE form).
+      3. Direct with name-normalization — common rewrites (strip
          Kamailio group prefix, known Prometheus prefixes).
-      3. Derived — any KB entry under this NF lists `raw_name` in its
-         `raw_sources`.
       4. None.
 
-    For the derived case we also infer the raw counter's type (almost
-    always `counter`).
+    Derived wins over direct when both exist: after the baselines →
+    metric_kb migration, many raw counters (`fivegs_ep_n3_gtp_*`,
+    `core:rcv_requests_*`) have BOTH a direct KB entry AND a derived
+    per-UE form that lists them in `raw_sources`. The derived form is
+    the one agents should read; the direct entry is there to preserve
+    the `expected` / `alarm_if` baseline-comparison data.
     """
     layer = NF_LAYER.get(nf)
     if layer is None:
@@ -75,7 +84,17 @@ def resolve_raw(nf: str, raw_name: str, kb: MetricsKB) -> AnnotatedMetric:
         return AnnotatedMetric(raw_name=raw_name, nf=nf, kb_metric_id=None,
                                kind=None, entry=None)
 
-    # 1. Direct lookup.
+    # 1. Reverse index — does any KB entry list this raw_name in raw_sources?
+    for metric_name, metric_entry in nf_block.metrics.items():
+        if raw_name in metric_entry.raw_sources:
+            return AnnotatedMetric(
+                raw_name=raw_name, nf=nf,
+                kb_metric_id=f"{layer}.{nf}.{metric_name}",
+                kind="derived", entry=metric_entry,
+                raw_type=_infer_raw_type(raw_name),
+            )
+
+    # 2. Direct lookup.
     entry = nf_block.metrics.get(raw_name)
     if entry is not None:
         return AnnotatedMetric(
@@ -84,7 +103,7 @@ def resolve_raw(nf: str, raw_name: str, kb: MetricsKB) -> AnnotatedMetric:
             kind="direct", entry=entry,
         )
 
-    # 2. Normalized names.
+    # 3. Normalized names.
     normalized = _normalize_raw_name(raw_name)
     if normalized and normalized != raw_name:
         entry = nf_block.metrics.get(normalized)
@@ -93,16 +112,6 @@ def resolve_raw(nf: str, raw_name: str, kb: MetricsKB) -> AnnotatedMetric:
                 raw_name=raw_name, nf=nf,
                 kb_metric_id=f"{layer}.{nf}.{normalized}",
                 kind="direct", entry=entry,
-            )
-
-    # 3. Reverse index — does any KB entry list this raw_name in raw_sources?
-    for metric_name, metric_entry in nf_block.metrics.items():
-        if raw_name in metric_entry.raw_sources:
-            return AnnotatedMetric(
-                raw_name=raw_name, nf=nf,
-                kb_metric_id=f"{layer}.{nf}.{metric_name}",
-                kind="derived", entry=metric_entry,
-                raw_type=_infer_raw_type(raw_name),
             )
 
     # 4. No coverage.

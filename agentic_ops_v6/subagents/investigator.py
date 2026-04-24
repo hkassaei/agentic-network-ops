@@ -66,6 +66,12 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
             tools.list_flows,
             tools.get_flow,
             tools.get_flows_through_component,
+            # Causal-chain tools: agent can read the full branch-first
+            # chain for its hypothesis (mechanism, source_steps,
+            # discriminating_from) to know what a clean/contradicting
+            # observation looks like without asking the OntologyAgent.
+            tools.get_causal_chain,
+            tools.find_chains_by_observable_metric,
             AgentTool(ontology, skip_summarization=True),
         ],
     )

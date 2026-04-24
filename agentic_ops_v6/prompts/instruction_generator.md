@@ -28,15 +28,23 @@ The orchestrator will spawn one parallel Investigator sub-agent per plan. Each s
 7. **Activity-vs-drops discriminator.** Applies only to hypotheses claiming an NF is *dropping / silently failing / not responding* based on low or zero traffic AT THAT NF. For those, the plan must include one probe that reads the upstream NF's outbound counter for the same traffic class (e.g., gNB's GTP-U out for UPF-N3; P-CSCF's `httpclient:connok` for PCF-N5). Skip this rule for hypotheses that name a component as the root cause for non-silence reasons (container exited, config error, etc.) — there is no "upstream" to check.
 8. **Negative-result falsification weight.** If a probe is expected to produce an error/log/metric when the hypothesis holds, a clean/empty result from that probe is a *contradiction*, not a neutral data point. Write probes so that their negative result is genuinely incompatible with the hypothesis — i.e. the pattern must be broad enough that a real failure of this mode would hit it.
 9. **Flow-anchored probes (strongly preferred).** Before writing a plan, call `get_flows_through_component(nf)` on the hypothesis's `primary_suspect_nf` to see every flow that touches it, then `get_flow(flow_id)` on the most relevant one. Each step's `failure_modes` entries describe what the implementation *actually does* on error (SIP response codes, log strings, metric spikes). Write probes that look for those specific observables. A plan whose probes correspond to authored `failure_modes` is stronger than one assembled from generic 3GPP priors.
+10. **Branch-anchored probes (strongly preferred).** Causal chains in this stack are branch-first: each chain's cascading list is a set of named branches, each with its own `mechanism`, `source_steps` into flows, `observable_metrics`, and (often) `discriminating_from` hint. For every hypothesis, identify the branch it corresponds to via `get_causal_chain(chain_id)` or `find_chains_by_observable_metric(<metric>)`. Then:
+   - Lift the branch's `observable_metrics` directly into probe specs — they are the authored expected observables, stronger than anything you'd re-derive.
+   - When the branch has a `discriminating_from` hint naming the sibling branch to rule out, turn that hint into at least one probe. Probes written from `discriminating_from` are the cleanest discriminators you can produce.
+   - When the chain has a **negative branch** (`_unaffected`, `_unchanged`, …) adjacent to the hypothesis, add ONE probe whose result would reveal the negative branch is actually wrong (i.e. the component the negative branch says is fine *is* affected). If that probe contradicts the negative branch, the Investigator surfaces a compound/cascading fault rather than the single-chain hypothesis.
+   - Quote the `source_steps` reference in `notes` so the Investigator can pull the step's failure_modes with one tool call.
 
-## Flow tools for plan construction
+## Flow and chain tools for plan construction
 
 You have access to:
 - `list_flows()` — returns the list of flow ids and names.
 - `get_flow(flow_id)` — returns ordered steps with `failure_modes` and `metrics_to_watch`.
 - `get_flows_through_component(nf)` — returns every flow touching a given NF, with step positions.
+- `get_causal_chain(chain_id)` — returns the branch-first chain: `observable_symptoms.{immediate, cascading}` where `cascading` is the list of named branches with `mechanism`, `source_steps`, `observable_metrics`, `discriminating_from`.
+- `get_causal_chain_for_component(nf)` — every chain triggered by a given NF.
+- `find_chains_by_observable_metric(metric)` — reverse lookup: given a metric, find every branch that declares it as an observable. The fastest way to go from "NA said ratio X is up" to "which branch's `observable_metrics` names X".
 
-Use these before writing probes for any hypothesis. They are cheap and they anchor your plan to what the code actually does rather than to what 3GPP specs say should happen.
+Use these before writing probes. They are cheap; they anchor your plan to what the code and the ontology actually say rather than to 3GPP priors.
 
 ## Investigator's available tools
 

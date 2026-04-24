@@ -346,18 +346,25 @@ async def handle_data_plane_gauges(request: web.Request) -> web.Response:
 
 
 def _load_metric_descriptions() -> dict[str, str]:
-    """Load metric descriptions from ontology baselines.yaml.
+    """Load metric descriptions from the metric knowledge base
+    (`network_ontology/data/metrics.yaml`).
 
     Returns a flat dict mapping metric_key → description string.
     Loaded once at import time (not per-request).
+
+    Post-Phase-4: was `baselines.yaml`, now `metrics.yaml` — every
+    baseline entry was migrated into metric_kb, which holds a
+    required `description` field on every entry. The flat-key output
+    shape (metric_name → description) is preserved, so the front-end
+    consumer needs no change.
     """
-    baselines_path = REPO_ROOT / "network_ontology" / "data" / "baselines.yaml"
+    metrics_path = REPO_ROOT / "network_ontology" / "data" / "metrics.yaml"
     descriptions: dict[str, str] = {}
     try:
         import yaml
-        with open(baselines_path) as f:
+        with open(metrics_path) as f:
             data = yaml.safe_load(f)
-        for component, cdata in (data.get("baselines") or {}).items():
+        for component, cdata in (data.get("metrics") or {}).items():
             for metric_key, mdata in (cdata.get("metrics") or {}).items():
                 if isinstance(mdata, dict) and mdata.get("description"):
                     descriptions[metric_key] = mdata["description"]

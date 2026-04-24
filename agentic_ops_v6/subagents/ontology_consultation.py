@@ -29,5 +29,6 @@ def create_ontology_consultation_agent() -> LlmAgent:
             tools.get_disambiguation,
             tools.get_causal_chain,
             tools.get_causal_chain_for_component,
+            tools.find_chains_by_observable_metric,
         ],
     )

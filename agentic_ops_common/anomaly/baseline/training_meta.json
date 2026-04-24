@@ -1,18 +1,23 @@
 {
-  "trained_at": "2026-04-17T19:27:29.184364+00:00",
-  "duration_seconds": 1546,
-  "n_samples": 211,
-  "n_features": 23,
+  "trained_at": "2026-04-24T19:03:17.598948+00:00",
+  "duration_seconds": 1591,
+  "n_samples": 209,
+  "n_features": 30,
   "feature_keys": [
     "derived.icscf_lir_timeout_ratio",
     "derived.icscf_sip_error_ratio",
     "derived.icscf_uar_timeout_ratio",
+    "derived.pcscf_avg_register_time_ms",
     "derived.pcscf_sip_error_ratio",
+    "derived.rtpengine_loss_ratio",
     "derived.scscf_mar_timeout_ratio",
     "derived.scscf_registration_reject_ratio",
     "derived.scscf_sar_timeout_ratio",
     "derived.scscf_sip_error_ratio",
     "derived.upf_activity_during_calls",
+    "icscf.cdp:average_response_time",
+    "icscf.ims_icscf:lir_avg_response_time",
+    "icscf.ims_icscf:uar_avg_response_time",
     "normalized.icscf.cdp_replies_per_ue",
     "normalized.icscf.core:rcv_requests_invite_per_ue",
     "normalized.icscf.core:rcv_requests_register_per_ue",
@@ -26,8 +31,10 @@
     "normalized.smf.sessions_per_ue",
     "normalized.upf.gtp_indatapktn3upf_per_ue",
     "normalized.upf.gtp_outdatapktn3upf_per_ue",
-    "rtpengine.errors_per_second_(total)"
+    "rtpengine.errors_per_second_(total)",
+    "scscf.ims_auth:mar_avg_response_time",
+    "scscf.ims_registrar_scscf:sar_avg_response_time"
   ],
   "model_ready": true,
-  "training_samples": 211
+  "training_samples": 209
 }

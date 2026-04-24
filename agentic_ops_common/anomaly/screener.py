@@ -244,7 +244,6 @@ class AnomalyScreener:
         self._threshold = threshold
         self._training_samples = 0
         self._feature_means: dict[str, list[float]] = {}
-        self._feature_keys: list[str] | None = None
 
     @property
     def is_trained(self) -> bool:
@@ -253,6 +252,25 @@ class AnomalyScreener:
     @property
     def training_samples(self) -> int:
         return self._training_samples
+
+    @property
+    def feature_keys(self) -> list[str]:
+        """Sorted list of feature keys the model has been trained on.
+
+        Derived from `_feature_means` (the running-stats dict, populated
+        on every `learn()` call without gating). This is the authoritative
+        "what features did we train on" set, covering every feature that
+        appeared in any training sample — including features that only
+        emerge after the preprocessor's sliding-window rate pipeline has
+        enough history (e.g. temporal Diameter response-time features
+        gated on counter advancement).
+
+        Previously a snapshot-on-first-call attribute `_feature_keys`,
+        which systematically undercounted by the 6 temporal features
+        that the preprocessor cannot emit on snapshot 1 (history has
+        only 1 entry → rates dict empty → temporal features filtered).
+        """
+        return sorted(self._feature_means.keys())
 
     def learn(self, features: dict[str, float]) -> None:
         """Feed one healthy-state feature dict to the model.
@@ -274,14 +292,14 @@ class AnomalyScreener:
         self._model.learn_one(dithered)
         self._training_samples += 1
 
-        # Track per-feature running means for anomaly attribution
+        # Track per-feature running means for anomaly attribution.
+        # `_feature_means.keys()` is the authoritative union of every
+        # feature seen across all training samples — surfaced via
+        # `feature_keys` property.
         for k, v in features.items():
             if k not in self._feature_means:
                 self._feature_means[k] = []
             self._feature_means[k].append(v)
-
-        if self._feature_keys is None:
-            self._feature_keys = sorted(features.keys())
 
         if self._training_samples % 10 == 0:
             log.info("Anomaly model trained on %d samples (%d features)",

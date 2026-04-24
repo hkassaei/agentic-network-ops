@@ -84,6 +84,16 @@ _COUNTER_PATTERNS = [
     "ims_auth:mar_replies_received",
     "ims_registrar_scscf:sar_timeouts",
     "ims_registrar_scscf:sar_replies_received",
+    # RTPEngine — raw cumulative counters used ONLY via the sliding-window
+    # rate form, never as absolute values. This is the reintroduction path
+    # described in docs/ADR/rtpengine_loss_ratio_feature.md: the absolute
+    # values of packets_lost / total_relayed_packets are polluted across
+    # chaos runs (the ADR that removed them is correct), but their
+    # *rates* over the ~30 s preprocessor window are immune — the oldest
+    # sample in the ring is at most ~30 s old, so delta/dt only reflects
+    # current behavior. Together these feed derived.rtpengine_loss_ratio.
+    "packets_lost",
+    "total_relayed_packets",
 ]
 
 _COUNTER_SET = set(_COUNTER_PATTERNS)
@@ -144,16 +154,22 @@ _COLLECT_METRICS = {
     "ims_auth:mar_replies_received",
     "ims_registrar_scscf:sar_timeouts",
     "ims_registrar_scscf:sar_replies_received",
-    # RTPEngine — only point-in-time gauges, NOT cumulative lifetime metrics.
-    # Removed: average_packet_loss, packet_loss_standard_deviation, average_mos,
-    # packets_lost, total_number_of_1_way_streams, total_relayed_packet_errors.
-    # These are cumulative lifetime averages/counters that carry stale data from
-    # previous chaos runs and poison the anomaly screener (see ADR:
-    # remove_cumulative_rtpengine_features.md).
+    # RTPEngine — only point-in-time gauges plus a pair of cumulative
+    # counters that are rate-computed (never passed through as absolute
+    # values). average_packet_loss, packet_loss_standard_deviation,
+    # average_mos, total_number_of_1_way_streams,
+    # total_relayed_packet_errors were removed (ADR:
+    # remove_cumulative_rtpengine_features.md) because they're lifetime
+    # AVERAGES/COUNTERS that carry pollution across runs. packets_lost
+    # and total_relayed_packets are pure counters — we now admit them
+    # here AS COLLECTIONS for the sliding-window rate pipeline to
+    # derive rtpengine_loss_ratio from.
     "errors_per_second_(total)",
     "packets_per_second_(total)",
     "total_sessions",
     "owned_sessions",
+    "packets_lost",
+    "total_relayed_packets",
     # PyHSS
     "ims_subscribers",
     # MongoDB
@@ -235,6 +251,67 @@ _RATE_COUNTER_MAP: dict[str, str] = {
 # recent windows covers ~60 seconds of history, enough to distinguish
 # steady-state silence from a just-went-silent failure.
 _LIVENESS_LOOKBACK_WINDOWS = 2
+
+
+# =========================================================================
+# Expected feature set (the union of every key MetricPreprocessor.process()
+# can emit under any healthy traffic profile). Consumed by the anomaly-
+# trainer's save_model() guard to refuse persistence of a model whose
+# trained feature set is incomplete, preventing silent-under-training
+# regressions like the one documented in
+# docs/ADR/anomaly_model_feature_set.md "Training coverage gaps."
+#
+# RULE: whenever you add or remove a feature emission in `process()`,
+# update this set in the SAME commit. The trainer's guard will fail
+# loudly if the trained feature set diverges from this, forcing the
+# author to reconcile the two.
+#
+# The set has three blocks (order mirrors the emission order inside
+# `process()` for ease of review):
+#   Category 1 — passthrough gauges (inc. rtpengine errors, Cx response times)
+#   Category 2 — error ratios
+#   Category 3 — per-UE normalized counters, plus derived composite features
+# =========================================================================
+
+EXPECTED_FEATURE_KEYS: frozenset[str] = frozenset({
+    # -- Passthrough gauges --
+    "rtpengine.errors_per_second_(total)",
+    "icscf.cdp:average_response_time",
+    "icscf.ims_icscf:uar_avg_response_time",
+    "icscf.ims_icscf:lir_avg_response_time",
+    "scscf.ims_auth:mar_avg_response_time",
+    "scscf.ims_registrar_scscf:sar_avg_response_time",
+
+    # -- Error ratios ({icscf,scscf} timeout + registration reject + 3 SIP error) --
+    "derived.icscf_uar_timeout_ratio",
+    "derived.icscf_lir_timeout_ratio",
+    "derived.scscf_mar_timeout_ratio",
+    "derived.scscf_sar_timeout_ratio",
+    "derived.scscf_registration_reject_ratio",
+    "derived.icscf_sip_error_ratio",
+    "derived.pcscf_sip_error_ratio",
+    "derived.scscf_sip_error_ratio",
+
+    # -- Per-UE normalized rates --
+    "normalized.icscf.core:rcv_requests_register_per_ue",
+    "normalized.icscf.core:rcv_requests_invite_per_ue",
+    "normalized.pcscf.core:rcv_requests_register_per_ue",
+    "normalized.pcscf.core:rcv_requests_invite_per_ue",
+    "normalized.scscf.core:rcv_requests_register_per_ue",
+    "normalized.scscf.core:rcv_requests_invite_per_ue",
+    "normalized.icscf.cdp_replies_per_ue",
+    "normalized.scscf.cdp_replies_per_ue",
+    "normalized.upf.gtp_indatapktn3upf_per_ue",
+    "normalized.upf.gtp_outdatapktn3upf_per_ue",
+    "normalized.smf.sessions_per_ue",
+    "normalized.smf.bearers_per_ue",
+    "normalized.pcscf.dialogs_per_ue",
+
+    # -- Derived composite / temporal --
+    "derived.upf_activity_during_calls",
+    "derived.pcscf_avg_register_time_ms",
+    "derived.rtpengine_loss_ratio",
+})
 
 
 class MetricPreprocessor:
@@ -498,6 +575,22 @@ class MetricPreprocessor:
             )
         else:
             features["derived.upf_activity_during_calls"] = 1.0
+
+        # RTPEngine packet-loss ratio — the fraction of RTP packets lost
+        # over the sliding window. Computed from counter RATES (not
+        # absolute values), so lifetime pollution from earlier chaos
+        # runs does not affect it. Near zero during healthy traffic (no
+        # loss AND some packets flowing → small numerator / small
+        # denominator → 0). Rises into (0, 1) range during an active
+        # packet-loss injection. When no RTP is flowing at all (both
+        # counters stationary), _safe_ratio returns 0, so the feature
+        # is effectively a "media-plane loss when media is flowing"
+        # detector.
+        rtp_lost_rate = rates.get("rtpengine.packets_lost", 0)
+        rtp_relayed_rate = rates.get("rtpengine.total_relayed_packets", 0)
+        features["derived.rtpengine_loss_ratio"] = _safe_ratio(
+            rtp_lost_rate, rtp_lost_rate + rtp_relayed_rate
+        )
 
         # Infrastructure health (binary-ish)
         # Note: health indicators (ran_ue, gnb, upf_sessions, ims_registered)

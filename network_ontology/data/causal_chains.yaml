@@ -1784,3 +1784,133 @@ causal_chains:
       - "cdp:timeout > 0 AND core:rcv_requests_register flat at S-CSCF = compound fault (this chain)"
       - "Only cdp:timeout > 0 with S-CSCF still receiving SIP = pure hss_unreachable"
       - "Only S-CSCF SIP flat with cdp clean = pure scscf_unreachable"
+
+  rtpengine_media_degradation:
+    description: |
+      RTPEngine media relay is dropping, re-ordering, or delaying
+      RTP packets on the IMS media plane. Voice quality degrades
+      (MOS drops, jitter rises) but SIP signaling, 5G core data
+      plane, and HSS Cx are independent and continue to work. This
+      chain exists specifically to prevent the agent from
+      misattributing a media-only fault to the control plane.
+    affected_interface: [Mb]
+    affected_protocol: [RTP, RTCP]
+    failure_domain: ims_media_plane
+    severity: degraded
+
+    possible_causes:
+      - "Packet loss or latency injection on the rtpengine container's network interface (iptables, tc qdisc)"
+      - "Upstream RTP path loss that rtpengine observes but doesn't cause (N3 / UPF degraded)"
+      - "rtpengine internal relay engine fault (rare)"
+      - "Host-level CPU / memory contention on the rtpengine container"
+
+    observable_symptoms:
+      immediate:
+        - metric: derived.rtpengine_loss_ratio
+          becomes: "> 0.05"
+          at: rtpengine
+          description: "Sliding-window packet-loss ratio rises above 5% (from healthy 0)"
+        - symptom: "MOS cumulative average drifts below 3.5 during active calls"
+          source: get_dp_quality_gauges
+          at: rtpengine
+
+      cascading:
+        - branch: vonr_rtp_loss
+          condition: "Active VoNR call with RTP flowing through rtpengine"
+          effect: |
+            RTP packets are dropped by or before the rtpengine relay.
+            From the UE's perspective, voice audio cuts out, has
+            artifacts, or experiences noticeable delay. MOS
+            cumulative average drifts downward as losses accumulate
+            over successive calls.
+          mechanism: |
+            Packet loss on the rtpengine bridge interface: kernel
+            drops incoming packets on the container's veth before
+            rtpengine processes them (iptables/tc loss injection),
+            OR rtpengine drops them in userspace due to sequence
+            gaps / buffer overrun. rtpengine's observed-loss counter
+            (Packets lost) advances while total-relayed advances
+            more slowly, producing a non-zero loss_ratio.
+          source_steps:
+            - vonr_call_setup.step_12   # RTP media — voice call active
+          observable_metrics:
+            - derived.rtpengine_loss_ratio
+            - rtpengine.errors_per_second   # non-zero only if loss is rtpengine-internal
+            - rtpengine_mos                 # cumulative, degrades slowly
+
+        - branch: sip_signaling_unaffected   # NEGATIVE — blocks "blame HSS / PCF" hallucination
+          condition: "SIP REGISTER / INVITE / BYE in the same call window"
+          effect: |
+            SIP signaling through P-CSCF → I-CSCF → S-CSCF on port
+            5060 does NOT traverse the rtpengine relay. REGISTER and
+            INVITE success ratios remain at their healthy baseline;
+            SIP response times do not rise. Any claim that "rtpengine
+            degradation caused Diameter / SIP symptoms" is WRONG for
+            a pure media-plane fault — this branch documents that
+            explicitly so the agent does not reach for priors.
+          mechanism: |
+            rtpengine relays only RTP media (UDP 30000–30999). SIP
+            uses a separate port (5060) and a separate code path
+            through Kamailio with its own interface binding. A loss
+            injection on the rtpengine media bridge cannot affect
+            SIP packets — they follow a disjoint path.
+          observable_metrics:
+            - derived.pcscf_sip_error_ratio     # stays at 0
+            - derived.icscf_uar_timeout_ratio   # stays at 0
+            - derived.pcscf_avg_register_time_ms  # stays at baseline
+          discriminating_from: |
+            If derived.pcscf_sip_error_ratio > 0 OR register time is
+            elevated, rtpengine-alone is NOT the full story —
+            investigate as a compound fault rather than anchoring on
+            this chain.
+
+        - branch: n3_user_plane_unaffected   # NEGATIVE
+          condition: "GTP-U / N3 traffic through UPF"
+          effect: |
+            UPF N3 packet counters continue to advance normally for
+            the UE whose voice call is experiencing RTP loss. UPF
+            data-plane throughput is independent of the rtpengine
+            relay. Any claim that "rtpengine degradation caused UPF
+            GTP-U shortfall" is WRONG for a localized rtpengine
+            fault; when both move together, the loss is upstream.
+          mechanism: |
+            UPF and rtpengine are parallel user-plane relays for
+            different traffic classes: UPF handles GTP-U
+            encapsulated PDU-session data, rtpengine handles RTP
+            media for IMS voice. They share no packet path.
+          observable_metrics:
+            - normalized.upf.gtp_indatapktn3upf_per_ue    # unchanged
+            - normalized.upf.gtp_outdatapktn3upf_per_ue   # unchanged
+            - derived.upf_activity_during_calls
+
+        - branch: hss_cx_unaffected   # NEGATIVE
+          condition: "Diameter Cx signaling between I-CSCF / S-CSCF and pyhss"
+          effect: |
+            UAR, MAR, SAR, LIR exchanges continue normally; response
+            times stable. pyhss is untouched by RTP-plane faults.
+          mechanism: |
+            Cx Diameter is a pure control-plane transaction on port
+            3868. rtpengine is a media-plane relay on ports 30000+.
+            No shared dependency.
+          observable_metrics:
+            - ims_icscf:uar_timeouts          # stays at baseline
+            - ims_auth:mar_timeouts           # stays at baseline
+            - icscf.cdp:average_response_time  # stays at baseline
+
+    diagnostic_approach:
+      - tool: get_dp_quality_gauges
+        args: {window_seconds: 120}
+        purpose: "Confirm recent MOS drop, packet-loss percentage rising, pps still active on the RTP path — all over the same window"
+        priority: 1
+      - tool: get_nf_metrics
+        purpose: "Read derived.rtpengine_loss_ratio to quantify the fault; confirm pcscf/icscf SIP metrics are at healthy baseline (rules out compound fault)"
+        priority: 2
+      - tool: measure_rtt
+        args: {container: "pcscf", target_ip: "<rtpengine_ip>"}
+        purpose: "Distinguish rtpengine-local loss from an upstream path fault"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "derived.rtpengine_loss_ratio > 0.05 AND pcscf_sip_error_ratio == 0 AND UPF N3 counters unchanged → rtpengine-specific media fault"
+      - "derived.rtpengine_loss_ratio > 0.05 AND UPF out/in GTP counters also degraded → fault is upstream (N3 path or gNB), rtpengine is an observer"
+      - "MOS drops but loss_ratio stays at 0 → check jitter, not packet loss"

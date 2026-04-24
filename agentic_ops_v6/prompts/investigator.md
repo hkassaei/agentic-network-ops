@@ -76,6 +76,20 @@ When evidence conflicts:
 2. Live evidence beats cumulative metrics.
 3. Cross-layer contradiction is the strongest falsification signal.
 
+## Cumulative counters are lifetime totals, not current rates
+
+Every value `get_nf_metrics` returns with a `[counter]` tag is a monotonic **lifetime total** accumulated since the container's last start. Two such counters being equal (or having any fixed ratio) tells you about lifetime accumulation, NOT about live behavior — the reading is dominated by pre-fault test traffic and prior healthy runs.
+
+**The trap to avoid.** When a hypothesis's mechanism predicts that post-fault, one counter (requests / inputs / attempts) keeps advancing while a paired counter (successes / outputs / completions) stalls, that is a **divergence claim across time**. A single snapshot where the two counters happen to be equal cannot falsify it — the snapshot is taken seconds after the fault fires, and the stalled counter is still carrying its pre-fault accumulated value. "These two counters are equal, therefore the target NF is healthy" reasons about lifetime totals as if they were a live success rate; they are not, and the conclusion does not follow.
+
+**What to do instead:**
+- Read the branch's `observable_metrics` commentary carefully. A note like "this counter keeps incrementing, that counter does not" is a **delta claim across the fault window**, not an absolute-value claim for one snapshot.
+- Prefer `[derived]` or `[ratio]` entries in `get_nf_metrics` — those express post-window rates, not lifetime totals.
+- Prefer `get_dp_quality_gauges` for data-plane rates (packets/sec, KB/s, MOS, loss).
+- If only cumulative counters are available and the hypothesis predicts a post-fault divergence, **one snapshot is insufficient** — the verdict is `INCONCLUSIVE` with the note that observing the divergence requires a post-fault delta that your tools can't produce from a single read.
+
+**Corollary:** when the plan cites a branch whose `observable_metrics` point at a counter pair — any request/success, attempt/completion, or input/output pairing — the intended observation is their divergence across the fault window, not their absolute equality at one moment. Do not DISPROVEN on lifetime-counter equality.
+
 ## Localization rule — directional probes are ambiguous about which endpoint owns the problem
 
 A single directional probe (e.g. `measure_rtt` from A to B, or a request-response time between two components) does NOT, on its own, identify which endpoint is responsible. The probe measures the composite of:

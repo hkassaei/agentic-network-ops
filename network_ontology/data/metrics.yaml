@@ -1414,6 +1414,89 @@ metrics:
         expected: 0
         alarm_if: '> 5 (noticeable quality impact) or > 20 (severe degradation)'
         note: Average packet loss from RTCP reports. Directly degrades MOS.
+      loss_ratio:
+        display_name: RTPEngine packet-loss ratio (sliding window)
+        source: derived
+        type: ratio
+        unit: ratio
+        protocol: RTP
+        interface: Mb
+        plane: media
+        description: |
+          Proportion of RTP packets lost on the rtpengine relay over the
+          most recent sliding window (≈30 s), computed as the counter-
+          rate ratio packets_lost_rate / (packets_lost_rate +
+          total_relayed_packets_rate). Absolute lifetime counter values
+          from prior chaos runs have no effect — only the post-fault
+          delta matters, which is why this feature survives the
+          concerns documented in ADR remove_cumulative_rtpengine_features.md.
+        meaning:
+          what_it_signals: |
+            Direct live measure of media-plane packet loss through
+            rtpengine. Zero during healthy traffic; any sustained
+            non-zero value is a voice-quality-affecting fault.
+          spike: |
+            RTP packets are being dropped on or before the rtpengine
+            relay. Could be upstream path loss that rtpengine
+            observes as it receives streams, OR a local fault on the
+            rtpengine container (iptables / tc / interface
+            congestion).
+          steady_non_zero: "Ongoing loss at whatever rate the window captures."
+          zero: "Healthy — no loss observed, or no RTP flowing."
+        healthy:
+          scale_independent: true
+          typical_range: [0.0, 0.01]
+        event_triggers:
+          - id: ims.rtpengine.packet_loss_sustained
+            trigger: sustained_gt(0.05, min_duration='15s')
+            clear_condition: sustained_lt(0.01, min_duration='30s')
+            local_meaning: |
+              rtpengine has observed >5% RTP packet loss sustained for
+              at least 15 s. Direct voice-quality degradation; MOS
+              cumulative average will follow this signal over
+              successive calls but lags.
+            magnitude_captured:
+              - current_value
+              - prior_stable_value
+              - delta_absolute
+              - delta_percent
+            correlates_with:
+              - event_id: core.upf.gtp_outdatapktn3upf_per_ue_drop
+                composite_interpretation: |
+                  Loss likely on the N3 path between gNB and UPF —
+                  both rtpengine and the UPF downlink counter would
+                  see a shortfall, not specific to rtpengine.
+              - event_id: core.upf.gtp_indatapktn3upf_per_ue_drop
+                composite_interpretation: |
+                  Loss likely on the UE→gNB→UPF uplink path — both
+                  rtpengine and the UPF uplink counter would show
+                  degradation.
+        related_metrics:
+          - metric: ims.rtpengine.errors_per_second
+            relationship: correlated_with
+            use: |
+              errors_per_second measures rtpengine's internal relay
+              errors (e.g. "can't forward"). It is orthogonal to
+              network-layer packet loss: iptables/tc dropping packets
+              upstream produces high loss_ratio with
+              errors_per_second staying at 0.
+        disambiguators:
+          - metric: core.upf.gtp_outdatapktn3upf_per_ue
+            separates: |
+              rtpengine-local loss (only rtpengine sees it) vs.
+              N3-path loss (both UPF counters and rtpengine loss
+              ratio move together).
+        how_to_verify_live:
+          tool: get_dp_quality_gauges
+          args_hint: "window_seconds=120 to confirm MOS drop and packet-loss percentage across the same window"
+        applicable_use_cases:
+          - vonr
+        tags:
+          - media_plane
+          - packet_loss
+          - live_rate
+        expected: 0
+        alarm_if: "> 0.05 during active VoNR call"
       rtpengine_loss_stddev:
         source: get_dp_quality_gauges
         type: gauge

@@ -100,3 +100,11 @@ After retraining the anomaly model:
 2. Without redeploying the stack, immediately run a different scenario (e.g., IMS Network Partition or P-CSCF Latency)
 3. Verify the anomaly screener does NOT flag stale RTPEngine metrics as HIGH severity
 4. Verify the agent diagnoses the second scenario correctly despite residual RTPEngine state from the first
+
+---
+
+## Revisited — 2026-04-24
+
+This decision is upheld. A follow-on ADR, [`rtpengine_loss_ratio_feature.md`](rtpengine_loss_ratio_feature.md), refines (not reverses) the scope: two of the six removed counters — `packets_lost` and `total_relayed_packets` — have been re-admitted into `_COUNTER_PATTERNS` **exclusively as inputs to the sliding-window rate pipeline**. Their absolute values are still excluded from the feature vector; only a derived ratio of their rates (`derived.rtpengine_loss_ratio`) is surfaced to the model. The pollution argument in this ADR applies to absolute cumulative values and does not apply to rates, because the preprocessor's ~30 s window is bounded: any value that hasn't advanced within the last 30 s produces rate = 0 regardless of its magnitude. See the follow-on ADR for the full argument and motivating episodes.
+
+All other features removed by this ADR (`average_packet_loss`, `packet_loss_standard_deviation`, `average_mos`, `total_number_of_1_way_streams`, `total_relayed_packet_errors`) remain excluded without amendment.

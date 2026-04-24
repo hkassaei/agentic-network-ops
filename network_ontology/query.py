@@ -23,6 +23,33 @@ from typing import Any
 log = logging.getLogger("ontology.query")
 
 
+# ---------------------------------------------------------------------
+# metric_kb cache
+# ---------------------------------------------------------------------
+# `compare_to_baseline` now reads from the Python MetricsKB object
+# (loaded from network_ontology/data/metrics.yaml) instead of Neo4j
+# :Metric nodes. We cache the loaded KB at module level so repeated
+# queries don't re-parse the YAML every call.
+
+_METRIC_KB_CACHE: Any | None = None
+
+
+def _load_metric_kb():
+    """Return the cached MetricsKB, loading on first access.
+
+    Import inside the function to avoid a hard dependency on
+    agentic_ops_common at module-import time for callers that only use
+    non-baseline query methods.
+    """
+    global _METRIC_KB_CACHE
+    if _METRIC_KB_CACHE is None:
+        from pathlib import Path
+        from agentic_ops_common.metric_kb.loader import load_kb
+        yaml_path = Path(__file__).resolve().parent / "data" / "metrics.yaml"
+        _METRIC_KB_CACHE = load_kb(yaml_path)
+    return _METRIC_KB_CACHE
+
+
 class OntologyClient:
     """Query interface to the network ontology graph database."""
 
@@ -50,32 +77,25 @@ class OntologyClient:
     def get_causal_chain(self, chain_id: str) -> dict[str, Any] | None:
         """Get a complete causal chain by ID.
 
-        Returns the chain with its immediate effects, cascading effects,
-        symptoms at each node, does_NOT_mean warnings, and diagnostic actions.
+        Returns the chain with its observable symptoms split into
+        `immediate` and `cascading`, the cascading list organized
+        as named branches (each with mechanism, source_steps,
+        observable_metrics, and optional discriminating_from),
+        the deserialized diagnostic_approach, and any chain-level
+        does_not_mean / hypothesis_testing / convergence_point.
         """
         with self._driver.session() as session:
             result = session.run("""
                 MATCH (cc:CausalChain {id: $id})
                 OPTIONAL MATCH (cc)-[cs:CAUSES_SYMPTOM]->(s:Symptom)
-                RETURN cc, collect({symptom: s, order: cs.order, type: cs.type}) AS symptoms
+                RETURN cc, collect({symptom: s, order: cs.order, type: cs.type, branch: cs.branch}) AS symptoms
             """, id=chain_id)
 
             record = result.single()
             if not record:
                 return None
 
-            cc = dict(record["cc"])
-            symptoms = [
-                {**dict(s["symptom"]), "order": s["order"], "type": s["type"]}
-                for s in record["symptoms"]
-                if s["symptom"] is not None
-            ]
-            symptoms.sort(key=lambda x: x.get("order", 999))
-
-            return {
-                **cc,
-                "symptoms": symptoms,
-            }
+            return self._hydrate_causal_chain(record["cc"], record["symptoms"])
 
     def get_causal_chain_for_component(self, component: str) -> list[dict]:
         """Get all causal chains triggered by a specific component failure."""
@@ -83,22 +103,169 @@ class OntologyClient:
             result = session.run("""
                 MATCH (cc:CausalChain)-[:TRIGGERS]->(c:Component {name: $name})
                 OPTIONAL MATCH (cc)-[cs:CAUSES_SYMPTOM]->(s:Symptom)
-                RETURN cc, collect({symptom: s, order: cs.order}) AS symptoms
+                RETURN cc, collect({symptom: s, order: cs.order, type: cs.type, branch: cs.branch}) AS symptoms
                 ORDER BY cc.severity DESC
             """, name=component)
 
-            chains = []
-            for record in result:
-                cc = dict(record["cc"])
-                symptoms = [
-                    {**dict(s["symptom"]), "order": s["order"]}
-                    for s in record["symptoms"]
-                    if s["symptom"] is not None
-                ]
-                symptoms.sort(key=lambda x: x.get("order", 999))
-                chains.append({**cc, "symptoms": symptoms})
+            return [self._hydrate_causal_chain(r["cc"], r["symptoms"]) for r in result]
 
-            return chains
+    def _hydrate_causal_chain(self, cc_node, symptom_rows: list[dict]) -> dict[str, Any]:
+        """Assemble the agent-facing causal-chain dict from Neo4j rows.
+
+        Deserializes JSON-encoded fields (diagnostic_approach,
+        convergence_point) and splits symptoms into immediate/cascading
+        with only the relevant properties per type.
+        """
+        cc = dict(cc_node)
+
+        # Deserialize diagnostic_approach_json → list of dicts
+        da_json = cc.pop("diagnostic_approach_json", None) or []
+        diagnostic_approach: list[Any] = []
+        for entry in da_json:
+            try:
+                diagnostic_approach.append(json.loads(entry))
+            except (TypeError, ValueError):
+                diagnostic_approach.append(entry)
+
+        # Deserialize convergence_point_json
+        conv_json = cc.pop("convergence_point_json", "") or ""
+        convergence_point = None
+        if conv_json:
+            try:
+                convergence_point = json.loads(conv_json)
+            except (TypeError, ValueError):
+                convergence_point = conv_json
+
+        # Partition and shape symptoms
+        immediate: list[dict] = []
+        cascading: list[dict] = []
+        for row in symptom_rows:
+            s = row.get("symptom")
+            if s is None:
+                continue
+            props = dict(s)
+            order = row.get("order")
+            stype = row.get("type") or props.get("type", "")
+            # Drop per-row Neo4j internals & redundant type key
+            props.pop("type", None)
+
+            if stype == "immediate":
+                immediate.append({
+                    "order": order,
+                    "metric": props.get("metric", ""),
+                    "log_pattern": props.get("log_pattern", ""),
+                    "symptom_text": props.get("symptom_text", ""),
+                    "source_tool": props.get("source_tool", ""),
+                    "expected_value": props.get("expected_value", ""),
+                    "observed_at": props.get("observed_at", ""),
+                    "affected": props.get("affected", ""),
+                    "from_component": props.get("from_component", ""),
+                    "to_component": props.get("to_component", ""),
+                    "lag": props.get("lag", ""),
+                    "note": props.get("note", ""),
+                    "description": props.get("description", ""),
+                })
+            else:  # cascading
+                cascading.append({
+                    "order": order,
+                    "branch": row.get("branch") or props.get("branch", ""),
+                    "condition": props.get("condition", ""),
+                    "effect": props.get("description", ""),
+                    "mechanism": props.get("mechanism", ""),
+                    "source_steps": props.get("source_steps", []) or [],
+                    "observable_metrics": props.get("observable_metrics", []) or [],
+                    "discriminating_from": props.get("discriminating_from", ""),
+                    "lag": props.get("lag", ""),
+                })
+
+        immediate.sort(key=lambda x: x.get("order", 999))
+        cascading.sort(key=lambda x: x.get("order", 999))
+
+        # Strip empty-string fields from each symptom dict for compact output
+        def _prune(d: dict) -> dict:
+            return {k: v for k, v in d.items() if v not in ("", None, [])}
+
+        out: dict[str, Any] = {
+            "id": cc.get("id", ""),
+            "description": cc.get("description", ""),
+            "failure_domain": cc.get("failure_domain", ""),
+            "severity": cc.get("severity", ""),
+            "affected_interface": cc.get("affected_interface", ""),
+            "affected_protocol": cc.get("affected_protocol", ""),
+            "possible_causes": cc.get("possible_causes", []),
+            "observable_symptoms": {
+                "immediate": [_prune(e) for e in immediate],
+                "cascading": [_prune(e) for e in cascading],
+            },
+            "diagnostic_approach": diagnostic_approach,
+            "key_diagnostic_signal": cc.get("key_diagnostic_signal", []),
+        }
+        if cc.get("does_not_mean"):
+            out["does_not_mean"] = cc["does_not_mean"]
+        if cc.get("hypothesis_testing"):
+            out["hypothesis_testing"] = cc["hypothesis_testing"]
+        if convergence_point:
+            out["convergence_point"] = convergence_point
+        return out
+
+    # -----------------------------------------------------------------
+    # Reverse lookup: observed metric → causal-chain branches
+    # -----------------------------------------------------------------
+
+    def find_chains_by_observable_metric(self, metric_query: str) -> list[dict]:
+        """Given a metric name (or substring), return every causal-chain
+        branch whose `observable_metrics` lists that metric. This lets
+        an agent go from "I see metric X deviating" to "which failure
+        branches would produce that, and via which flow steps?" without
+        scanning the full causal_chains.yaml in prose.
+
+        The query matches case-insensitively on substring so that
+        callers can pass either a bare metric name (`pcscf_sip_error_ratio`)
+        or a qualified one (`derived.pcscf_sip_error_ratio`).
+        """
+        needle = (metric_query or "").strip().lower()
+        if not needle:
+            return []
+
+        with self._driver.session() as session:
+            result = session.run("""
+                MATCH (cc:CausalChain)-[cs:CAUSES_SYMPTOM {type: 'cascading'}]->(s:Symptom)
+                WHERE any(m IN coalesce(s.observable_metrics, []) WHERE toLower(m) CONTAINS $needle)
+                OPTIONAL MATCH (s)-[:DERIVES_FROM_STEP]->(fs:FlowStep)
+                RETURN
+                    cc.id AS chain_id,
+                    cc.description AS chain_description,
+                    cc.severity AS severity,
+                    s.branch AS branch,
+                    s.condition AS condition,
+                    s.description AS effect,
+                    s.mechanism AS mechanism,
+                    s.observable_metrics AS observable_metrics,
+                    s.source_steps AS source_steps,
+                    s.discriminating_from AS discriminating_from,
+                    collect({flow_id: fs.flow_id, step_order: fs.step_order, label: fs.label}) AS flow_steps
+            """, needle=needle)
+
+            out: list[dict] = []
+            for r in result:
+                row = {
+                    "chain_id": r["chain_id"],
+                    "chain_description": r["chain_description"],
+                    "severity": r["severity"],
+                    "branch": r["branch"],
+                    "condition": r["condition"],
+                    "effect": r["effect"],
+                    "mechanism": r["mechanism"],
+                    "observable_metrics": r["observable_metrics"] or [],
+                    "source_steps": r["source_steps"] or [],
+                    "flow_steps": [
+                        fs for fs in (r["flow_steps"] or [])
+                        if fs.get("flow_id")
+                    ],
+                    "discriminating_from": r["discriminating_from"] or "",
+                }
+                out.append(row)
+            return out
 
     # -----------------------------------------------------------------
     # Symptom Matching
@@ -439,21 +606,54 @@ class OntologyClient:
     # -----------------------------------------------------------------
 
     def get_baseline(self, component: str) -> dict[str, dict]:
-        """Get expected baseline metrics for a component."""
-        with self._driver.session() as session:
-            result = session.run("""
-                MATCH (c:Component {name: $name})-[:EXPOSES]->(m:Metric)
-                RETURN m
-            """, name=component)
-            return {
-                record["m"]["name"]: dict(record["m"])
-                for record in result
+        """Get expected baseline metrics for a component.
+
+        Reads from the Python MetricsKB (metrics.yaml), not from Neo4j
+        :Metric nodes. This is the post-baselines.yaml-retirement path
+        (Phase 4); every baseline field migrated from baselines.yaml
+        is now an attribute of a MetricEntry under the NF's block in
+        metric_kb. Returned shape mirrors the original flat dict the
+        agent-facing tool expects:
+          {metric_name: {expected, alarm_if, note, is_pre_existing,
+                         typical_range_low, typical_range_high, ...}}
+        """
+        kb = _load_metric_kb()
+        nf_block = kb.metrics.get(component)
+        if nf_block is None:
+            return {}
+        out: dict[str, dict] = {}
+        for mname, entry in nf_block.metrics.items():
+            rec: dict = {
+                "name": mname,
+                "expected": entry.expected,
+                "alarm_if": entry.alarm_if or "",
+                "note": entry.note or "",
+                "description": entry.description,
+                "type": entry.type.value if entry.type else "",
+                "unit": entry.unit or "",
             }
+            # Healthy-block fields used by compare_to_baseline below
+            h = entry.healthy
+            rec["is_pre_existing"] = bool(h.pre_existing_noise)
+            if h.typical_range is not None:
+                rec["typical_range_low"] = float(h.typical_range[0])
+                rec["typical_range_high"] = float(h.typical_range[1])
+            else:
+                rec["typical_range_low"] = None
+                rec["typical_range_high"] = None
+            out[mname] = rec
+        return out
 
     def compare_to_baseline(
         self, component: str, current_metrics: dict[str, float]
     ) -> list[dict]:
-        """Compare current metrics to baseline. Returns only anomalies."""
+        """Compare current metrics to baseline. Returns only anomalies.
+
+        Preserves the original output shape exactly so agent-facing
+        callers (v4/v5 diagnose(), v6 `compare_to_baseline` tool) see
+        no behavior change as the baseline source switches from
+        baselines.yaml/Neo4j to metrics.yaml/metric_kb.
+        """
         baseline = self.get_baseline(component)
         anomalies = []
 
@@ -471,18 +671,25 @@ class OntologyClient:
                     if range_low <= current_value <= range_high:
                         continue  # Within known noisy range
 
-            # Check against expected value
+            # Check against expected value. metric_kb preserves the
+            # authored form (int / float / str); mirror the old
+            # isdigit()-based gate so only clean numeric comparisons
+            # fire.
             expected = bl.get("expected")
-            if expected and expected.isdigit():
+            expected_val: float | None = None
+            if isinstance(expected, (int, float)):
                 expected_val = float(expected)
-                if current_value != expected_val:
-                    anomalies.append({
-                        "metric": metric_name,
-                        "expected": expected_val,
-                        "actual": current_value,
-                        "alarm_if": bl.get("alarm_if", ""),
-                        "note": bl.get("note", ""),
-                    })
+            elif isinstance(expected, str) and expected.strip().replace(".", "", 1).isdigit():
+                expected_val = float(expected.strip())
+
+            if expected_val is not None and current_value != expected_val:
+                anomalies.append({
+                    "metric": metric_name,
+                    "expected": expected_val,
+                    "actual": current_value,
+                    "alarm_if": bl.get("alarm_if", ""),
+                    "note": bl.get("note", ""),
+                })
 
         return anomalies
 

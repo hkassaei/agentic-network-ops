@@ -1,1385 +1,2410 @@
-# =============================================================================
-# Metric Knowledge Base
-# =============================================================================
-# Source of truth for the semantic interpretation of raw metrics collected
-# from the 5G SA + IMS stack. Consumed by:
-#   - Trigger evaluator (simpleeval DSL)
-#   - Network Analyst (hypothesis formation)
-#   - Instruction Generator (falsification probe planning)
-#   - Investigator (probe execution + evidence interpretation)
-#
-# Schema: docs/ADR/metric_knowledge_base_schema.md
-# Loader: agentic_ops_common/metric_kb/loader.py
-# =============================================================================
-
 metrics:
-
-  # =========================================================================
-  # CORE — AMF (RAN-facing control plane)
-  # =========================================================================
   amf:
     layer: core
     metrics:
-
-      ran_ue:
-        display_name: "RAN-attached UEs"
+      amf_session:
         source: prometheus
-        type: gauge
-        unit: count
-        protocol: NGAP
-        interface: N2
-        plane: control
-        description: |
-          Count of UEs currently attached to the 5G RAN via this AMF. Incremented
-          on successful attach, decremented on detach. Reported by the AMF
-          Prometheus endpoint.
-        meaning:
-          what_it_signals: |
-            Fundamental RAN health indicator. Any UE that completed initial
-            registration appears here; any UE that lost the N2 association
-            disappears within seconds. Directly reflects the health of the
-            Uu and N2 interfaces from the AMF's viewpoint.
-          drop: "UEs losing RAN access. Partial drop = scattered UE issues; total drop = N2/gNB-wide failure."
-          zero: "Total RAN failure — N2 association down, gNB crashed, or AMF isolated from RAN."
+        type: counter
+        description: Active NAS sessions on the AMF. Each UE has 2 (internet + IMS APN).
         healthy:
           scale_independent: false
-          invariant: |
-            Equals configured UE pool size in healthy steady state. Closely
-            tracks ims.pcscf.registered_contacts in VoNR mode (IMS-registered
-            count should equal or be just below RAN-attached count).
-        event_triggers:
-          - id: core.amf.ran_ue_sudden_drop
-            trigger: "dropped_by(current, prior_stable(window='5m'), 0.2) and sustained_lt(0.8 * prior_stable(window='5m'), min_duration='30s')"
-            clear_condition: "current >= 0.9 * prior_stable(window='5m')"
-            local_meaning: |
-              RAN-attached UE count decreased sharply from a previously stable
-              baseline and stayed down. Does NOT attribute cause.
-            magnitude_captured: [current_value, prior_stable_value, delta_absolute, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: core.amf.gnb_association_drop
-                composite_interpretation: "gNB/N2 failure — RAN access lost for both gNB and UEs"
-              - event_id: infrastructure.mongo.subscribers_decrease
-                composite_interpretation: "Planned offboarding — benign"
-              - event_id: core.smf.ues_active_drop
-                composite_interpretation: "Coordinated UE loss across AMF and SMF — RAN-side"
-
-          - id: core.amf.ran_ue_full_loss
-            trigger: "current == 0 and prior_stable(window='5m') > 0 and not (phase == 'startup')"
-            clear_condition: "current > 0"
-            local_meaning: |
-              All attached UEs have disappeared. Suppressed during startup phase.
-            magnitude_captured: [current_value, prior_stable_value, first_observed_at]
-            correlates_with:
-              - event_id: core.amf.gnb_association_drop
-                composite_interpretation: "Total RAN failure — gNB + UEs both gone"
-        related_metrics:
-          - metric: core.amf.gnb
-            relationship: discriminator_for
-            use: "If ran_ue drops but gnb stays stable, UEs are losing attachment (subscriber-level). If both drop, gNB is down."
-          - metric: core.smf.sessions_per_ue
-            relationship: correlated_with
-            use: "Should match ran_ue in steady state. Drift indicates PDU session establishment problems."
-          - metric: ims.pcscf.dialogs_per_ue
-            relationship: correlated_with
-            use: "In VoNR mode, active IMS registrations and dialogs should track RAN attachments."
-        disambiguators:
-          - metric: core.amf.gnb
-            separates: "gNB-side failure (gnb=0) vs. AMF-side attach-processing issue (gnb>0 but ran_ue=0)"
-        how_to_verify_live:
-          tool: get_nf_metrics
-          args_hint: "Fetch AMF snapshot; compare ran_ue and gnb. Follow up with check_process_listeners on nr_gnb if both are 0."
-        applicable_use_cases: [5g_core, vonr]
-        tags: [ran, attachment, liveness]
-
+          invariant: amf_session == ran_ue * configured_apns_per_ue (typically 2). Ratio should stay constant;
+            absolute count scales with UE pool.
+        expected: 4
+        note: 2 UEs x 2 sessions (internet + IMS APN)
+      fivegs_amffunction_amf_authfail:
+        source: prometheus
+        type: counter
+        description: Authentication failures (counter). Non-zero delta indicates auth problems.
+        healthy:
+          scale_independent: true
+        alarm_if: delta > 0 (auth failures occurring)
+      fivegs_amffunction_amf_authreject:
+        source: prometheus
+        type: counter
+        description: Authentication rejections (counter). Non-zero delta indicates rejected credentials.
+        healthy:
+          scale_independent: true
+        alarm_if: delta > 0
+      fivegs_amffunction_amf_authreq:
+        source: prometheus
+        type: counter
+        description: Authentication requests sent to AUSF (counter).
+        healthy:
+          scale_independent: true
+      fivegs_amffunction_rm_reginitreq:
+        source: prometheus
+        type: counter
+        description: Registration initial requests received (counter). Delta indicates new registrations.
+        healthy:
+          scale_independent: true
+        note: Monotonically increasing. Delta matters, not absolute value.
+      fivegs_amffunction_rm_reginitsucc:
+        source: prometheus
+        type: counter
+        description: Successful registrations (counter). Gap from reginitreq = failed registrations.
+        healthy:
+          scale_independent: true
+        note: Should track reginitreq closely. Gap = failed registrations.
       gnb:
-        display_name: "Connected gNBs"
+        display_name: Connected gNBs
         source: prometheus
         type: gauge
         unit: count
         protocol: NGAP
         interface: N2
         plane: control
-        description: |
-          Count of gNBs with active N2 (NGAP/SCTP) association to this AMF.
+        description: 'Count of gNBs with active N2 (NGAP/SCTP) association to this AMF.
+
+          '
         meaning:
-          what_it_signals: |
-            Direct liveness indicator of the N2 control plane. If zero, the
+          what_it_signals: 'Direct liveness indicator of the N2 control plane. If zero, the
+
             RAN is unreachable by the AMF — no new UE attachments can happen,
+
             and existing sessions are losing their control-plane anchor.
-          drop: "gNB lost N2 association. For multi-gNB deployments, partial drop = regional outage; full drop = AMF isolated from RAN."
-          zero: "Total N2 loss. Cannot distinguish gNB crash from transport failure from AMF-side SCTP issue without probes."
+
+            '
+          drop: gNB lost N2 association. For multi-gNB deployments, partial drop = regional outage; full
+            drop = AMF isolated from RAN.
+          zero: Total N2 loss. Cannot distinguish gNB crash from transport failure from AMF-side SCTP
+            issue without probes.
         healthy:
           scale_independent: false
-          invariant: "Equals configured gNB count when N2 is healthy."
+          invariant: Equals configured gNB count when N2 is healthy.
         event_triggers:
-          - id: core.amf.gnb_association_drop
-            trigger: "current == 0 and prior_stable(window='5m') > 0"
-            clear_condition: "current >= 1"
-            local_meaning: |
-              N2 (NGAP) association lost with all gNBs. RAN is unreachable.
-            magnitude_captured: [current_value, prior_stable_value, first_observed_at]
-            correlates_with:
-              - event_id: core.amf.ran_ue_sudden_drop
-                composite_interpretation: "RAN failure confirmed — gNB down, UEs followed"
-              - event_id: core.amf.ran_ue_full_loss
-                composite_interpretation: "Total RAN outage"
+        - id: core.amf.gnb_association_drop
+          trigger: current == 0 and prior_stable(window='5m') > 0
+          clear_condition: current >= 1
+          local_meaning: 'N2 (NGAP) association lost with all gNBs. RAN is unreachable.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - first_observed_at
+          correlates_with:
+          - event_id: core.amf.ran_ue_sudden_drop
+            composite_interpretation: RAN failure confirmed — gNB down, UEs followed
+          - event_id: core.amf.ran_ue_full_loss
+            composite_interpretation: Total RAN outage
         related_metrics:
-          - metric: core.amf.ran_ue
-            relationship: correlated_with
-            use: "When gnb drops to 0, ran_ue should follow within seconds. Asymmetry is diagnostic."
+        - metric: core.amf.ran_ue
+          relationship: correlated_with
+          use: When gnb drops to 0, ran_ue should follow within seconds. Asymmetry is diagnostic.
         disambiguators:
-          - metric: core.amf.ran_ue
-            separates: "Whether N2 is dead (both zero) vs. AMF-side attach issue (gnb>0, ran_ue=0)"
+        - metric: core.amf.ran_ue
+          separates: Whether N2 is dead (both zero) vs. AMF-side attach issue (gnb>0, ran_ue=0)
         how_to_verify_live:
           tool: get_network_status
-          args_hint: "Check if nr_gnb container is running. Also measure_rtt(\"amf\", nr_gnb_ip) to verify transport-layer reachability."
-        applicable_use_cases: [5g_core, vonr]
-        tags: [ran, n2, liveness]
-
-
-  # =========================================================================
-  # CORE — SMF (session management)
-  # =========================================================================
-  smf:
-    layer: core
-    metrics:
-
-      sessions_per_ue:
-        display_name: "PDU sessions per attached UE"
-        source: derived
-        type: derived
+          args_hint: Check if nr_gnb container is running. Also measure_rtt("amf", nr_gnb_ip) to verify
+            transport-layer reachability.
+        applicable_use_cases:
+        - 5g_core
+        - vonr
+        tags:
+        - ran
+        - n2
+        - liveness
+        expected: 1
+        alarm_if: = 0 (all gNBs disconnected) or dropped from prior stable value
+      ran_ue:
+        display_name: RAN-attached UEs
+        source: prometheus
+        type: gauge
         unit: count
-        protocol: PFCP
-        interface: N4
+        protocol: NGAP
+        interface: N2
         plane: control
-        description: |
-          Normalized gauge computed as fivegs_smffunction_sm_sessionnbr / ran_ue.
-          Should be approximately constant (~2 in this deployment: one internet
-          APN + one IMS APN per UE).
+        description: 'Count of UEs currently attached to the 5G RAN via this AMF. Incremented
+
+          on successful attach, decremented on detach. Reported by the AMF
+
+          Prometheus endpoint.
+
+          '
         meaning:
-          what_it_signals: |
-            Ratio of established PDU sessions to RAN-attached UEs. Constant under
-            healthy operation (depends on configured APNs per UE). Drift means
-            some UEs lost or failed to establish their sessions — usually points
-            to SMF or UPF control-plane issues, since attachment (ran_ue) is
-            independent of session establishment.
-          drop: "Some UEs have fewer PDU sessions than they should. Likely SMF or PFCP (N4) issues."
-          spike: "More sessions than expected — likely stale sessions not cleaned up after detach."
+          what_it_signals: 'Fundamental RAN health indicator. Any UE that completed initial
+
+            registration appears here; any UE that lost the N2 association
+
+            disappears within seconds. Directly reflects the health of the
+
+            Uu and N2 interfaces from the AMF''s viewpoint.
+
+            '
+          drop: UEs losing RAN access. Partial drop = scattered UE issues; total drop = N2/gNB-wide failure.
+          zero: Total RAN failure — N2 association down, gNB crashed, or AMF isolated from RAN.
         healthy:
-          scale_independent: true
-          typical_range: [1.9, 2.1]
-          invariant: "Constant equal to configured_apns_per_ue (typically 2). Scale-independent."
+          scale_independent: false
+          invariant: 'Equals configured UE pool size in healthy steady state. Closely
+
+            tracks ims.pcscf.registered_contacts in VoNR mode (IMS-registered
+
+            count should equal or be just below RAN-attached count).
+
+            '
         event_triggers:
-          - id: core.smf.sessions_per_ue_drop
-            trigger: "current < 1.5 and prior_stable(window='5m') >= 1.9 and sustained_lt(1.8, min_duration='60s')"
-            clear_condition: "sustained_gt(1.9, min_duration='30s')"
-            local_meaning: |
-              PDU sessions per UE has fallen below the expected constant.
-              Indicates session establishment or persistence failure.
-            magnitude_captured: [current_value, prior_stable_value, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: core.amf.ran_ue_sudden_drop
-                composite_interpretation: "UEs detaching, sessions torn down — RAN-triggered"
-              - event_id: core.upf.pfcp_issue
-                composite_interpretation: "UPF-side PFCP issue — sessions failing at UPF"
+        - id: core.amf.ran_ue_sudden_drop
+          trigger: dropped_by(current, prior_stable(window='5m'), 0.2) and sustained_lt(0.8 * prior_stable(window='5m'),
+            min_duration='30s')
+          clear_condition: current >= 0.9 * prior_stable(window='5m')
+          local_meaning: 'RAN-attached UE count decreased sharply from a previously stable
+
+            baseline and stayed down. Does NOT attribute cause.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_absolute
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: core.amf.gnb_association_drop
+            composite_interpretation: gNB/N2 failure — RAN access lost for both gNB and UEs
+          - event_id: infrastructure.mongo.subscribers_decrease
+            composite_interpretation: Planned offboarding — benign
+          - event_id: core.smf.ues_active_drop
+            composite_interpretation: Coordinated UE loss across AMF and SMF — RAN-side
+        - id: core.amf.ran_ue_full_loss
+          trigger: current == 0 and prior_stable(window='5m') > 0 and not (phase == 'startup')
+          clear_condition: current > 0
+          local_meaning: 'All attached UEs have disappeared. Suppressed during startup phase.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - first_observed_at
+          correlates_with:
+          - event_id: core.amf.gnb_association_drop
+            composite_interpretation: Total RAN failure — gNB + UEs both gone
         related_metrics:
-          - metric: core.amf.ran_ue
-            relationship: correlated_with
-            use: "Denominator for this ratio. If ran_ue drops, sessions_per_ue can stay constant (both numerator and denominator drop together)."
-          - metric: core.smf.bearers_per_ue
-            relationship: correlated_with
-            use: "Both ride on SMF/UPF session infrastructure. Drop in both = SMF/UPF fault."
+        - metric: core.amf.gnb
+          relationship: discriminator_for
+          use: If ran_ue drops but gnb stays stable, UEs are losing attachment (subscriber-level). If
+            both drop, gNB is down.
+        - metric: core.smf.sessions_per_ue
+          relationship: correlated_with
+          use: Should match ran_ue in steady state. Drift indicates PDU session establishment problems.
+        - metric: ims.pcscf.dialogs_per_ue
+          relationship: correlated_with
+          use: In VoNR mode, active IMS registrations and dialogs should track RAN attachments.
         disambiguators:
-          - metric: core.amf.ran_ue
-            separates: "SMF/UPF fault (ran_ue stable but sessions_per_ue dropping) vs. general attachment issue (both dropping)"
+        - metric: core.amf.gnb
+          separates: gNB-side failure (gnb=0) vs. AMF-side attach-processing issue (gnb>0 but ran_ue=0)
         how_to_verify_live:
           tool: get_nf_metrics
-          args_hint: "Fetch SMF and AMF snapshots; compute ratio."
-        applicable_use_cases: [5g_core, vonr]
-        tags: [core, pdu_session, smf]
-
-      bearers_per_ue:
-        display_name: "Active QoS bearers per UE"
-        source: derived
-        type: derived
-        unit: count
-        protocol: PFCP
-        interface: N4
-        plane: control
-        description: |
-          Normalized gauge: smf.bearers_active / ran_ue. At rest, ~2 (default
-          bearers only). During active VoNR calls, rises by 1 per caller as
-          a dedicated voice QoS flow is established.
-        meaning:
-          what_it_signals: |
-            Per-UE count of active QoS bearers. Baseline reflects default
-            bearers; increments during VoNR calls indicate dedicated voice
-            bearers being set up. Drop during an active call = dedicated
-            bearer torn down unexpectedly (voice will fail).
-          spike: "Expected during VoNR calls (1 extra bearer per active call)."
-          drop: "Lost bearers. If sustained during a call, voice path is broken."
-        healthy:
-          scale_independent: true
-          typical_range: [2.0, 3.5]
-          invariant: |
-            At rest: equals configured default bearers (typically 2 per UE).
-            During active VoNR call: +1 per caller. The per-UE ratio is the
-            invariant; absolute count scales with UE pool.
-        event_triggers: []
-        related_metrics:
-          - metric: core.smf.sessions_per_ue
-            relationship: correlated_with
-            use: "Both SMF-driven. Jointly drop = SMF control plane issue."
-          - metric: ims.pcscf.dialogs_per_ue
-            relationship: correlated_with
-            use: "Bearer per UE rises during VoNR calls; dialogs_per_ue rises in parallel."
-        disambiguators: []
-        how_to_verify_live:
-          tool: get_nf_metrics
-          args_hint: "Fetch SMF snapshot; compare with dialogs_per_ue at P-CSCF."
-        applicable_use_cases: [vonr]
-        tags: [core, qos, bearer]
-
-
-  # =========================================================================
-  # CORE — UPF (user plane)
-  # =========================================================================
-  upf:
-    layer: core
-    metrics:
-
-      gtp_indatapktn3upf_per_ue:
-        display_name: "GTP-U uplink rate per UE (N3)"
-        source: derived
-        type: derived
-        unit: packets_per_second
-        protocol: GTP-U
-        interface: N3
-        plane: user
-        raw_sources:
-          - fivegs_ep_n3_gtp_indatapktn3upf
-        description: |
-          Per-UE rate of GTP-U packets arriving at the UPF from gNB on N3
-          (uplink). Sliding 30-second window rate divided by attached UE count.
-          The underlying raw Prometheus counter `fivegs_ep_n3_gtp_indatapktn3upf`
-          is a lifetime cumulative total — its absolute value carries
-          accumulated UERANSIM keepalive noise across the container's
-          entire uptime and is NOT a current rate. Use this derived
-          per-UE form (or the screener's anomaly flag on it) for current
-          activity reasoning.
-        meaning:
-          what_it_signals: |
-            Health of the uplink user-plane path gNB → UPF. Drops to near-zero
-            during RAN or N3 outage; stays nonzero during active calls or data
-            sessions. Decoupled from SIP signaling (signals data plane, not
-            control plane).
-          drop: "Either UEs not generating uplink traffic (no calls/data) or N3 path is degraded."
-          zero: "Data plane dead on uplink — UPF receiving no packets from gNB."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 10.0]
-          invariant: "Per-UE — constant regardless of UE pool size. Rises during active VoNR calls (~100 pps for G.711 voice) and data transfer."
-        event_triggers:
-          - id: core.upf.gtp_uplink_drop
-            trigger: "current < 0.1 and prior_stable(window='5m') > 1.0 and sustained_lt(0.3, min_duration='60s')"
-            clear_condition: "sustained_gt(prior_stable(window='10m'), min_duration='30s')"
-            local_meaning: |
-              GTP-U uplink packets per UE collapsed to near-zero despite prior
-              activity. Uplink data plane is down or gNB is not forwarding.
-            magnitude_captured: [current_value, prior_stable_value, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: core.amf.gnb_association_drop
-                composite_interpretation: "RAN failure — no gNB means no uplink packets"
-              - event_id: ims.pcscf.dialogs_silent
-                composite_interpretation: "Calls failing — drop in uplink follows absence of media"
-        related_metrics:
-          - metric: core.upf.gtp_outdatapktn3upf_per_ue
-            relationship: peer_of
-            use: "Uplink and downlink typically move together. Asymmetry = directional path failure."
-          - metric: core.upf.upf_activity_during_calls
-            relationship: composite_of
-            use: "Contributes to the upf_activity signal."
-        disambiguators:
-          - metric: core.upf.gtp_outdatapktn3upf_per_ue
-            separates: "Bidirectional outage (both zero) vs. uplink-only issue (this one drops, downlink fine)"
-          - metric: core.amf.ran_ue
-            separates: "UEs gone (ran_ue=0) vs. UEs present but no traffic (ran_ue normal, GTP drops)"
-        how_to_verify_live:
-          tool: get_dp_quality_gauges
-          args_hint: "Returns rate-based UPF in/out pps with in/out symmetry check."
-        applicable_use_cases: [vonr, 5g_core]
-        tags: [upf, n3, gtp, user_plane]
-
-      gtp_outdatapktn3upf_per_ue:
-        display_name: "GTP-U downlink rate per UE (N3)"
-        source: derived
-        type: derived
-        unit: packets_per_second
-        protocol: GTP-U
-        interface: N3
-        plane: user
-        raw_sources:
-          - fivegs_ep_n3_gtp_outdatapktn3upf
-        description: |
-          Per-UE rate of GTP-U packets leaving the UPF toward gNB on N3
-          (downlink). The underlying raw Prometheus counter
-          `fivegs_ep_n3_gtp_outdatapktn3upf` is a lifetime cumulative
-          total; its ratio against `fivegs_ep_n3_gtp_indatapktn3upf`
-          reflects accumulated traffic-pattern asymmetry, not current
-          packet loss. Use this derived per-UE form to reason about
-          current downlink health.
-        meaning:
-          what_it_signals: |
-            Health of the downlink user-plane path UPF → gNB. Typically mirrors
-            uplink rate during calls/data; asymmetry indicates directional
-            faults (e.g., UPF receiving from internet but not forwarding).
-          drop: "Downlink data plane degraded — UPF not forwarding to gNB."
-          zero: "No traffic leaving UPF toward RAN."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 10.0]
-          invariant: "Per-UE — constant regardless of UE pool size. Roughly symmetric with uplink during healthy calls."
-        event_triggers:
-          - id: core.upf.gtp_downlink_drop
-            trigger: "current < 0.1 and prior_stable(window='5m') > 1.0 and sustained_lt(0.3, min_duration='60s')"
-            clear_condition: "sustained_gt(prior_stable(window='10m'), min_duration='30s')"
-            local_meaning: |
-              GTP-U downlink packets per UE collapsed. Either UPF or downstream
-              gNB path is degraded.
-            magnitude_captured: [current_value, prior_stable_value, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: core.upf.gtp_uplink_drop
-                composite_interpretation: "Bidirectional UPF outage — likely UPF-side fault"
-              - event_id: core.amf.gnb_association_drop
-                composite_interpretation: "RAN is down — no downlink destination"
-        related_metrics:
-          - metric: core.upf.gtp_indatapktn3upf_per_ue
-            relationship: peer_of
-            use: "Asymmetry between these two is diagnostic for directional faults."
-        disambiguators:
-          - metric: core.upf.gtp_indatapktn3upf_per_ue
-            separates: "UPF dropping outbound (this zero, inbound normal) vs. bidirectional outage (both zero)"
-        how_to_verify_live:
-          tool: get_dp_quality_gauges
-          args_hint: "Check UPF in/out symmetry in the output."
-        applicable_use_cases: [vonr, 5g_core]
-        tags: [upf, n3, gtp, user_plane]
-
-      upf_activity_during_calls:
-        display_name: "UPF activity consistency with active dialogs"
-        source: derived
-        type: derived
-        unit: ratio
-        protocol: GTP-U
-        interface: N3
-        plane: user
-        description: |
-          Ratio of observed UPF pps to the expected pps given the number of
-          active dialogs. 1.0 when UPF is moving traffic consistent with active
-          calls; 0.0 when dialogs exist but no traffic is flowing (media plane
-          broken while signaling appears healthy).
-        meaning:
-          what_it_signals: |
-            Cross-layer consistency check between IMS dialog state and UPF
-            throughput. A drop while dialogs_per_ue is non-zero is a
-            smoking-gun signal for media-plane failure independent of signaling.
-          drop: "Active calls reported but no media flowing — media path broken (UPF, RTPEngine, or N3 packet loss)."
-          steady_non_zero: "~1.0 during healthy calls."
-        healthy:
-          scale_independent: true
-          typical_range: [0.3, 1.0]
-          invariant: "1.0 when traffic fully follows active calls; 0.0 when signaling says active but data plane is silent."
-        event_triggers:
-          - id: core.upf.activity_during_calls_collapsed
-            trigger: "current < 0.2 and related('ims.pcscf.dialogs_per_ue') > 0.5"
-            clear_condition: "current > 0.5"
-            local_meaning: |
-              Active IMS dialogs exist but UPF is not moving proportional
-              traffic. Media plane has failed while signaling is up.
-            magnitude_captured: [current_value, first_observed_at]
-            correlates_with:
-              - event_id: core.upf.gtp_uplink_drop
-                composite_interpretation: "UPF failure — media dropped despite active calls"
-              - event_id: ims.rtpengine.errors_nonzero
-                composite_interpretation: "RTPEngine relay errors active — media path degraded"
-        related_metrics:
-          - metric: ims.pcscf.dialogs_per_ue
-            relationship: correlated_with
-            use: "This ratio depends on dialogs_per_ue as the denominator expected traffic."
-          - metric: core.upf.gtp_outdatapktn3upf_per_ue
-            relationship: composite_of
-            use: "Computed from GTP rates + dialog count."
-        disambiguators:
-          - metric: ims.rtpengine.errors_per_second
-            separates: "RTPEngine relay errors (elevated) vs. UPF-only data plane drop (RTPEngine clean)"
-        how_to_verify_live:
-          tool: get_dp_quality_gauges
-          args_hint: "Returns UPF in/out pps, RTPEngine sessions; correlate."
-        applicable_use_cases: [vonr]
-        tags: [upf, consistency, cross_layer]
-
-
-  # =========================================================================
-  # IMS — P-CSCF (UE-facing proxy)
-  # =========================================================================
-  pcscf:
-    layer: ims
-    metrics:
-
-      dialogs_per_ue:
-        display_name: "Active SIP dialogs per registered UE at P-CSCF"
-        source: derived
-        type: derived
-        unit: count
-        protocol: SIP
-        interface: Gm
-        plane: control
-        description: |
-          Normalized gauge: pcscf.dialog_ng:active / pcscf.registered_contacts.
-          0 at rest; ~1.0 per active bidirectional VoNR call between registered
-          UEs.
-        meaning:
-          what_it_signals: |
-            How many calls per user are currently in progress at the P-CSCF.
-            Going to zero from a non-zero baseline means calls have ended
-            (normal) OR call setup is failing system-wide (degradation).
-            Together with rcv_requests_* it discriminates the two.
-          drop: "Calls ending or setup failing."
-          zero: "No active calls. Normal at rest; suspicious if prior state had calls AND INVITE rate is also zero."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 1.0]
-          invariant: "Per-UE — scale-independent. 0 at rest, ~1 per active VoNR call."
-        event_triggers:
-          - id: ims.pcscf.dialogs_silent
-            trigger: "current == 0 and prior_stable(window='5m') > 0.3 and sustained_eq(0, min_duration='60s')"
-            clear_condition: "current > 0"
-            local_meaning: |
-              No active dialogs despite prior sustained activity. Calls failing
-              or connectivity to UEs lost.
-            magnitude_captured: [current_value, prior_stable_value, first_observed_at]
-            correlates_with:
-              - event_id: ims.pcscf.invite_rate_drop
-                composite_interpretation: "Call setup failing — INVITEs stopping at P-CSCF"
-              - event_id: core.upf.gtp_uplink_drop
-                composite_interpretation: "Data plane down — calls failing end-to-end"
-              - event_id: ims.icscf.register_rate_drop
-                composite_interpretation: "IMS signaling chain broken upstream of I-CSCF"
-        related_metrics:
-          - metric: ims.pcscf.rcv_requests_invite_per_ue
-            relationship: correlated_with
-            use: "INVITE rate precedes dialog creation; if INVITEs flow but dialogs don't rise, calls are failing at setup."
-          - metric: core.smf.bearers_per_ue
-            relationship: correlated_with
-            use: "Dedicated voice bearer establishment tracks dialog creation in VoNR."
-          - metric: core.upf.upf_activity_during_calls
-            relationship: discriminator_for
-            use: "If dialogs_per_ue > 0 but upf_activity == 0, media plane is broken while signaling appears healthy."
-        disambiguators:
-          - metric: ims.pcscf.rcv_requests_invite_per_ue
-            separates: "No calls attempted (INVITE also zero) vs. calls attempted but failing (INVITE nonzero, dialogs zero)"
-          - metric: ims.icscf.rcv_requests_invite_per_ue
-            separates: "P-CSCF forwarding to I-CSCF (both present) vs. partition (P-CSCF has invites but I-CSCF doesn't)"
-        how_to_verify_live:
-          tool: run_kamcmd
-          args_hint: "run_kamcmd(\"pcscf\", \"dlg.list\") shows active dialogs directly."
-        applicable_use_cases: [vonr]
-        tags: [ims, sip, dialog, call]
-
-      rcv_requests_register_per_ue:
-        display_name: "SIP REGISTER rate per UE at P-CSCF"
-        source: derived
-        type: derived
-        unit: requests_per_second
-        protocol: SIP
-        interface: Gm
-        plane: control
-        raw_sources:
-          - core:rcv_requests_register
-        description: |
-          Sliding-window rate of SIP REGISTER requests arriving at the P-CSCF
-          from UEs. Normalized per UE for scale invariance.
-        meaning:
-          what_it_signals: |
-            How actively UEs are refreshing their IMS registrations with the
-            P-CSCF. REGISTERs arrive periodically (re-registration timer) plus
-            at attach. Sustained zero means UEs cannot reach P-CSCF OR the
-            UE-to-network SIP path is broken.
-          drop: "Fewer REGISTERs than expected — UE connectivity or P-CSCF reachability issue."
-          zero: "No REGISTERs flowing. Unusual unless UEs are all deregistered."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 0.5]
-          invariant: "Per-UE rate — same value at any deployment scale."
-        event_triggers:
-          - id: ims.pcscf.register_rate_drop
-            trigger: "current < 0.01 and prior_stable(window='5m') > 0.05 and sustained_lt(0.02, min_duration='90s')"
-            clear_condition: "sustained_gt(0.03, min_duration='30s')"
-            local_meaning: |
-              REGISTER rate at P-CSCF collapsed. Either UEs cannot reach it or
-              the periodic registration timers have stopped firing.
-            magnitude_captured: [current_value, prior_stable_value, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: core.amf.ran_ue_sudden_drop
-                composite_interpretation: "RAN dropped, UEs can't send REGISTERs"
-              - event_id: ims.icscf.register_rate_drop
-                composite_interpretation: "Signaling chain broken at or before I-CSCF"
-        related_metrics:
-          - metric: ims.icscf.rcv_requests_register_per_ue
-            relationship: downstream_of
-            use: "REGISTER should flow P-CSCF → I-CSCF. If P-CSCF nonzero but I-CSCF zero, forwarding is broken (partition)."
-          - metric: ims.scscf.rcv_requests_register_per_ue
-            relationship: downstream_of
-            use: "Should also follow. Gap indicates deeper forwarding issue."
-        disambiguators:
-          - metric: ims.icscf.rcv_requests_register_per_ue
-            separates: "UEs can't reach P-CSCF (both zero) vs. P-CSCF can't reach I-CSCF (P-CSCF nonzero, I-CSCF zero — partition signature)"
-        how_to_verify_live:
-          tool: get_nf_metrics
-          args_hint: "Fetch pcscf and icscf snapshots; compare REGISTER counters."
-        applicable_use_cases: [vonr, ims_signaling]
-        tags: [ims, sip, register, rate]
-
-      rcv_requests_invite_per_ue:
-        display_name: "SIP INVITE rate per UE at P-CSCF"
-        source: derived
-        type: derived
-        unit: requests_per_second
-        protocol: SIP
-        interface: Gm
-        plane: control
-        raw_sources:
-          - core:rcv_requests_invite
-        description: |
-          Sliding-window rate of SIP INVITEs arriving at the P-CSCF.
-          INVITEs mark call-setup attempts.
-        meaning:
-          what_it_signals: |
-            Call attempt rate from registered UEs. Unlike REGISTER (periodic),
-            INVITEs only fire when UEs place calls. Zero is normal during
-            quiet periods; nonzero INVITE with zero dialogs is the signature
-            of call setup failure.
-          drop: "Fewer call attempts."
-          zero: "No calls being placed. Normal at rest."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 0.2]
-          invariant: "Per-UE rate."
-        event_triggers:
-          - id: ims.pcscf.invite_rate_drop
-            trigger: "current < 0.005 and prior_stable(window='5m') > 0.02 and sustained_lt(0.01, min_duration='60s')"
-            clear_condition: "sustained_gt(0.01, min_duration='30s')"
-            local_meaning: |
-              INVITE rate at P-CSCF has collapsed despite prior activity.
-              Calls are not being attempted or UEs cannot reach P-CSCF.
-            magnitude_captured: [current_value, prior_stable_value, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: ims.pcscf.register_rate_drop
-                composite_interpretation: "UE-to-P-CSCF path broken for both REGISTER and INVITE"
-              - event_id: core.amf.ran_ue_sudden_drop
-                composite_interpretation: "UEs no longer on network"
-        related_metrics:
-          - metric: ims.icscf.rcv_requests_invite_per_ue
-            relationship: downstream_of
-            use: "P-CSCF should forward to I-CSCF for onward routing. Signature gap = partition."
-          - metric: ims.pcscf.dialogs_per_ue
-            relationship: correlated_with
-            use: "INVITEs should produce dialogs after a few-hundred-ms delay."
-        disambiguators:
-          - metric: ims.icscf.rcv_requests_invite_per_ue
-            separates: "UE-side issue (both P-CSCF and I-CSCF see zero INVITEs) vs. P-CSCF→I-CSCF partition (P-CSCF nonzero, I-CSCF zero)"
-        how_to_verify_live:
-          tool: get_nf_metrics
-          args_hint: "Compare pcscf and icscf INVITE counters."
-        applicable_use_cases: [vonr, ims_signaling]
-        tags: [ims, sip, invite, rate]
-
-      avg_register_time_ms:
-        display_name: "P-CSCF average SIP REGISTER processing time"
-        source: derived
-        type: derived
-        unit: ms
-        protocol: SIP
-        interface: Mw
-        plane: control
-        raw_sources:
-          - script:register_time
-          - script:register_success
-        description: |
-          Computed as rate(pcscf.script:register_time) / rate(pcscf.core:rcv_requests_register)
-          over a 30-second sliding window — i.e. average script-processing time
-          per INCOMING REGISTER (counted regardless of outcome). Omitted when
-          no REGISTERs arrived at P-CSCF in the window (pre-filter).
-
-          Denominator is the incoming-attempt counter, not the success counter:
-          this preserves the signal when REGISTERs are failing (e.g. latency
-          injections time them out) while the processing-time counter keeps
-          advancing. Dividing by successes would collapse the feature to 0
-          during the very fault it should detect.
-        meaning:
-          what_it_signals: |
-            End-to-end cost of processing a SIP REGISTER through the IMS
-            signaling chain. Under healthy conditions, dominated by four
-            Diameter round-trips (UAR + LIR + MAR + SAR) plus SIP forwarding
-            overhead. Spikes without matching Diameter latency spikes indicate
-            SIP-path latency (P-CSCF itself or P-CSCF ↔ I-CSCF hop). Remains
-            meaningful when REGISTERs are failing — numerator and denominator
-            both track attempts, not completions.
-          spike: "Latency injected on the REGISTER path. Compare against Diameter response times to localize."
-          drop: "Rarely meaningful — shorter REGISTERs are not a fault signal."
-          zero: |
-            Stall signature. Two distinct cases:
-              (a) No REGISTERs arrived in the window — feature is omitted entirely by pre-filter; you won't see a 0 here, you'll see the metric absent.
-              (b) REGISTERs arrived but none completed within the window, so the numerator (cumulative register_time) didn't advance while the denominator (rcv_requests_register) did — the ratio snapshots to 0. This is the classic SIP-path-latency signature: a latency injection on P-CSCF, or a partition, is stretching REGISTER processing past the sliding-window horizon. Confirm by checking whether `pcscf.core:rcv_requests_register` is still advancing (it is = case b); if it's flat too, it's case (a).
-        healthy:
-          scale_independent: true
-          typical_range: [150, 350]
-          invariant: |
-            Approximately equal to the sum of the four HSS Diameter round-trips
-            (UAR + LIR + MAR + SAR).
-            Large positive delta between observed register_time and this sum =
-            SIP-path latency (P-CSCF interface or P-CSCF ↔ I-CSCF).
-        event_triggers:
-          - id: ims.pcscf.register_time_elevated
-            trigger: "sustained_gt(500, min_duration='60s') or current > 2 * baseline_mean"
-            clear_condition: "sustained_lt(400, min_duration='60s')"
-            local_meaning: |
-              SIP REGISTER processing time at P-CSCF has risen above typical.
-              Does NOT attribute where on the REGISTER path the latency lives.
-            magnitude_captured: [current_value, baseline_mean, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: ims.icscf.cdp_latency_elevated
-                composite_interpretation: "HSS path dominates — latency on Diameter legs from I-CSCF"
-              - event_id: ims.scscf.mar_latency_elevated
-                composite_interpretation: "HSS path dominates — specifically S-CSCF legs"
-          - id: ims.pcscf.register_time_critical
-            trigger: "sustained_gt(2000, min_duration='30s')"
-            clear_condition: "sustained_lt(500, min_duration='60s')"
-            local_meaning: |
-              REGISTER processing time catastrophically elevated (likely a
-              network latency injection on P-CSCF interface).
-            magnitude_captured: [current_value, baseline_mean, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: infrastructure.pyhss.unreachable
-                composite_interpretation: "Backend HSS collapse"
-        related_metrics:
-          - metric: ims.icscf.uar_avg_response_time
-            relationship: composite_of
-            use: "One of the four Diameter legs composing register_time."
-          - metric: ims.icscf.lir_avg_response_time
-            relationship: composite_of
-            use: "One of the four Diameter legs."
-          - metric: ims.scscf.mar_avg_response_time
-            relationship: composite_of
-            use: "One of the four Diameter legs."
-          - metric: ims.scscf.sar_avg_response_time
-            relationship: composite_of
-            use: "One of the four Diameter legs."
-        disambiguators:
-          - metric: "sum(ims.icscf.uar_avg_response_time, ims.icscf.lir_avg_response_time, ims.scscf.mar_avg_response_time, ims.scscf.sar_avg_response_time)"
-            separates: "HSS-side latency (register_time ≈ sum) vs. SIP-path latency (register_time >> sum)"
-        how_to_verify_live:
-          tool: run_kamcmd
-          args_hint: "run_kamcmd(\"pcscf\", \"stats.fetch script:register_time\") and register_success for direct values."
-        feeds_model_features:
-          - derived.pcscf_avg_register_time_ms
-        applicable_use_cases: [vonr, ims_signaling]
-        tags: [ims, sip, register, latency, composite]
-
-      sip_error_ratio:
-        display_name: "P-CSCF SIP error response ratio"
-        source: derived
-        type: ratio
-        unit: ratio
-        protocol: SIP
-        interface: Gm
-        plane: control
-        raw_sources:
-          - sl:4xx_replies
-          - sl:5xx_replies
-          - sl:200_replies
-          - sl:1xx_replies
-        description: |
-          (4xx + 5xx replies) / (1xx + 200 + 4xx + 5xx replies) over a rolling
-          window at the P-CSCF. Zero during healthy operation.
-        meaning:
-          what_it_signals: |
-            Proportion of SIP responses that are errors. Zero is the healthy
-            baseline; any sustained non-zero value means P-CSCF or something
-            downstream is rejecting requests.
-          spike: "Errors flowing back — downstream CSCFs or HSS rejecting."
-          zero: "Healthy default."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 0.0]
-          invariant: "Zero in healthy operation."
-        event_triggers:
-          - id: ims.pcscf.sip_errors_observed
-            trigger: "current > 0.05 and sustained_gt(0.02, min_duration='60s')"
-            clear_condition: "sustained_lt(0.01, min_duration='60s')"
-            local_meaning: |
-              Non-trivial SIP error ratio at P-CSCF. Downstream component is
-              rejecting requests.
-            magnitude_captured: [current_value, first_observed_at]
-            correlates_with:
-              - event_id: ims.scscf.registration_reject_observed
-                composite_interpretation: "S-CSCF rejecting registrations"
-        related_metrics:
-          - metric: ims.icscf.sip_error_ratio
-            relationship: peer_of
-            use: "Errors at P-CSCF and I-CSCF often correlate when a downstream rejection cascades."
-        disambiguators: []
-        how_to_verify_live:
-          tool: get_nf_metrics
-          args_hint: "Fetch pcscf SIP counters."
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, sip, errors]
-
-
-  # =========================================================================
-  # IMS — I-CSCF (interrogating CSCF, HSS-facing)
-  # =========================================================================
+          args_hint: Fetch AMF snapshot; compare ran_ue and gnb. Follow up with check_process_listeners
+            on nr_gnb if both are 0.
+        applicable_use_cases:
+        - 5g_core
+        - vonr
+        tags:
+        - ran
+        - attachment
+        - liveness
+        expected: 2
+        alarm_if: = 0 (RAN failure) or dropped from prior stable value (partial failure)
   icscf:
     layer: ims
     metrics:
-
-      rcv_requests_register_per_ue:
-        display_name: "SIP REGISTER rate per UE at I-CSCF"
-        source: derived
-        type: derived
-        unit: requests_per_second
-        protocol: SIP
-        interface: Mw
-        plane: control
-        description: |
-          Rate of REGISTERs forwarded to the I-CSCF from P-CSCF. Should match
-          P-CSCF REGISTER rate in healthy operation; gap indicates forwarding
-          failure.
-        meaning:
-          what_it_signals: |
-            Health of the P-CSCF → I-CSCF forwarding path (Mw interface). When
-            this drops to zero while P-CSCF REGISTER rate is still non-zero,
-            it's the SIGNATURE of an IMS partition between P-CSCF and I-CSCF.
-          drop: "Forwarding issue on the Mw interface, or P-CSCF stopped forwarding."
-          zero: "Either UEs not registering at all, or P-CSCF isolated from I-CSCF."
+      cdp:average_response_time:
+        source: kamcmd
+        type: counter
+        description: Average Diameter Cx response time (ms). Typical 50-150ms. >500ms indicates HSS overload
+          or network latency.
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.5]
-          invariant: "Per-UE rate. Should closely track ims.pcscf.rcv_requests_register_per_ue."
-        event_triggers:
-          - id: ims.icscf.register_rate_drop
-            trigger: "current < 0.005 and prior_stable(window='5m') > 0.02 and sustained_lt(0.01, min_duration='60s')"
-            clear_condition: "sustained_gt(0.02, min_duration='30s')"
-            local_meaning: |
-              REGISTERs no longer arriving at I-CSCF. Either UEs stopped
-              registering or P-CSCF→I-CSCF forwarding is broken.
-            magnitude_captured: [current_value, prior_stable_value, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: ims.pcscf.register_rate_drop
-                composite_interpretation: "Coordinated drop at P-CSCF and I-CSCF — likely UE-side or RAN issue"
-              - event_id: core.amf.ran_ue_sudden_drop
-                composite_interpretation: "UEs gone — explains drop throughout the chain"
-        related_metrics:
-          - metric: ims.pcscf.rcv_requests_register_per_ue
-            relationship: upstream_of
-            use: "Comparison is the primary partition diagnostic."
-          - metric: ims.scscf.rcv_requests_register_per_ue
-            relationship: downstream_of
-            use: "After I-CSCF processes and assigns S-CSCF, the REGISTER should reach S-CSCF."
-        disambiguators:
-          - metric: ims.pcscf.rcv_requests_register_per_ue
-            separates: |
-              THE partition-vs-RAN-issue discriminator. If P-CSCF REGISTER rate
-              is stable but I-CSCF is zero, P-CSCF↔I-CSCF is partitioned.
-              If both are zero, UEs are not registering (RAN issue likely).
-        how_to_verify_live:
-          tool: measure_rtt
-          args_hint: "measure_rtt(\"pcscf\", icscf_ip) to confirm transport-layer partition."
-        applicable_use_cases: [ims_signaling, vonr]
-        tags: [ims, sip, register, rate, partition_signal]
-
-      rcv_requests_invite_per_ue:
-        display_name: "SIP INVITE rate per UE at I-CSCF"
-        source: derived
-        type: derived
-        unit: requests_per_second
-        protocol: SIP
-        interface: Mw
-        plane: control
-        description: |
-          Rate of INVITEs forwarded from P-CSCF to I-CSCF. Same semantics as
-          register_per_ue but for call setup.
-        meaning:
-          what_it_signals: |
-            Health of call-setup forwarding P-CSCF → I-CSCF. Partition signature
-            same as REGISTER rate.
-          drop: "Forwarding failure."
-          zero: "Either no calls attempted or P-CSCF→I-CSCF partition."
+          typical_range:
+          - 50.0
+          - 150.0
+        unit: ms
+        alarm_if: '> 500 (HSS overloaded or network latency)'
+      cdp:queuelength:
+        source: kamcmd
+        type: counter
+        description: Diameter messages waiting in the outgoing queue. Should be 0. Non-zero indicates
+          HSS backpressure.
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.2]
-          invariant: "Per-UE rate. Tracks pcscf.invite rate."
-        event_triggers: []  # Covered by composite partition hypothesis from register_rate_drop + dialog_silent
-        related_metrics:
-          - metric: ims.pcscf.rcv_requests_invite_per_ue
-            relationship: upstream_of
-            use: "Partition detection: P-CSCF has INVITEs but I-CSCF doesn't = partition."
-        disambiguators:
-          - metric: ims.pcscf.rcv_requests_invite_per_ue
-            separates: "UE-side (both zero) vs. partition (P-CSCF nonzero, I-CSCF zero)"
-        how_to_verify_live:
-          tool: get_nf_metrics
-          args_hint: "Compare pcscf/icscf INVITE counters."
-        applicable_use_cases: [vonr, ims_signaling]
-        tags: [ims, sip, invite, partition_signal]
-
+      cdp:replies_received:
+        source: kamcmd
+        type: counter
+        description: Diameter Cx replies received from HSS (counter).
+        healthy:
+          scale_independent: true
+      cdp:replies_response_time:
+        source: kamcmd
+        type: counter
+        description: Sum of all Diameter response times (ms) since container start. Used to compute average.
+        healthy:
+          scale_independent: true
+      cdp:timeout:
+        source: kamcmd
+        type: counter
+        description: Diameter Cx query timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity
+          issues.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 0 (Diameter queries timing out — HSS issue)'
       cdp_avg_response_time:
-        display_name: "I-CSCF Diameter average response time"
+        display_name: I-CSCF Diameter average response time
         source: kamcmd
         type: gauge
         unit: ms
         protocol: Diameter
         interface: Cx
         plane: control
-        description: |
-          Average Diameter response time across all Cx operations the I-CSCF
+        description: 'Average Diameter response time across all Cx operations the I-CSCF
+
           issues toward HSS (UAR + LIR). Reported by Kamailio cdp module.
+
+          '
         meaning:
-          what_it_signals: |
-            Responsiveness of the Cx path and HSS processing speed. A spike
+          what_it_signals: 'Responsiveness of the Cx path and HSS processing speed. A spike
+
             without timeouts = pure latency; a spike WITH timeout_ratio rising
+
             = approaching timeout ceiling (HSS overload or partial partition).
-          spike: "HSS slow, network latency to HSS, or HSS overload."
-          zero: "No Diameter responses arriving (HSS partitioned or down), OR pre-filter omitted this snapshot because no replies completed."
+
+            '
+          spike: HSS slow, network latency to HSS, or HSS overload.
+          zero: No Diameter responses arriving (HSS partitioned or down), OR pre-filter omitted this snapshot
+            because no replies completed.
         healthy:
           scale_independent: true
-          typical_range: [30, 100]
+          typical_range:
+          - 30
+          - 100
           invariant: null
         event_triggers:
-          - id: ims.icscf.cdp_latency_elevated
-            trigger: "sustained_gt(200, min_duration='60s')"
-            clear_condition: "sustained_lt(150, min_duration='60s')"
-            local_meaning: |
-              I-CSCF Diameter response time elevated above typical range.
-              Does NOT attribute cause — HSS slow, path latency, or stress.
-            magnitude_captured: [current_value, baseline_mean, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: ims.icscf.uar_timeouts_observed
-                composite_interpretation: "HSS approaching timeout ceiling — overload or partial partition"
-              - event_id: ims.scscf.mar_latency_elevated
-                composite_interpretation: "HSS-wide slowness — affects both CSCF Cx paths"
-          - id: ims.icscf.cdp_latency_critical
-            trigger: "sustained_gt(500, min_duration='30s')"
-            clear_condition: "sustained_lt(200, min_duration='60s')"
-            local_meaning: |
-              Severe I-CSCF Diameter latency. HSS overload or Cx path
-              degradation.
-            magnitude_captured: [current_value, baseline_mean, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: infrastructure.pyhss.unreachable
-                composite_interpretation: "Upstream HSS-backend failure"
+        - id: ims.icscf.cdp_latency_elevated
+          trigger: sustained_gt(200, min_duration='60s')
+          clear_condition: sustained_lt(150, min_duration='60s')
+          local_meaning: 'I-CSCF Diameter response time elevated above typical range.
+
+            Does NOT attribute cause — HSS slow, path latency, or stress.
+
+            '
+          magnitude_captured:
+          - current_value
+          - baseline_mean
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.icscf.uar_timeouts_observed
+            composite_interpretation: HSS approaching timeout ceiling — overload or partial partition
+          - event_id: ims.scscf.mar_latency_elevated
+            composite_interpretation: HSS-wide slowness — affects both CSCF Cx paths
+        - id: ims.icscf.cdp_latency_critical
+          trigger: sustained_gt(500, min_duration='30s')
+          clear_condition: sustained_lt(200, min_duration='60s')
+          local_meaning: 'Severe I-CSCF Diameter latency. HSS overload or Cx path
+
+            degradation.
+
+            '
+          magnitude_captured:
+          - current_value
+          - baseline_mean
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: infrastructure.pyhss.unreachable
+            composite_interpretation: Upstream HSS-backend failure
         related_metrics:
-          - metric: ims.icscf.uar_avg_response_time
-            relationship: composite_of
-            use: "cdp_avg is a weighted mean of UAR + LIR. Check both when cdp spikes."
-          - metric: ims.icscf.lir_avg_response_time
-            relationship: composite_of
-            use: "Second component of cdp_avg."
-          - metric: ims.icscf.uar_timeout_ratio
-            relationship: discriminator_for
-            use: "Latency (ratio=0) vs. partial partition (ratio>0)."
+        - metric: ims.icscf.uar_avg_response_time
+          relationship: composite_of
+          use: cdp_avg is a weighted mean of UAR + LIR. Check both when cdp spikes.
+        - metric: ims.icscf.lir_avg_response_time
+          relationship: composite_of
+          use: Second component of cdp_avg.
+        - metric: ims.icscf.uar_timeout_ratio
+          relationship: discriminator_for
+          use: Latency (ratio=0) vs. partial partition (ratio>0).
         disambiguators:
-          - metric: ims.icscf.uar_timeout_ratio
-            separates: "Pure HSS latency vs. HSS partial partition"
-          - metric: ims.scscf.mar_avg_response_time
-            separates: "I-CSCF↔HSS only (only cdp at icscf spikes) vs. HSS-wide (both CSCF response times spike)"
+        - metric: ims.icscf.uar_timeout_ratio
+          separates: Pure HSS latency vs. HSS partial partition
+        - metric: ims.scscf.mar_avg_response_time
+          separates: I-CSCF↔HSS only (only cdp at icscf spikes) vs. HSS-wide (both CSCF response times
+            spike)
         how_to_verify_live:
           tool: measure_rtt
-          args_hint: "measure_rtt(\"icscf\", pyhss_ip) checks transport-layer reachability to HSS."
+          args_hint: measure_rtt("icscf", pyhss_ip) checks transport-layer reachability to HSS.
         feeds_model_features:
-          - icscf.cdp:average_response_time
-        applicable_use_cases: [ims_signaling, vonr]
-        tags: [ims, diameter, cx, latency, hss_facing]
-
-      uar_avg_response_time:
-        display_name: "I-CSCF UAR response time"
+        - icscf.cdp:average_response_time
+        applicable_use_cases:
+        - ims_signaling
+        - vonr
+        tags:
+        - ims
+        - diameter
+        - cx
+        - latency
+        - hss_facing
+      core:rcv_requests_invite:
         source: kamcmd
-        type: gauge
-        unit: ms
-        protocol: Diameter
-        interface: Cx
-        plane: control
-        description: |
-          Average response time for User-Authorization-Request queries from
-          I-CSCF to HSS (part of IMS registration).
-        meaning:
-          what_it_signals: |
-            Specifically the UAR leg of the Cx interface. Spikes here without
-            LIR spikes are unusual — either UAR-handler issue at HSS or
-            specific network path to that code path.
-          spike: "UAR-specific HSS slowness."
-          zero: "No UAR responses received. Partition or HSS down."
+        type: counter
+        description: SIP INVITE requests received at I-CSCF (counter).
         healthy:
           scale_independent: true
-          typical_range: [30, 100]
-          invariant: null
-        event_triggers: []
-        related_metrics:
-          - metric: ims.icscf.cdp_avg_response_time
-            relationship: composite_of
-            use: "UAR + LIR compose cdp_avg."
-          - metric: ims.icscf.uar_timeout_ratio
-            relationship: discriminator_for
-            use: "Latency vs timeout discriminator."
-        disambiguators: []
-        how_to_verify_live:
-          tool: run_kamcmd
-          args_hint: "run_kamcmd(\"icscf\", \"stats.fetch ims_icscf:uar_avg_response_time\") for direct value."
-        feeds_model_features:
-          - icscf.ims_icscf:uar_avg_response_time
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, diameter, uar, latency]
-
+      core:rcv_requests_register:
+        source: kamcmd
+        type: counter
+        description: SIP REGISTER requests received at I-CSCF (counter).
+        healthy:
+          scale_independent: true
+      ims_icscf:lir_timeouts:
+        source: kamcmd
+        type: counter
+        description: Location-Info-Request (LIR) query timeouts to HSS. Expected 0.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 0'
+      ims_icscf:uar_timeouts:
+        source: kamcmd
+        type: counter
+        description: User-Agent-Route (UAR) query timeouts to HSS. Expected 0.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 0'
       lir_avg_response_time:
-        display_name: "I-CSCF LIR response time"
+        display_name: I-CSCF LIR response time
         source: kamcmd
         type: gauge
         unit: ms
         protocol: Diameter
         interface: Cx
         plane: control
-        description: |
-          Average response time for Location-Info-Request queries from I-CSCF
+        description: 'Average response time for Location-Info-Request queries from I-CSCF
+
           to HSS (used to find which S-CSCF a user is assigned to).
+
+          '
         meaning:
-          what_it_signals: |
-            Call-routing-specific Cx leg. If LIR is healthy but UAR is slow,
+          what_it_signals: 'Call-routing-specific Cx leg. If LIR is healthy but UAR is slow,
+
             registration path has a specific issue separate from call routing.
-          spike: "HSS slow to respond to LIR; affects call setup."
-          zero: "No LIR completed — HSS partitioned or no calls being placed."
+
+            '
+          spike: HSS slow to respond to LIR; affects call setup.
+          zero: No LIR completed — HSS partitioned or no calls being placed.
         healthy:
           scale_independent: true
-          typical_range: [30, 100]
+          typical_range:
+          - 30
+          - 100
           invariant: null
         event_triggers: []
         related_metrics:
-          - metric: ims.icscf.cdp_avg_response_time
-            relationship: composite_of
-            use: "Component of cdp_avg."
+        - metric: ims.icscf.cdp_avg_response_time
+          relationship: composite_of
+          use: Component of cdp_avg.
         disambiguators: []
         how_to_verify_live:
           tool: run_kamcmd
-          args_hint: "run_kamcmd(\"icscf\", \"stats.fetch ims_icscf:lir_avg_response_time\")."
+          args_hint: run_kamcmd("icscf", "stats.fetch ims_icscf:lir_avg_response_time").
         feeds_model_features:
-          - icscf.ims_icscf:lir_avg_response_time
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, diameter, lir, latency]
-
-      uar_timeout_ratio:
-        display_name: "I-CSCF UAR timeout ratio"
+        - icscf.ims_icscf:lir_avg_response_time
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - lir
+        - latency
+      rcv_requests_invite_per_ue:
+        display_name: SIP INVITE rate per UE at I-CSCF
         source: derived
-        type: ratio
-        unit: ratio
-        protocol: Diameter
-        interface: Cx
+        type: derived
+        unit: requests_per_second
+        protocol: SIP
+        interface: Mw
         plane: control
-        description: |
-          Ratio of UAR timeouts to (timeouts + replies). Rises when Diameter
-          queries to HSS time out without a response.
+        description: 'Rate of INVITEs forwarded from P-CSCF to I-CSCF. Same semantics as
+
+          register_per_ue but for call setup.
+
+          '
         meaning:
-          what_it_signals: |
-            Partial partition or severe overload on the Cx path. Zero in
-            healthy operation; non-zero means some UAR queries did not receive
-            any response within the timeout window.
-          spike: "HSS partitioned, overloaded past its timeout, or Cx path losing packets."
+          what_it_signals: 'Health of call-setup forwarding P-CSCF → I-CSCF. Partition signature
+
+            same as REGISTER rate.
+
+            '
+          drop: Forwarding failure.
+          zero: Either no calls attempted or P-CSCF→I-CSCF partition.
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.0]
-          invariant: "Zero in healthy operation."
-        event_triggers:
-          - id: ims.icscf.uar_timeouts_observed
-            trigger: "current > 0.05 and sustained_gt(0.02, min_duration='60s')"
-            clear_condition: "sustained_lt(0.01, min_duration='60s')"
-            local_meaning: |
-              Non-trivial fraction of UAR queries timing out. HSS partition or
-              severe overload.
-            magnitude_captured: [current_value, first_observed_at]
-            correlates_with:
-              - event_id: ims.icscf.cdp_latency_elevated
-                composite_interpretation: "HSS approaching or exceeding timeout ceiling"
-              - event_id: infrastructure.pyhss.unreachable
-                composite_interpretation: "HSS partition confirmed"
+          typical_range:
+          - 0.0
+          - 0.2
+          invariant: Per-UE rate. Tracks pcscf.invite rate.
+        event_triggers: []
         related_metrics:
-          - metric: ims.icscf.uar_avg_response_time
-            relationship: discriminator_for
-            use: "Timeout + elevated latency = overload; timeout + clean latency = partition."
+        - metric: ims.pcscf.rcv_requests_invite_per_ue
+          relationship: upstream_of
+          use: 'Partition detection: P-CSCF has INVITEs but I-CSCF doesn''t = partition.'
         disambiguators:
-          - metric: ims.icscf.uar_avg_response_time
-            separates: "Overload (both elevated) vs. partial partition (timeouts but latency metric is 0/missing because no replies arrive)"
+        - metric: ims.pcscf.rcv_requests_invite_per_ue
+          separates: UE-side (both zero) vs. partition (P-CSCF nonzero, I-CSCF zero)
         how_to_verify_live:
-          tool: run_kamcmd
-          args_hint: "run_kamcmd(\"icscf\", \"stats.fetch ims_icscf:uar_timeouts\") + replies counter."
-        feeds_model_features:
-          - derived.icscf_uar_timeout_ratio
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, diameter, uar, timeout, ratio]
+          tool: get_nf_metrics
+          args_hint: Compare pcscf/icscf INVITE counters.
+        applicable_use_cases:
+        - vonr
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - invite
+        - partition_signal
+      rcv_requests_register_per_ue:
+        display_name: SIP REGISTER rate per UE at I-CSCF
+        source: derived
+        type: derived
+        unit: requests_per_second
+        protocol: SIP
+        interface: Mw
+        plane: control
+        description: 'Rate of REGISTERs forwarded to the I-CSCF from P-CSCF. Should match
 
+          P-CSCF REGISTER rate in healthy operation; gap indicates forwarding
+
+          failure.
+
+          '
+        meaning:
+          what_it_signals: 'Health of the P-CSCF → I-CSCF forwarding path (Mw interface). When
+
+            this drops to zero while P-CSCF REGISTER rate is still non-zero,
+
+            it''s the SIGNATURE of an IMS partition between P-CSCF and I-CSCF.
+
+            '
+          drop: Forwarding issue on the Mw interface, or P-CSCF stopped forwarding.
+          zero: Either UEs not registering at all, or P-CSCF isolated from I-CSCF.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.5
+          invariant: Per-UE rate. Should closely track ims.pcscf.rcv_requests_register_per_ue.
+        event_triggers:
+        - id: ims.icscf.register_rate_drop
+          trigger: current < 0.005 and prior_stable(window='5m') > 0.02 and sustained_lt(0.01, min_duration='60s')
+          clear_condition: sustained_gt(0.02, min_duration='30s')
+          local_meaning: 'REGISTERs no longer arriving at I-CSCF. Either UEs stopped
+
+            registering or P-CSCF→I-CSCF forwarding is broken.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.pcscf.register_rate_drop
+            composite_interpretation: Coordinated drop at P-CSCF and I-CSCF — likely UE-side or RAN issue
+          - event_id: core.amf.ran_ue_sudden_drop
+            composite_interpretation: UEs gone — explains drop throughout the chain
+        related_metrics:
+        - metric: ims.pcscf.rcv_requests_register_per_ue
+          relationship: upstream_of
+          use: Comparison is the primary partition diagnostic.
+        - metric: ims.scscf.rcv_requests_register_per_ue
+          relationship: downstream_of
+          use: After I-CSCF processes and assigns S-CSCF, the REGISTER should reach S-CSCF.
+        disambiguators:
+        - metric: ims.pcscf.rcv_requests_register_per_ue
+          separates: 'THE partition-vs-RAN-issue discriminator. If P-CSCF REGISTER rate
+
+            is stable but I-CSCF is zero, P-CSCF↔I-CSCF is partitioned.
+
+            If both are zero, UEs are not registering (RAN issue likely).
+
+            '
+        how_to_verify_live:
+          tool: measure_rtt
+          args_hint: measure_rtt("pcscf", icscf_ip) to confirm transport-layer partition.
+        applicable_use_cases:
+        - ims_signaling
+        - vonr
+        tags:
+        - ims
+        - sip
+        - register
+        - rate
+        - partition_signal
       sip_error_ratio:
-        display_name: "I-CSCF SIP error response ratio"
+        display_name: I-CSCF SIP error response ratio
         source: derived
         type: ratio
         unit: ratio
         protocol: SIP
         interface: Mw
         plane: control
-        description: |
-          Same formula as P-CSCF sip_error_ratio but at I-CSCF.
+        description: 'Same formula as P-CSCF sip_error_ratio but at I-CSCF.
+
+          '
         meaning:
-          what_it_signals: |
-            I-CSCF rejecting requests or S-CSCF errors propagating back.
-          spike: "S-CSCF rejecting or backend fault."
-          zero: "Healthy default."
+          what_it_signals: 'I-CSCF rejecting requests or S-CSCF errors propagating back.
+
+            '
+          spike: S-CSCF rejecting or backend fault.
+          zero: Healthy default.
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.0]
-          invariant: "Zero in healthy operation."
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
         event_triggers: []
         related_metrics:
-          - metric: ims.pcscf.sip_error_ratio
-            relationship: peer_of
-            use: "Errors at I-CSCF usually propagate to P-CSCF."
+        - metric: ims.pcscf.sip_error_ratio
+          relationship: peer_of
+          use: Errors at I-CSCF usually propagate to P-CSCF.
         disambiguators: []
         how_to_verify_live:
           tool: get_nf_metrics
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, sip, errors]
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - errors
+      tmx:active_transactions:
+        source: kamcmd
+        type: counter
+        description: Active SIP transactions at I-CSCF. Expected 0.
+        healthy:
+          scale_independent: true
+        expected: 0
+      uar_avg_response_time:
+        display_name: I-CSCF UAR response time
+        source: kamcmd
+        type: gauge
+        unit: ms
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Average response time for User-Authorization-Request queries from
 
+          I-CSCF to HSS (part of IMS registration).
 
-  # =========================================================================
-  # IMS — S-CSCF (serving CSCF, registration + session control)
-  # =========================================================================
-  scscf:
+          '
+        meaning:
+          what_it_signals: 'Specifically the UAR leg of the Cx interface. Spikes here without
+
+            LIR spikes are unusual — either UAR-handler issue at HSS or
+
+            specific network path to that code path.
+
+            '
+          spike: UAR-specific HSS slowness.
+          zero: No UAR responses received. Partition or HSS down.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 30
+          - 100
+          invariant: null
+        event_triggers: []
+        related_metrics:
+        - metric: ims.icscf.cdp_avg_response_time
+          relationship: composite_of
+          use: UAR + LIR compose cdp_avg.
+        - metric: ims.icscf.uar_timeout_ratio
+          relationship: discriminator_for
+          use: Latency vs timeout discriminator.
+        disambiguators: []
+        how_to_verify_live:
+          tool: run_kamcmd
+          args_hint: run_kamcmd("icscf", "stats.fetch ims_icscf:uar_avg_response_time") for direct value.
+        feeds_model_features:
+        - icscf.ims_icscf:uar_avg_response_time
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - uar
+        - latency
+      uar_timeout_ratio:
+        display_name: I-CSCF UAR timeout ratio
+        source: derived
+        type: ratio
+        unit: ratio
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Ratio of UAR timeouts to (timeouts + replies). Rises when Diameter
+
+          queries to HSS time out without a response.
+
+          '
+        meaning:
+          what_it_signals: 'Partial partition or severe overload on the Cx path. Zero in
+
+            healthy operation; non-zero means some UAR queries did not receive
+
+            any response within the timeout window.
+
+            '
+          spike: HSS partitioned, overloaded past its timeout, or Cx path losing packets.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
+        event_triggers:
+        - id: ims.icscf.uar_timeouts_observed
+          trigger: current > 0.05 and sustained_gt(0.02, min_duration='60s')
+          clear_condition: sustained_lt(0.01, min_duration='60s')
+          local_meaning: 'Non-trivial fraction of UAR queries timing out. HSS partition or
+
+            severe overload.
+
+            '
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.icscf.cdp_latency_elevated
+            composite_interpretation: HSS approaching or exceeding timeout ceiling
+          - event_id: infrastructure.pyhss.unreachable
+            composite_interpretation: HSS partition confirmed
+        related_metrics:
+        - metric: ims.icscf.uar_avg_response_time
+          relationship: discriminator_for
+          use: Timeout + elevated latency = overload; timeout + clean latency = partition.
+        disambiguators:
+        - metric: ims.icscf.uar_avg_response_time
+          separates: Overload (both elevated) vs. partial partition (timeouts but latency metric is 0/missing
+            because no replies arrive)
+        how_to_verify_live:
+          tool: run_kamcmd
+          args_hint: run_kamcmd("icscf", "stats.fetch ims_icscf:uar_timeouts") + replies counter.
+        feeds_model_features:
+        - derived.icscf_uar_timeout_ratio
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - uar
+        - timeout
+        - ratio
+  mongo:
+    layer: infrastructure
+    metrics:
+      subscribers:
+        source: mongosh
+        type: counter
+        description: Number of 5G subscribers provisioned in MongoDB (queried via mongosh).
+        healthy:
+          scale_independent: false
+          invariant: Equals provisioned 5G subscriber count. Should be >= amf.ran_ue (provisioned >= currently
+            attached).
+        expected: 2
+  pcf:
+    layer: core
+    metrics:
+      fivegs_pcffunction_pa_policyamassocnbr:
+        source: prometheus
+        type: gauge
+        description: Active AM (Access and Mobility) policy associations.
+        healthy:
+          scale_independent: true
+      fivegs_pcffunction_pa_policyamassoreq:
+        source: prometheus
+        type: counter
+        description: AM policy association requests (counter).
+        healthy:
+          scale_independent: true
+      fivegs_pcffunction_pa_policyamassosucc:
+        source: prometheus
+        type: counter
+        description: Successful AM policy associations (counter).
+        healthy:
+          scale_independent: true
+      fivegs_pcffunction_pa_policysmassocrelnbr:
+        source: prometheus
+        type: gauge
+        description: Active SM (Session Management) policy associations.
+        healthy:
+          scale_independent: true
+      fivegs_pcffunction_pa_policysmassoreq:
+        source: prometheus
+        type: counter
+        description: SM policy association requests (counter).
+        healthy:
+          scale_independent: true
+      fivegs_pcffunction_pa_policysmassosucc:
+        source: prometheus
+        type: counter
+        description: Successful SM policy associations (counter).
+        healthy:
+          scale_independent: true
+      fivegs_pcffunction_pa_sessionnbr:
+        source: prometheus
+        type: counter
+        description: Active policy association sessions on the PCF.
+        healthy:
+          scale_independent: false
+          invariant: Typically tracks smf.fivegs_smffunction_sm_sessionnbr in policy-enabled deployments.
+        expected: 4
+  pcscf:
     layer: ims
     metrics:
-
-      rcv_requests_register_per_ue:
-        display_name: "SIP REGISTER rate per UE at S-CSCF"
+      avg_register_time_ms:
+        display_name: P-CSCF average SIP REGISTER processing time
         source: derived
         type: derived
-        unit: requests_per_second
+        unit: ms
         protocol: SIP
         interface: Mw
         plane: control
-        description: |
-          Rate of REGISTERs forwarded to the S-CSCF from I-CSCF.
+        raw_sources:
+        - script:register_time
+        - script:register_success
+        description: 'Computed as rate(pcscf.script:register_time) / rate(pcscf.core:rcv_requests_register)
+
+          over a 30-second sliding window — i.e. average script-processing time
+
+          per INCOMING REGISTER (counted regardless of outcome). Omitted when
+
+          no REGISTERs arrived at P-CSCF in the window (pre-filter).
+
+
+          Denominator is the incoming-attempt counter, not the success counter:
+
+          this preserves the signal when REGISTERs are failing (e.g. latency
+
+          injections time them out) while the processing-time counter keeps
+
+          advancing. Dividing by successes would collapse the feature to 0
+
+          during the very fault it should detect.
+
+          '
         meaning:
-          what_it_signals: |
-            Health of the I-CSCF → S-CSCF forwarding path. Drop to zero while
-            I-CSCF is receiving REGISTERs = S-CSCF-side issue (crashed, or
-            I-CSCF → S-CSCF path broken).
-          drop: "I-CSCF not forwarding or S-CSCF not receiving."
-          zero: "S-CSCF isolated or not running."
+          what_it_signals: 'End-to-end cost of processing a SIP REGISTER through the IMS
+
+            signaling chain. Under healthy conditions, dominated by four
+
+            Diameter round-trips (UAR + LIR + MAR + SAR) plus SIP forwarding
+
+            overhead. Spikes without matching Diameter latency spikes indicate
+
+            SIP-path latency (P-CSCF itself or P-CSCF ↔ I-CSCF hop). Remains
+
+            meaningful when REGISTERs are failing — numerator and denominator
+
+            both track attempts, not completions.
+
+            '
+          spike: Latency injected on the REGISTER path. Compare against Diameter response times to localize.
+          drop: Rarely meaningful — shorter REGISTERs are not a fault signal.
+          zero: "Stall signature. Two distinct cases:\n  (a) No REGISTERs arrived in the window — feature\
+            \ is omitted entirely by pre-filter; you won't see a 0 here, you'll see the metric absent.\n\
+            \  (b) REGISTERs arrived but none completed within the window, so the numerator (cumulative\
+            \ register_time) didn't advance while the denominator (rcv_requests_register) did — the ratio\
+            \ snapshots to 0. This is the classic SIP-path-latency signature: a latency injection on P-CSCF,\
+            \ or a partition, is stretching REGISTER processing past the sliding-window horizon. Confirm\
+            \ by checking whether `pcscf.core:rcv_requests_register` is still advancing (it is = case\
+            \ b); if it's flat too, it's case (a).\n"
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.5]
-          invariant: "Per-UE rate. Tracks icscf.register rate."
-        event_triggers:
-          - id: ims.scscf.register_rate_drop
-            trigger: "current < 0.005 and prior_stable(window='5m') > 0.02 and sustained_lt(0.01, min_duration='60s')"
-            clear_condition: "sustained_gt(0.02, min_duration='30s')"
-            local_meaning: |
-              REGISTERs no longer reaching S-CSCF.
-            magnitude_captured: [current_value, prior_stable_value, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: ims.icscf.register_rate_drop
-                composite_interpretation: "Chain broken upstream at I-CSCF"
-        related_metrics:
-          - metric: ims.icscf.rcv_requests_register_per_ue
-            relationship: upstream_of
-            use: "S-CSCF receives from I-CSCF; drift is diagnostic."
-        disambiguators:
-          - metric: ims.icscf.rcv_requests_register_per_ue
-            separates: "S-CSCF crashed (I-CSCF receiving, S-CSCF not) vs. upstream issue (both zero)"
-        how_to_verify_live:
-          tool: get_network_status
-          args_hint: "Check if scscf container is running."
-        applicable_use_cases: [vonr, ims_signaling]
-        tags: [ims, sip, register, rate]
+          typical_range:
+          - 150
+          - 350
+          invariant: 'Approximately equal to the sum of the four HSS Diameter round-trips
 
+            (UAR + LIR + MAR + SAR).
+
+            Large positive delta between observed register_time and this sum =
+
+            SIP-path latency (P-CSCF interface or P-CSCF ↔ I-CSCF).
+
+            '
+        event_triggers:
+        - id: ims.pcscf.register_time_elevated
+          trigger: sustained_gt(500, min_duration='60s') or current > 2 * baseline_mean
+          clear_condition: sustained_lt(400, min_duration='60s')
+          local_meaning: 'SIP REGISTER processing time at P-CSCF has risen above typical.
+
+            Does NOT attribute where on the REGISTER path the latency lives.
+
+            '
+          magnitude_captured:
+          - current_value
+          - baseline_mean
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.icscf.cdp_latency_elevated
+            composite_interpretation: HSS path dominates — latency on Diameter legs from I-CSCF
+          - event_id: ims.scscf.mar_latency_elevated
+            composite_interpretation: HSS path dominates — specifically S-CSCF legs
+        - id: ims.pcscf.register_time_critical
+          trigger: sustained_gt(2000, min_duration='30s')
+          clear_condition: sustained_lt(500, min_duration='60s')
+          local_meaning: 'REGISTER processing time catastrophically elevated (likely a
+
+            network latency injection on P-CSCF interface).
+
+            '
+          magnitude_captured:
+          - current_value
+          - baseline_mean
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: infrastructure.pyhss.unreachable
+            composite_interpretation: Backend HSS collapse
+        related_metrics:
+        - metric: ims.icscf.uar_avg_response_time
+          relationship: composite_of
+          use: One of the four Diameter legs composing register_time.
+        - metric: ims.icscf.lir_avg_response_time
+          relationship: composite_of
+          use: One of the four Diameter legs.
+        - metric: ims.scscf.mar_avg_response_time
+          relationship: composite_of
+          use: One of the four Diameter legs.
+        - metric: ims.scscf.sar_avg_response_time
+          relationship: composite_of
+          use: One of the four Diameter legs.
+        disambiguators:
+        - metric: sum(ims.icscf.uar_avg_response_time, ims.icscf.lir_avg_response_time, ims.scscf.mar_avg_response_time,
+            ims.scscf.sar_avg_response_time)
+          separates: HSS-side latency (register_time ≈ sum) vs. SIP-path latency (register_time >> sum)
+        how_to_verify_live:
+          tool: run_kamcmd
+          args_hint: run_kamcmd("pcscf", "stats.fetch script:register_time") and register_success for
+            direct values.
+        feeds_model_features:
+        - derived.pcscf_avg_register_time_ms
+        applicable_use_cases:
+        - vonr
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - register
+        - latency
+        - composite
+      core:rcv_requests_bye:
+        source: kamcmd
+        type: counter
+        description: SIP BYE requests received (counter).
+        healthy:
+          scale_independent: true
+      core:rcv_requests_invite:
+        source: kamcmd
+        type: counter
+        description: SIP INVITE requests received (counter).
+        healthy:
+          scale_independent: true
+      core:rcv_requests_options:
+        source: kamcmd
+        type: counter
+        description: SIP OPTIONS requests received (counter). Used for keepalive/ping.
+        healthy:
+          scale_independent: true
+      core:rcv_requests_register:
+        source: kamcmd
+        type: counter
+        description: SIP REGISTER requests received (counter).
+        healthy:
+          scale_independent: true
+      dialog_ng:active:
+        source: kamcmd
+        type: counter
+        description: Active SIP dialogs at P-CSCF. 0 at rest, 2 during active call (one per direction).
+        healthy:
+          scale_independent: false
+          invariant: 2 SIP dialogs per simultaneous bidirectional VoNR call. Ratio = 2 * simultaneous_calls.
+          during_call: 2
+        expected: 0
+        note: 2 dialogs during active call (one per direction)
+      dialogs_per_ue:
+        display_name: Active SIP dialogs per registered UE at P-CSCF
+        source: derived
+        type: derived
+        unit: count
+        protocol: SIP
+        interface: Gm
+        plane: control
+        description: 'Normalized gauge: pcscf.dialog_ng:active / pcscf.registered_contacts.
+
+          0 at rest; ~1.0 per active bidirectional VoNR call between registered
+
+          UEs.
+
+          '
+        meaning:
+          what_it_signals: 'How many calls per user are currently in progress at the P-CSCF.
+
+            Going to zero from a non-zero baseline means calls have ended
+
+            (normal) OR call setup is failing system-wide (degradation).
+
+            Together with rcv_requests_* it discriminates the two.
+
+            '
+          drop: Calls ending or setup failing.
+          zero: No active calls. Normal at rest; suspicious if prior state had calls AND INVITE rate is
+            also zero.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 1.0
+          invariant: Per-UE — scale-independent. 0 at rest, ~1 per active VoNR call.
+        event_triggers:
+        - id: ims.pcscf.dialogs_silent
+          trigger: current == 0 and prior_stable(window='5m') > 0.3 and sustained_eq(0, min_duration='60s')
+          clear_condition: current > 0
+          local_meaning: 'No active dialogs despite prior sustained activity. Calls failing
+
+            or connectivity to UEs lost.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.pcscf.invite_rate_drop
+            composite_interpretation: Call setup failing — INVITEs stopping at P-CSCF
+          - event_id: core.upf.gtp_uplink_drop
+            composite_interpretation: Data plane down — calls failing end-to-end
+          - event_id: ims.icscf.register_rate_drop
+            composite_interpretation: IMS signaling chain broken upstream of I-CSCF
+        related_metrics:
+        - metric: ims.pcscf.rcv_requests_invite_per_ue
+          relationship: correlated_with
+          use: INVITE rate precedes dialog creation; if INVITEs flow but dialogs don't rise, calls are
+            failing at setup.
+        - metric: core.smf.bearers_per_ue
+          relationship: correlated_with
+          use: Dedicated voice bearer establishment tracks dialog creation in VoNR.
+        - metric: core.upf.upf_activity_during_calls
+          relationship: discriminator_for
+          use: If dialogs_per_ue > 0 but upf_activity == 0, media plane is broken while signaling appears
+            healthy.
+        disambiguators:
+        - metric: ims.pcscf.rcv_requests_invite_per_ue
+          separates: No calls attempted (INVITE also zero) vs. calls attempted but failing (INVITE nonzero,
+            dialogs zero)
+        - metric: ims.icscf.rcv_requests_invite_per_ue
+          separates: P-CSCF forwarding to I-CSCF (both present) vs. partition (P-CSCF has invites but
+            I-CSCF doesn't)
+        how_to_verify_live:
+          tool: run_kamcmd
+          args_hint: run_kamcmd("pcscf", "dlg.list") shows active dialogs directly.
+        applicable_use_cases:
+        - vonr
+        tags:
+        - ims
+        - sip
+        - dialog
+        - call
+      httpclient:connfail:
+        source: kamcmd
+        type: counter
+        description: HTTP client connection failures (counter). Baseline 1300-1500 is pre-existing due
+          to SCP_BIND_IP placeholder. Only alert if delta > 100.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 1300.0
+          - 1500.0
+          pre_existing_noise: 'PRE-EXISTING: SCP_BIND_IP placeholder in P-CSCF config causes persistent
+            connection failures. Ignore unless delta > 100.'
+        note: 'PRE-EXISTING: SCP_BIND_IP placeholder in P-CSCF config causes persistent connection failures.
+          Ignore unless delta > 100.'
+      httpclient:connok:
+        source: kamcmd
+        type: counter
+        description: Successful HTTP client connections (counter).
+        healthy:
+          scale_independent: true
+      ims_usrloc_pcscf:registered_contacts:
+        source: kamcmd
+        type: counter
+        description: UE contacts currently registered at the P-CSCF. Expected 2 (one per UE).
+        healthy:
+          scale_independent: false
+          invariant: Equals configured IMS-enabled UE pool size when healthy. In VoNR mode typically equals
+            amf.ran_ue. Drop from prior stable baseline = lost IMS registrations.
+          condition: 2 UEs registered
+        expected: 2
+        alarm_if: Dropped from prior stable baseline, or = 0 (all UEs lost)
       rcv_requests_invite_per_ue:
-        display_name: "SIP INVITE rate per UE at S-CSCF"
+        display_name: SIP INVITE rate per UE at P-CSCF
         source: derived
         type: derived
         unit: requests_per_second
         protocol: SIP
-        interface: Mw
+        interface: Gm
         plane: control
-        description: |
-          Rate of INVITEs forwarded to S-CSCF.
-        meaning:
-          what_it_signals: |
-            S-CSCF participation in call setup. Zero when calls aren't being
-            placed OR S-CSCF not receiving forwarded INVITEs.
-          drop: "Upstream forwarding issue."
-          zero: "No calls being routed via this S-CSCF."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 0.2]
-          invariant: "Per-UE rate."
-        event_triggers: []
-        related_metrics:
-          - metric: ims.icscf.rcv_requests_invite_per_ue
-            relationship: upstream_of
-            use: "S-CSCF receives from I-CSCF."
-        disambiguators: []
-        how_to_verify_live:
-          tool: get_nf_metrics
-        applicable_use_cases: [vonr, ims_signaling]
-        tags: [ims, sip, invite]
+        raw_sources:
+        - core:rcv_requests_invite
+        description: 'Sliding-window rate of SIP INVITEs arriving at the P-CSCF.
 
-      mar_avg_response_time:
-        display_name: "S-CSCF MAR response time"
-        source: kamcmd
-        type: gauge
-        unit: ms
-        protocol: Diameter
-        interface: Cx
-        plane: control
-        description: |
-          Average response time for Multimedia-Auth-Request from S-CSCF to
-          HSS (used for authentication vector retrieval during REGISTER).
+          INVITEs mark call-setup attempts.
+
+          '
         meaning:
-          what_it_signals: |
-            S-CSCF side of the Cx interface. If MAR latency spikes alongside
-            I-CSCF UAR/LIR spikes, it's HSS-wide; if only MAR spikes, it's
-            S-CSCF ↔ HSS specific.
-          spike: "HSS slow responding to MAR."
-          zero: "No MAR replies received. HSS partition or S-CSCF not generating MARs."
+          what_it_signals: 'Call attempt rate from registered UEs. Unlike REGISTER (periodic),
+
+            INVITEs only fire when UEs place calls. Zero is normal during
+
+            quiet periods; nonzero INVITE with zero dialogs is the signature
+
+            of call setup failure.
+
+            '
+          drop: Fewer call attempts.
+          zero: No calls being placed. Normal at rest.
         healthy:
           scale_independent: true
-          typical_range: [50, 150]
-          invariant: null
+          typical_range:
+          - 0.0
+          - 0.2
+          invariant: Per-UE rate.
         event_triggers:
-          - id: ims.scscf.mar_latency_elevated
-            trigger: "sustained_gt(300, min_duration='60s')"
-            clear_condition: "sustained_lt(200, min_duration='60s')"
-            local_meaning: |
-              S-CSCF MAR response time elevated.
-            magnitude_captured: [current_value, baseline_mean, delta_percent, first_observed_at]
-            correlates_with:
-              - event_id: ims.icscf.cdp_latency_elevated
-                composite_interpretation: "HSS-wide slowness — both CSCFs affected"
-              - event_id: ims.scscf.mar_timeouts_observed
-                composite_interpretation: "HSS approaching/exceeding timeout — overload or partition"
+        - id: ims.pcscf.invite_rate_drop
+          trigger: current < 0.005 and prior_stable(window='5m') > 0.02 and sustained_lt(0.01, min_duration='60s')
+          clear_condition: sustained_gt(0.01, min_duration='30s')
+          local_meaning: 'INVITE rate at P-CSCF has collapsed despite prior activity.
+
+            Calls are not being attempted or UEs cannot reach P-CSCF.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.pcscf.register_rate_drop
+            composite_interpretation: UE-to-P-CSCF path broken for both REGISTER and INVITE
+          - event_id: core.amf.ran_ue_sudden_drop
+            composite_interpretation: UEs no longer on network
         related_metrics:
-          - metric: ims.icscf.cdp_avg_response_time
-            relationship: correlated_with
-            use: "Both face the same HSS; correlated spikes = HSS issue."
+        - metric: ims.icscf.rcv_requests_invite_per_ue
+          relationship: downstream_of
+          use: P-CSCF should forward to I-CSCF for onward routing. Signature gap = partition.
+        - metric: ims.pcscf.dialogs_per_ue
+          relationship: correlated_with
+          use: INVITEs should produce dialogs after a few-hundred-ms delay.
         disambiguators:
-          - metric: ims.scscf.mar_timeout_ratio
-            separates: "Latency only (timeouts=0) vs. partial partition (timeouts>0)"
+        - metric: ims.icscf.rcv_requests_invite_per_ue
+          separates: UE-side issue (both P-CSCF and I-CSCF see zero INVITEs) vs. P-CSCF→I-CSCF partition
+            (P-CSCF nonzero, I-CSCF zero)
         how_to_verify_live:
-          tool: run_kamcmd
-        feeds_model_features:
-          - scscf.ims_auth:mar_avg_response_time
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, diameter, mar, latency]
-
-      sar_avg_response_time:
-        display_name: "S-CSCF SAR response time"
-        source: kamcmd
-        type: gauge
-        unit: ms
-        protocol: Diameter
-        interface: Cx
-        plane: control
-        description: |
-          Average response time for Server-Assignment-Request (S-CSCF
-          registering itself at HSS as the serving S-CSCF for a user).
-        meaning:
-          what_it_signals: |
-            Second S-CSCF ↔ HSS leg. Together with MAR, these are the S-CSCF-side
-            Diameter contribution to register_time.
-          spike: "HSS slow for SAR. Less common than MAR."
-          zero: "No SAR responses received."
-        healthy:
-          scale_independent: true
-          typical_range: [50, 150]
-          invariant: null
-        event_triggers: []
-        related_metrics:
-          - metric: ims.scscf.mar_avg_response_time
-            relationship: peer_of
-            use: "Both S-CSCF ↔ HSS. Jointly spiking = HSS issue."
-        disambiguators: []
-        how_to_verify_live:
-          tool: run_kamcmd
-        feeds_model_features:
-          - scscf.ims_registrar_scscf:sar_avg_response_time
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, diameter, sar, latency]
-
-      mar_timeout_ratio:
-        display_name: "S-CSCF MAR timeout ratio"
+          tool: get_nf_metrics
+          args_hint: Compare pcscf and icscf INVITE counters.
+        applicable_use_cases:
+        - vonr
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - invite
+        - rate
+      rcv_requests_register_per_ue:
+        display_name: SIP REGISTER rate per UE at P-CSCF
         source: derived
-        type: ratio
-        unit: ratio
-        protocol: Diameter
-        interface: Cx
-        plane: control
-        description: |
-          Ratio of MAR timeouts to (timeouts + replies) at S-CSCF.
-        meaning:
-          what_it_signals: |
-            S-CSCF-side evidence of HSS partition or severe overload.
-          spike: "HSS unreachable or too slow."
-        healthy:
-          scale_independent: true
-          typical_range: [0.0, 0.0]
-          invariant: "Zero in healthy operation."
-        event_triggers:
-          - id: ims.scscf.mar_timeouts_observed
-            trigger: "current > 0.05 and sustained_gt(0.02, min_duration='60s')"
-            clear_condition: "sustained_lt(0.01, min_duration='60s')"
-            local_meaning: |
-              MAR queries timing out. HSS partition or severe overload.
-            magnitude_captured: [current_value, first_observed_at]
-            correlates_with:
-              - event_id: infrastructure.pyhss.unreachable
-                composite_interpretation: "HSS partition confirmed from S-CSCF side"
-              - event_id: ims.icscf.uar_timeouts_observed
-                composite_interpretation: "HSS unreachable from multiple CSCFs"
-        related_metrics:
-          - metric: ims.scscf.mar_avg_response_time
-            relationship: discriminator_for
-            use: "Latency vs. partition discriminator."
-        disambiguators: []
-        how_to_verify_live:
-          tool: run_kamcmd
-        feeds_model_features:
-          - derived.scscf_mar_timeout_ratio
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, diameter, mar, timeout]
-
-      registration_reject_ratio:
-        display_name: "S-CSCF registration rejection ratio"
-        source: derived
-        type: ratio
-        unit: ratio
+        type: derived
+        unit: requests_per_second
         protocol: SIP
-        interface: Mw
+        interface: Gm
         plane: control
-        description: |
-          Ratio of rejected REGISTERs to (rejected + accepted) at S-CSCF.
-          Non-zero when S-CSCF is actively rejecting registrations.
+        raw_sources:
+        - core:rcv_requests_register
+        description: 'Sliding-window rate of SIP REGISTER requests arriving at the P-CSCF
+
+          from UEs. Normalized per UE for scale invariance.
+
+          '
         meaning:
-          what_it_signals: |
-            S-CSCF is reachable AND responding — but refusing registrations.
-            Unlike timeouts, this indicates an active rejection (auth failure,
-            capability mismatch, policy).
-          spike: "Auth failures, subscriber data issues, or S-CSCF misconfig."
+          what_it_signals: 'How actively UEs are refreshing their IMS registrations with the
+
+            P-CSCF. REGISTERs arrive periodically (re-registration timer) plus
+
+            at attach. Sustained zero means UEs cannot reach P-CSCF OR the
+
+            UE-to-network SIP path is broken.
+
+            '
+          drop: Fewer REGISTERs than expected — UE connectivity or P-CSCF reachability issue.
+          zero: No REGISTERs flowing. Unusual unless UEs are all deregistered.
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.0]
-          invariant: "Zero in healthy operation."
+          typical_range:
+          - 0.0
+          - 0.5
+          invariant: Per-UE rate — same value at any deployment scale.
         event_triggers:
-          - id: ims.scscf.registration_reject_observed
-            trigger: "current > 0.05 and sustained_gt(0.02, min_duration='60s')"
-            clear_condition: "sustained_lt(0.01, min_duration='60s')"
-            local_meaning: |
-              S-CSCF is actively rejecting registrations.
-            magnitude_captured: [current_value, first_observed_at]
-            correlates_with:
-              - event_id: infrastructure.mongo.subscribers_decrease
-                composite_interpretation: "Subscriber data removed — auth failing"
-        related_metrics: []
-        disambiguators: []
-        how_to_verify_live:
-          tool: run_kamcmd
-        feeds_model_features:
-          - derived.scscf_registration_reject_ratio
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, sip, register, rejection]
+        - id: ims.pcscf.register_rate_drop
+          trigger: current < 0.01 and prior_stable(window='5m') > 0.05 and sustained_lt(0.02, min_duration='90s')
+          clear_condition: sustained_gt(0.03, min_duration='30s')
+          local_meaning: 'REGISTER rate at P-CSCF collapsed. Either UEs cannot reach it or
 
+            the periodic registration timers have stopped firing.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: core.amf.ran_ue_sudden_drop
+            composite_interpretation: RAN dropped, UEs can't send REGISTERs
+          - event_id: ims.icscf.register_rate_drop
+            composite_interpretation: Signaling chain broken at or before I-CSCF
+        related_metrics:
+        - metric: ims.icscf.rcv_requests_register_per_ue
+          relationship: downstream_of
+          use: REGISTER should flow P-CSCF → I-CSCF. If P-CSCF nonzero but I-CSCF zero, forwarding is
+            broken (partition).
+        - metric: ims.scscf.rcv_requests_register_per_ue
+          relationship: downstream_of
+          use: Should also follow. Gap indicates deeper forwarding issue.
+        disambiguators:
+        - metric: ims.icscf.rcv_requests_register_per_ue
+          separates: UEs can't reach P-CSCF (both zero) vs. P-CSCF can't reach I-CSCF (P-CSCF nonzero,
+            I-CSCF zero — partition signature)
+        how_to_verify_live:
+          tool: get_nf_metrics
+          args_hint: Fetch pcscf and icscf snapshots; compare REGISTER counters.
+        applicable_use_cases:
+        - vonr
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - register
+        - rate
       sip_error_ratio:
-        display_name: "S-CSCF SIP error response ratio"
+        display_name: P-CSCF SIP error response ratio
         source: derived
         type: ratio
         unit: ratio
         protocol: SIP
-        interface: Mw
+        interface: Gm
         plane: control
-        description: |
-          Same formula as P-CSCF sip_error_ratio but at S-CSCF.
+        raw_sources:
+        - sl:4xx_replies
+        - sl:5xx_replies
+        - sl:200_replies
+        - sl:1xx_replies
+        description: '(4xx + 5xx replies) / (1xx + 200 + 4xx + 5xx replies) over a rolling
+
+          window at the P-CSCF. Zero during healthy operation.
+
+          '
         meaning:
-          what_it_signals: |
-            S-CSCF is emitting error responses — internal issue or backend fault.
-          spike: "Internal S-CSCF errors or HSS issues causing failures."
-          zero: "Healthy default."
+          what_it_signals: 'Proportion of SIP responses that are errors. Zero is the healthy
+
+            baseline; any sustained non-zero value means P-CSCF or something
+
+            downstream is rejecting requests.
+
+            '
+          spike: Errors flowing back — downstream CSCFs or HSS rejecting.
+          zero: Healthy default.
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.0]
-          invariant: "Zero in healthy operation."
-        event_triggers: []
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
+        event_triggers:
+        - id: ims.pcscf.sip_errors_observed
+          trigger: current > 0.05 and sustained_gt(0.02, min_duration='60s')
+          clear_condition: sustained_lt(0.01, min_duration='60s')
+          local_meaning: 'Non-trivial SIP error ratio at P-CSCF. Downstream component is
+
+            rejecting requests.
+
+            '
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.scscf.registration_reject_observed
+            composite_interpretation: S-CSCF rejecting registrations
         related_metrics:
-          - metric: ims.icscf.sip_error_ratio
-            relationship: peer_of
+        - metric: ims.icscf.sip_error_ratio
+          relationship: peer_of
+          use: Errors at P-CSCF and I-CSCF often correlate when a downstream rejection cascades.
         disambiguators: []
         how_to_verify_live:
           tool: get_nf_metrics
-        applicable_use_cases: [ims_signaling]
-        tags: [ims, sip, errors]
-
-
-  # =========================================================================
-  # IMS — RTPEngine (media plane)
-  # =========================================================================
+          args_hint: Fetch pcscf SIP counters.
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - errors
+      sl:1xx_replies:
+        source: kamcmd
+        type: counter
+        description: 1xx provisional SIP responses sent (counter). E.g., 100 Trying, 180 Ringing.
+        healthy:
+          scale_independent: true
+      sl:200_replies:
+        source: kamcmd
+        type: counter
+        description: 200 OK SIP responses sent (counter).
+        healthy:
+          scale_independent: true
+      sl:4xx_replies:
+        source: kamcmd
+        type: counter
+        description: 4xx client error SIP responses (counter). Non-zero delta indicates client errors.
+        healthy:
+          scale_independent: true
+        alarm_if: delta > 0
+      sl:5xx_replies:
+        source: kamcmd
+        type: counter
+        description: 5xx server error SIP responses (counter). Non-zero delta indicates server failures.
+        healthy:
+          scale_independent: true
+        alarm_if: delta > 0
+      tmx:active_transactions:
+        source: kamcmd
+        type: counter
+        description: Active SIP transactions. Expected 0. Growing value indicates transactions accumulating
+          without responses.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 0 and growing (transactions accumulating without responses)'
+  pyhss:
+    layer: ims
+    metrics:
+      ims_subscribers:
+        source: api
+        type: counter
+        description: Number of IMS subscribers provisioned in PyHSS (queried via REST API).
+        healthy:
+          scale_independent: false
+          invariant: Equals provisioned subscriber count. Should be >= pcscf.registered_contacts (provisioned
+            >= currently registered).
+        expected: 2
   rtpengine:
     layer: ims
     metrics:
-
       errors_per_second:
-        display_name: "RTPEngine relay errors per second"
+        display_name: RTPEngine relay errors per second
         source: prometheus
         type: gauge
         unit: errors_per_second
         protocol: RTP
         interface: N6
         plane: media
-        description: |
-          Real-time rate of RTP relay errors at RTPEngine. Point-in-time gauge
+        description: 'Real-time rate of RTP relay errors at RTPEngine. Point-in-time gauge
+
           (not a cumulative counter that persists stale state across chaos runs).
+
           See ADR remove_cumulative_rtpengine_features.md for background.
+
+          '
         meaning:
-          what_it_signals: |
-            Direct signal of active media-plane problems. Zero in healthy
+          what_it_signals: 'Direct signal of active media-plane problems. Zero in healthy
+
             operation; non-zero means RTPEngine is failing to relay packets
+
             RIGHT NOW (not cumulative history).
-          spike: "Active relay errors. Investigate RTPEngine container state or media path."
-          zero: "Healthy default."
+
+            '
+          spike: Active relay errors. Investigate RTPEngine container state or media path.
+          zero: Healthy default.
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.0]
-          invariant: "Zero in healthy operation."
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
         event_triggers:
-          - id: ims.rtpengine.errors_nonzero
-            trigger: "current > 0 and sustained_gt(0, min_duration='15s')"
-            clear_condition: "sustained_eq(0, min_duration='30s')"
-            local_meaning: |
-              RTPEngine reporting relay errors. Media quality is degrading.
-            magnitude_captured: [current_value, first_observed_at]
-            correlates_with:
-              - event_id: core.upf.activity_during_calls_collapsed
-                composite_interpretation: "Media failure at RTPEngine, reflected downstream in UPF activity"
+        - id: ims.rtpengine.errors_nonzero
+          trigger: current > 0 and sustained_gt(0, min_duration='15s')
+          clear_condition: sustained_eq(0, min_duration='30s')
+          local_meaning: 'RTPEngine reporting relay errors. Media quality is degrading.
+
+            '
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: core.upf.activity_during_calls_collapsed
+            composite_interpretation: Media failure at RTPEngine, reflected downstream in UPF activity
         related_metrics:
-          - metric: core.upf.upf_activity_during_calls
-            relationship: correlated_with
-            use: "Both reflect media-plane health; RTPEngine errors are the direct signal."
+        - metric: core.upf.upf_activity_during_calls
+          relationship: correlated_with
+          use: Both reflect media-plane health; RTPEngine errors are the direct signal.
         disambiguators:
-          - metric: core.upf.gtp_indatapktn3upf_per_ue
-            separates: "RTPEngine-specific fault (errors>0, UPF in/out symmetric) vs. UPF dropping (errors=0 at RTPEngine, UPF in/out asymmetric)"
+        - metric: core.upf.gtp_indatapktn3upf_per_ue
+          separates: RTPEngine-specific fault (errors>0, UPF in/out symmetric) vs. UPF dropping (errors=0
+            at RTPEngine, UPF in/out asymmetric)
         how_to_verify_live:
           tool: get_dp_quality_gauges
-          args_hint: "Returns rate-based MOS/loss/jitter alongside RTPEngine errors."
-        applicable_use_cases: [vonr]
-        tags: [rtp, media, errors]
+          args_hint: Returns rate-based MOS/loss/jitter alongside RTPEngine errors.
+        applicable_use_cases:
+        - vonr
+        tags:
+        - rtp
+        - media
+        - errors
+      rtpengine_1way_streams:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Number of RTP streams where only one direction has traffic. Indicates severe packet
+          loss or network asymmetry — one side of the call is effectively deaf.
+        healthy:
+          scale_independent: true
+      rtpengine_active_sessions:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Number of RTP sessions currently being relayed by RTPEngine. Each call creates one
+          session with two media streams (one per direction).
+        healthy:
+          scale_independent: true
+      rtpengine_errors_per_sec:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Real-time rate of RTP relay errors per second. Non-zero during a call signals active
+          data plane problems. Unlike cumulative counters, this shows the current error rate.
+        healthy:
+          scale_independent: true
+      rtpengine_jitter:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Average reported jitter (ms) across all sessions since RTPEngine container started.
+          Based on RTCP reports. <5ms excellent, 5-20ms acceptable, >20ms noticeable.
+        healthy:
+          scale_independent: true
+        expected: 1
+        alarm_if: '> 30 (quality impact) or > 50 (severe)'
+        note: Average inter-packet arrival jitter from RTCP reports (ms). High jitter causes audio artifacts.
+      rtpengine_loss_pct:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Average packet loss % across all sessions since RTPEngine container started. Not
+          a sliding window — includes all past sessions. Check 'Packets lost' for current state.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 5 (noticeable quality impact) or > 20 (severe degradation)'
+        note: Average packet loss from RTCP reports. Directly degrades MOS.
+      rtpengine_loss_stddev:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Standard deviation of packet loss across RTP sessions. High values indicate bursty,
+          uneven loss (e.g., a network fault) vs. low values indicating steady background loss.
+        healthy:
+          scale_independent: true
+      rtpengine_mos:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Mean Opinion Score (1-5, ITU-T G.107 E-model). Cumulative average across all RTP
+          sessions since RTPEngine container started. 4.0+ good, 3.5-4.0 acceptable, <3.5 degraded.
+        healthy:
+          scale_independent: true
+          condition: Healthy call with no packet loss
+          thresholds:
+            excellent: '>= 4.3 (toll quality, no perceptible degradation)'
+            good: '>= 4.0 (minor degradation, acceptable for VoIP)'
+            acceptable: '>= 3.5 (noticeable degradation, still usable)'
+            poor: '>= 3.0 (significant quality issues, user complaints likely)'
+            unusable: < 3.0 (severe degradation, call effectively broken)
+        expected: 4.3
+        alarm_if: < 3.5 during active call (data plane degradation)
+        note: Mean Opinion Score — ITU-T G.107 E-model computed from RTCP reports (packet loss, jitter,
+          latency). THE key indicator for voice quality.
+      rtpengine_packets_lost:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Absolute count of RTP packets currently reported as lost by RTPEngine. Resets when
+          sessions end. Non-zero indicates active packet loss.
+        healthy:
+          scale_independent: true
+      rtpengine_pps:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Real-time RTP packets per second through RTPEngine (both directions). 0 when no call
+          is active. ~100 pps typical for G.711 voice at 20ms packetization.
+        healthy:
+          scale_independent: true
+          during_call: 100
+        alarm_if: = 0 with active sessions (media relay dead) or drop > 20% from expected (packet loss
+          on data path)
+        note: Live media packet rate across all active streams. ~100 pps per bidirectional G.711 stream
+          (50 pps per direction at 20ms packetization).
+      rtpengine_relay_errors:
+        source: get_dp_quality_gauges
+        type: counter
+        description: Total packet relay errors since RTPEngine started. Increments when RTPEngine fails
+          to forward an RTP packet. High values indicate network or resource issues on the media path.
+        healthy:
+          scale_independent: true
+      rtpengine_total_managed:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: Total RTP sessions managed since RTPEngine container started, including terminated
+          ones. Provides context for cumulative averages.
+        healthy:
+          scale_independent: true
+  scscf:
+    layer: ims
+    metrics:
+      cdp:average_response_time:
+        source: kamcmd
+        type: counter
+        description: Average Diameter Cx response time to HSS (ms). Cumulative since container start.
+        healthy:
+          scale_independent: true
+      cdp:queuelength:
+        source: kamcmd
+        type: counter
+        description: Diameter messages waiting in the outgoing queue to HSS.
+        healthy:
+          scale_independent: true
+      cdp:replies_received:
+        source: kamcmd
+        type: counter
+        description: Diameter Cx replies received from HSS (counter).
+        healthy:
+          scale_independent: true
+      cdp:replies_response_time:
+        source: kamcmd
+        type: counter
+        description: Sum of all Diameter response times (ms) since container start.
+        healthy:
+          scale_independent: true
+      cdp:timeout:
+        source: kamcmd
+        type: counter
+        description: Diameter Cx timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity issues.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 0 (HSS Diameter timeout)'
+      dialog_ng:active:
+        source: kamcmd
+        type: counter
+        description: Active SIP dialogs at S-CSCF. 0 at rest, 2 during active call.
+        healthy:
+          scale_independent: false
+          invariant: Matches pcscf.dialog_ng:active in healthy operation (2 dialogs per simultaneous bidirectional
+            call).
+          during_call: 2
+        expected: 0
+      ims_auth:mar_timeouts:
+        source: kamcmd
+        type: counter
+        description: Multimedia-Auth-Request (MAR) timeouts to HSS. Expected 0.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 0'
+      ims_registrar_scscf:accepted_regs:
+        source: kamcmd
+        type: counter
+        description: Accepted IMS registrations (counter).
+        healthy:
+          scale_independent: true
+      ims_registrar_scscf:rejected_regs:
+        source: kamcmd
+        type: counter
+        description: Rejected IMS registrations (counter). Non-zero delta indicates auth or config issues.
+        healthy:
+          scale_independent: true
+        alarm_if: delta > 0
+      ims_usrloc_scscf:active_contacts:
+        source: kamcmd
+        type: counter
+        description: Active IMS contacts registered at the S-CSCF. Expected 2 (one per UE).
+        healthy:
+          scale_independent: false
+          invariant: Equals pcscf.ims_usrloc_pcscf:registered_contacts in healthy steady state. Divergence
+            = S-CSCF/P-CSCF registration state desync.
+          condition: 2 UEs registered
+        expected: 2
+      mar_avg_response_time:
+        display_name: S-CSCF MAR response time
+        source: kamcmd
+        type: gauge
+        unit: ms
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Average response time for Multimedia-Auth-Request from S-CSCF to
+
+          HSS (used for authentication vector retrieval during REGISTER).
+
+          '
+        meaning:
+          what_it_signals: 'S-CSCF side of the Cx interface. If MAR latency spikes alongside
+
+            I-CSCF UAR/LIR spikes, it''s HSS-wide; if only MAR spikes, it''s
+
+            S-CSCF ↔ HSS specific.
+
+            '
+          spike: HSS slow responding to MAR.
+          zero: No MAR replies received. HSS partition or S-CSCF not generating MARs.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 50
+          - 150
+          invariant: null
+        event_triggers:
+        - id: ims.scscf.mar_latency_elevated
+          trigger: sustained_gt(300, min_duration='60s')
+          clear_condition: sustained_lt(200, min_duration='60s')
+          local_meaning: 'S-CSCF MAR response time elevated.
+
+            '
+          magnitude_captured:
+          - current_value
+          - baseline_mean
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.icscf.cdp_latency_elevated
+            composite_interpretation: HSS-wide slowness — both CSCFs affected
+          - event_id: ims.scscf.mar_timeouts_observed
+            composite_interpretation: HSS approaching/exceeding timeout — overload or partition
+        related_metrics:
+        - metric: ims.icscf.cdp_avg_response_time
+          relationship: correlated_with
+          use: Both face the same HSS; correlated spikes = HSS issue.
+        disambiguators:
+        - metric: ims.scscf.mar_timeout_ratio
+          separates: Latency only (timeouts=0) vs. partial partition (timeouts>0)
+        how_to_verify_live:
+          tool: run_kamcmd
+        feeds_model_features:
+        - scscf.ims_auth:mar_avg_response_time
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - mar
+        - latency
+      mar_timeout_ratio:
+        display_name: S-CSCF MAR timeout ratio
+        source: derived
+        type: ratio
+        unit: ratio
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Ratio of MAR timeouts to (timeouts + replies) at S-CSCF.
+
+          '
+        meaning:
+          what_it_signals: 'S-CSCF-side evidence of HSS partition or severe overload.
+
+            '
+          spike: HSS unreachable or too slow.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
+        event_triggers:
+        - id: ims.scscf.mar_timeouts_observed
+          trigger: current > 0.05 and sustained_gt(0.02, min_duration='60s')
+          clear_condition: sustained_lt(0.01, min_duration='60s')
+          local_meaning: 'MAR queries timing out. HSS partition or severe overload.
+
+            '
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: infrastructure.pyhss.unreachable
+            composite_interpretation: HSS partition confirmed from S-CSCF side
+          - event_id: ims.icscf.uar_timeouts_observed
+            composite_interpretation: HSS unreachable from multiple CSCFs
+        related_metrics:
+        - metric: ims.scscf.mar_avg_response_time
+          relationship: discriminator_for
+          use: Latency vs. partition discriminator.
+        disambiguators: []
+        how_to_verify_live:
+          tool: run_kamcmd
+        feeds_model_features:
+        - derived.scscf_mar_timeout_ratio
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - mar
+        - timeout
+      rcv_requests_invite_per_ue:
+        display_name: SIP INVITE rate per UE at S-CSCF
+        source: derived
+        type: derived
+        unit: requests_per_second
+        protocol: SIP
+        interface: Mw
+        plane: control
+        description: 'Rate of INVITEs forwarded to S-CSCF.
+
+          '
+        meaning:
+          what_it_signals: 'S-CSCF participation in call setup. Zero when calls aren''t being
+
+            placed OR S-CSCF not receiving forwarded INVITEs.
+
+            '
+          drop: Upstream forwarding issue.
+          zero: No calls being routed via this S-CSCF.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.2
+          invariant: Per-UE rate.
+        event_triggers: []
+        related_metrics:
+        - metric: ims.icscf.rcv_requests_invite_per_ue
+          relationship: upstream_of
+          use: S-CSCF receives from I-CSCF.
+        disambiguators: []
+        how_to_verify_live:
+          tool: get_nf_metrics
+        applicable_use_cases:
+        - vonr
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - invite
+      rcv_requests_register_per_ue:
+        display_name: SIP REGISTER rate per UE at S-CSCF
+        source: derived
+        type: derived
+        unit: requests_per_second
+        protocol: SIP
+        interface: Mw
+        plane: control
+        description: 'Rate of REGISTERs forwarded to the S-CSCF from I-CSCF.
+
+          '
+        meaning:
+          what_it_signals: 'Health of the I-CSCF → S-CSCF forwarding path. Drop to zero while
+
+            I-CSCF is receiving REGISTERs = S-CSCF-side issue (crashed, or
+
+            I-CSCF → S-CSCF path broken).
+
+            '
+          drop: I-CSCF not forwarding or S-CSCF not receiving.
+          zero: S-CSCF isolated or not running.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.5
+          invariant: Per-UE rate. Tracks icscf.register rate.
+        event_triggers:
+        - id: ims.scscf.register_rate_drop
+          trigger: current < 0.005 and prior_stable(window='5m') > 0.02 and sustained_lt(0.01, min_duration='60s')
+          clear_condition: sustained_gt(0.02, min_duration='30s')
+          local_meaning: 'REGISTERs no longer reaching S-CSCF.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.icscf.register_rate_drop
+            composite_interpretation: Chain broken upstream at I-CSCF
+        related_metrics:
+        - metric: ims.icscf.rcv_requests_register_per_ue
+          relationship: upstream_of
+          use: S-CSCF receives from I-CSCF; drift is diagnostic.
+        disambiguators:
+        - metric: ims.icscf.rcv_requests_register_per_ue
+          separates: S-CSCF crashed (I-CSCF receiving, S-CSCF not) vs. upstream issue (both zero)
+        how_to_verify_live:
+          tool: get_network_status
+          args_hint: Check if scscf container is running.
+        applicable_use_cases:
+        - vonr
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - register
+        - rate
+      registration_reject_ratio:
+        display_name: S-CSCF registration rejection ratio
+        source: derived
+        type: ratio
+        unit: ratio
+        protocol: SIP
+        interface: Mw
+        plane: control
+        description: 'Ratio of rejected REGISTERs to (rejected + accepted) at S-CSCF.
+
+          Non-zero when S-CSCF is actively rejecting registrations.
+
+          '
+        meaning:
+          what_it_signals: 'S-CSCF is reachable AND responding — but refusing registrations.
+
+            Unlike timeouts, this indicates an active rejection (auth failure,
+
+            capability mismatch, policy).
+
+            '
+          spike: Auth failures, subscriber data issues, or S-CSCF misconfig.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
+        event_triggers:
+        - id: ims.scscf.registration_reject_observed
+          trigger: current > 0.05 and sustained_gt(0.02, min_duration='60s')
+          clear_condition: sustained_lt(0.01, min_duration='60s')
+          local_meaning: 'S-CSCF is actively rejecting registrations.
+
+            '
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: infrastructure.mongo.subscribers_decrease
+            composite_interpretation: Subscriber data removed — auth failing
+        related_metrics: []
+        disambiguators: []
+        how_to_verify_live:
+          tool: run_kamcmd
+        feeds_model_features:
+        - derived.scscf_registration_reject_ratio
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - register
+        - rejection
+      sar_avg_response_time:
+        display_name: S-CSCF SAR response time
+        source: kamcmd
+        type: gauge
+        unit: ms
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Average response time for Server-Assignment-Request (S-CSCF
+
+          registering itself at HSS as the serving S-CSCF for a user).
+
+          '
+        meaning:
+          what_it_signals: 'Second S-CSCF ↔ HSS leg. Together with MAR, these are the S-CSCF-side
+
+            Diameter contribution to register_time.
+
+            '
+          spike: HSS slow for SAR. Less common than MAR.
+          zero: No SAR responses received.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 50
+          - 150
+          invariant: null
+        event_triggers: []
+        related_metrics:
+        - metric: ims.scscf.mar_avg_response_time
+          relationship: peer_of
+          use: Both S-CSCF ↔ HSS. Jointly spiking = HSS issue.
+        disambiguators: []
+        how_to_verify_live:
+          tool: run_kamcmd
+        feeds_model_features:
+        - scscf.ims_registrar_scscf:sar_avg_response_time
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - sar
+        - latency
+      sip_error_ratio:
+        display_name: S-CSCF SIP error response ratio
+        source: derived
+        type: ratio
+        unit: ratio
+        protocol: SIP
+        interface: Mw
+        plane: control
+        description: 'Same formula as P-CSCF sip_error_ratio but at S-CSCF.
+
+          '
+        meaning:
+          what_it_signals: 'S-CSCF is emitting error responses — internal issue or backend fault.
+
+            '
+          spike: Internal S-CSCF errors or HSS issues causing failures.
+          zero: Healthy default.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
+        event_triggers: []
+        related_metrics:
+        - metric: ims.icscf.sip_error_ratio
+          relationship: peer_of
+        disambiguators: []
+        how_to_verify_live:
+          tool: get_nf_metrics
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - sip
+        - errors
+      tmx:active_transactions:
+        source: kamcmd
+        type: counter
+        description: Active SIP transactions at S-CSCF. Expected 0.
+        healthy:
+          scale_independent: true
+        expected: 0
+  smf:
+    layer: core
+    metrics:
+      bearers_active:
+        source: prometheus
+        type: counter
+        description: Active QoS bearers. 4 at rest (default bearers), rises to 6 during VoNR call (2 dedicated
+          voice QoS flows).
+        healthy:
+          scale_independent: false
+          invariant: 'At rest: one default bearer per PDU session (2 per UE). During VoNR call: +1 dedicated
+            QoS bearer per active voice session per caller. Per-UE ratio is the invariant.'
+          during_call: 6
+        expected: 4
+        note: Rises to 6 during active VoNR call (2 dedicated QoS flows for voice)
+      bearers_per_ue:
+        display_name: Active QoS bearers per UE
+        source: derived
+        type: derived
+        unit: count
+        protocol: PFCP
+        interface: N4
+        plane: control
+        description: 'Normalized gauge: smf.bearers_active / ran_ue. At rest, ~2 (default
+
+          bearers only). During active VoNR calls, rises by 1 per caller as
+
+          a dedicated voice QoS flow is established.
+
+          '
+        meaning:
+          what_it_signals: 'Per-UE count of active QoS bearers. Baseline reflects default
+
+            bearers; increments during VoNR calls indicate dedicated voice
+
+            bearers being set up. Drop during an active call = dedicated
+
+            bearer torn down unexpectedly (voice will fail).
+
+            '
+          spike: Expected during VoNR calls (1 extra bearer per active call).
+          drop: Lost bearers. If sustained during a call, voice path is broken.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 2.0
+          - 3.5
+          invariant: 'At rest: equals configured default bearers (typically 2 per UE).
+
+            During active VoNR call: +1 per caller. The per-UE ratio is the
+
+            invariant; absolute count scales with UE pool.
+
+            '
+        event_triggers: []
+        related_metrics:
+        - metric: core.smf.sessions_per_ue
+          relationship: correlated_with
+          use: Both SMF-driven. Jointly drop = SMF control plane issue.
+        - metric: ims.pcscf.dialogs_per_ue
+          relationship: correlated_with
+          use: Bearer per UE rises during VoNR calls; dialogs_per_ue rises in parallel.
+        disambiguators: []
+        how_to_verify_live:
+          tool: get_nf_metrics
+          args_hint: Fetch SMF snapshot; compare with dialogs_per_ue at P-CSCF.
+        applicable_use_cases:
+        - vonr
+        tags:
+        - core
+        - qos
+        - bearer
+      fivegs_smffunction_sm_pdusessioncreationreq:
+        source: prometheus
+        type: counter
+        description: PDU session creation requests (counter).
+        healthy:
+          scale_independent: true
+      fivegs_smffunction_sm_pdusessioncreationsucc:
+        source: prometheus
+        type: counter
+        description: Successful PDU session creations (counter). Gap from creation requests = failures.
+        healthy:
+          scale_independent: true
+      fivegs_smffunction_sm_sessionnbr:
+        source: prometheus
+        type: counter
+        description: Active PDU sessions managed by the SMF. Each UE establishes 2 (internet + IMS APN).
+        healthy:
+          scale_independent: false
+          invariant: sessionnbr == ues_active * configured_apns_per_ue. Ratio is the invariant; absolute
+            value scales with UE count.
+          condition: 2 UEs x 2 PDU sessions each
+        expected: 4
+      pfcp_sessions_active:
+        source: prometheus
+        type: counter
+        description: Active PFCP sessions between SMF and UPF. Should track PDU session count.
+        healthy:
+          scale_independent: false
+          invariant: pfcp_sessions_active == fivegs_smffunction_sm_sessionnbr. Any divergence = SMF/UPF
+            state desync.
+        expected: 4
+      sessions_per_ue:
+        display_name: PDU sessions per attached UE
+        source: derived
+        type: derived
+        unit: count
+        protocol: PFCP
+        interface: N4
+        plane: control
+        description: 'Normalized gauge computed as fivegs_smffunction_sm_sessionnbr / ran_ue.
+
+          Should be approximately constant (~2 in this deployment: one internet
+
+          APN + one IMS APN per UE).
+
+          '
+        meaning:
+          what_it_signals: 'Ratio of established PDU sessions to RAN-attached UEs. Constant under
+
+            healthy operation (depends on configured APNs per UE). Drift means
+
+            some UEs lost or failed to establish their sessions — usually points
+
+            to SMF or UPF control-plane issues, since attachment (ran_ue) is
+
+            independent of session establishment.
+
+            '
+          drop: Some UEs have fewer PDU sessions than they should. Likely SMF or PFCP (N4) issues.
+          spike: More sessions than expected — likely stale sessions not cleaned up after detach.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 1.9
+          - 2.1
+          invariant: Constant equal to configured_apns_per_ue (typically 2). Scale-independent.
+        event_triggers:
+        - id: core.smf.sessions_per_ue_drop
+          trigger: current < 1.5 and prior_stable(window='5m') >= 1.9 and sustained_lt(1.8, min_duration='60s')
+          clear_condition: sustained_gt(1.9, min_duration='30s')
+          local_meaning: 'PDU sessions per UE has fallen below the expected constant.
+
+            Indicates session establishment or persistence failure.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: core.amf.ran_ue_sudden_drop
+            composite_interpretation: UEs detaching, sessions torn down — RAN-triggered
+          - event_id: core.upf.pfcp_issue
+            composite_interpretation: UPF-side PFCP issue — sessions failing at UPF
+        related_metrics:
+        - metric: core.amf.ran_ue
+          relationship: correlated_with
+          use: Denominator for this ratio. If ran_ue drops, sessions_per_ue can stay constant (both numerator
+            and denominator drop together).
+        - metric: core.smf.bearers_per_ue
+          relationship: correlated_with
+          use: Both ride on SMF/UPF session infrastructure. Drop in both = SMF/UPF fault.
+        disambiguators:
+        - metric: core.amf.ran_ue
+          separates: SMF/UPF fault (ran_ue stable but sessions_per_ue dropping) vs. general attachment
+            issue (both dropping)
+        how_to_verify_live:
+          tool: get_nf_metrics
+          args_hint: Fetch SMF and AMF snapshots; compute ratio.
+        applicable_use_cases:
+        - 5g_core
+        - vonr
+        tags:
+        - core
+        - pdu_session
+        - smf
+      ues_active:
+        source: prometheus
+        type: counter
+        description: Number of UEs with active PDU sessions on this SMF.
+        healthy:
+          scale_independent: false
+          invariant: Typically equals amf.ran_ue in healthy VoNR mode. Drift between SMF ues_active and
+            AMF ran_ue indicates session-establishment problems.
+        expected: 2
+  upf:
+    layer: core
+    metrics:
+      fivegs_ep_n3_gtp_indatapktn3upf:
+        source: prometheus
+        type: counter
+        description: Cumulative GTP-U packets received on N3 (gNB to UPF) since UPF started. Must be incrementing
+          for healthy data plane.
+        healthy:
+          scale_independent: true
+        alarm_if: = 0 or stopped incrementing
+        note: Must be > 0 and incrementing for healthy data plane. Zero = data plane dead.
+      fivegs_ep_n3_gtp_indatavolumeqosleveln3upf:
+        source: prometheus
+        type: counter
+        description: Cumulative bytes received on N3 interface since UPF started. Used to compute throughput
+          rate.
+        healthy:
+          scale_independent: true
+      fivegs_ep_n3_gtp_outdatapktn3upf:
+        source: prometheus
+        type: counter
+        description: Cumulative GTP-U packets sent on N3 (UPF to gNB) since UPF started. Must be incrementing.
+        healthy:
+          scale_independent: true
+        alarm_if: = 0 or stopped incrementing
+        note: Must be > 0 and incrementing. Zero = data plane dead.
+      fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf:
+        source: prometheus
+        type: counter
+        description: Cumulative bytes sent on N3 interface since UPF started. Used to compute throughput
+          rate.
+        healthy:
+          scale_independent: true
+      fivegs_upffunction_upf_sessionnbr:
+        source: prometheus
+        type: counter
+        description: Active PFCP sessions on the UPF. Should match SMF session count.
+        healthy:
+          scale_independent: false
+          invariant: upf_sessionnbr == smf.pfcp_sessions_active. Divergence = SMF/UPF desync or PFCP heartbeat
+            failure.
+        expected: 4
+      gtp_indatapktn3upf_per_ue:
+        display_name: GTP-U uplink rate per UE (N3)
+        source: derived
+        type: derived
+        unit: packets_per_second
+        protocol: GTP-U
+        interface: N3
+        plane: user
+        raw_sources:
+        - fivegs_ep_n3_gtp_indatapktn3upf
+        description: 'Per-UE rate of GTP-U packets arriving at the UPF from gNB on N3
+
+          (uplink). Sliding 30-second window rate divided by attached UE count.
+
+          The underlying raw Prometheus counter `fivegs_ep_n3_gtp_indatapktn3upf`
+
+          is a lifetime cumulative total — its absolute value carries
+
+          accumulated UERANSIM keepalive noise across the container''s
+
+          entire uptime and is NOT a current rate. Use this derived
+
+          per-UE form (or the screener''s anomaly flag on it) for current
+
+          activity reasoning.
+
+          '
+        meaning:
+          what_it_signals: 'Health of the uplink user-plane path gNB → UPF. Drops to near-zero
+
+            during RAN or N3 outage; stays nonzero during active calls or data
+
+            sessions. Decoupled from SIP signaling (signals data plane, not
+
+            control plane).
+
+            '
+          drop: Either UEs not generating uplink traffic (no calls/data) or N3 path is degraded.
+          zero: Data plane dead on uplink — UPF receiving no packets from gNB.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 10.0
+          invariant: Per-UE — constant regardless of UE pool size. Rises during active VoNR calls (~100
+            pps for G.711 voice) and data transfer.
+        event_triggers:
+        - id: core.upf.gtp_uplink_drop
+          trigger: current < 0.1 and prior_stable(window='5m') > 1.0 and sustained_lt(0.3, min_duration='60s')
+          clear_condition: sustained_gt(prior_stable(window='10m'), min_duration='30s')
+          local_meaning: 'GTP-U uplink packets per UE collapsed to near-zero despite prior
+
+            activity. Uplink data plane is down or gNB is not forwarding.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: core.amf.gnb_association_drop
+            composite_interpretation: RAN failure — no gNB means no uplink packets
+          - event_id: ims.pcscf.dialogs_silent
+            composite_interpretation: Calls failing — drop in uplink follows absence of media
+        related_metrics:
+        - metric: core.upf.gtp_outdatapktn3upf_per_ue
+          relationship: peer_of
+          use: Uplink and downlink typically move together. Asymmetry = directional path failure.
+        - metric: core.upf.upf_activity_during_calls
+          relationship: composite_of
+          use: Contributes to the upf_activity signal.
+        disambiguators:
+        - metric: core.upf.gtp_outdatapktn3upf_per_ue
+          separates: Bidirectional outage (both zero) vs. uplink-only issue (this one drops, downlink
+            fine)
+        - metric: core.amf.ran_ue
+          separates: UEs gone (ran_ue=0) vs. UEs present but no traffic (ran_ue normal, GTP drops)
+        how_to_verify_live:
+          tool: get_dp_quality_gauges
+          args_hint: Returns rate-based UPF in/out pps with in/out symmetry check.
+        applicable_use_cases:
+        - vonr
+        - 5g_core
+        tags:
+        - upf
+        - n3
+        - gtp
+        - user_plane
+      gtp_outdatapktn3upf_per_ue:
+        display_name: GTP-U downlink rate per UE (N3)
+        source: derived
+        type: derived
+        unit: packets_per_second
+        protocol: GTP-U
+        interface: N3
+        plane: user
+        raw_sources:
+        - fivegs_ep_n3_gtp_outdatapktn3upf
+        description: 'Per-UE rate of GTP-U packets leaving the UPF toward gNB on N3
+
+          (downlink). The underlying raw Prometheus counter
+
+          `fivegs_ep_n3_gtp_outdatapktn3upf` is a lifetime cumulative
+
+          total; its ratio against `fivegs_ep_n3_gtp_indatapktn3upf`
+
+          reflects accumulated traffic-pattern asymmetry, not current
+
+          packet loss. Use this derived per-UE form to reason about
+
+          current downlink health.
+
+          '
+        meaning:
+          what_it_signals: 'Health of the downlink user-plane path UPF → gNB. Typically mirrors
+
+            uplink rate during calls/data; asymmetry indicates directional
+
+            faults (e.g., UPF receiving from internet but not forwarding).
+
+            '
+          drop: Downlink data plane degraded — UPF not forwarding to gNB.
+          zero: No traffic leaving UPF toward RAN.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 10.0
+          invariant: Per-UE — constant regardless of UE pool size. Roughly symmetric with uplink during
+            healthy calls.
+        event_triggers:
+        - id: core.upf.gtp_downlink_drop
+          trigger: current < 0.1 and prior_stable(window='5m') > 1.0 and sustained_lt(0.3, min_duration='60s')
+          clear_condition: sustained_gt(prior_stable(window='10m'), min_duration='30s')
+          local_meaning: 'GTP-U downlink packets per UE collapsed. Either UPF or downstream
+
+            gNB path is degraded.
+
+            '
+          magnitude_captured:
+          - current_value
+          - prior_stable_value
+          - delta_percent
+          - first_observed_at
+          correlates_with:
+          - event_id: core.upf.gtp_uplink_drop
+            composite_interpretation: Bidirectional UPF outage — likely UPF-side fault
+          - event_id: core.amf.gnb_association_drop
+            composite_interpretation: RAN is down — no downlink destination
+        related_metrics:
+        - metric: core.upf.gtp_indatapktn3upf_per_ue
+          relationship: peer_of
+          use: Asymmetry between these two is diagnostic for directional faults.
+        disambiguators:
+        - metric: core.upf.gtp_indatapktn3upf_per_ue
+          separates: UPF dropping outbound (this zero, inbound normal) vs. bidirectional outage (both
+            zero)
+        how_to_verify_live:
+          tool: get_dp_quality_gauges
+          args_hint: Check UPF in/out symmetry in the output.
+        applicable_use_cases:
+        - vonr
+        - 5g_core
+        tags:
+        - upf
+        - n3
+        - gtp
+        - user_plane
+      upf_activity_during_calls:
+        display_name: UPF activity consistency with active dialogs
+        source: derived
+        type: derived
+        unit: ratio
+        protocol: GTP-U
+        interface: N3
+        plane: user
+        description: 'Ratio of observed UPF pps to the expected pps given the number of
+
+          active dialogs. 1.0 when UPF is moving traffic consistent with active
+
+          calls; 0.0 when dialogs exist but no traffic is flowing (media plane
+
+          broken while signaling appears healthy).
+
+          '
+        meaning:
+          what_it_signals: 'Cross-layer consistency check between IMS dialog state and UPF
+
+            throughput. A drop while dialogs_per_ue is non-zero is a
+
+            smoking-gun signal for media-plane failure independent of signaling.
+
+            '
+          drop: Active calls reported but no media flowing — media path broken (UPF, RTPEngine, or N3
+            packet loss).
+          steady_non_zero: ~1.0 during healthy calls.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.3
+          - 1.0
+          invariant: 1.0 when traffic fully follows active calls; 0.0 when signaling says active but data
+            plane is silent.
+        event_triggers:
+        - id: core.upf.activity_during_calls_collapsed
+          trigger: current < 0.2 and related('ims.pcscf.dialogs_per_ue') > 0.5
+          clear_condition: current > 0.5
+          local_meaning: 'Active IMS dialogs exist but UPF is not moving proportional
+
+            traffic. Media plane has failed while signaling is up.
+
+            '
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: core.upf.gtp_uplink_drop
+            composite_interpretation: UPF failure — media dropped despite active calls
+          - event_id: ims.rtpengine.errors_nonzero
+            composite_interpretation: RTPEngine relay errors active — media path degraded
+        related_metrics:
+        - metric: ims.pcscf.dialogs_per_ue
+          relationship: correlated_with
+          use: This ratio depends on dialogs_per_ue as the denominator expected traffic.
+        - metric: core.upf.gtp_outdatapktn3upf_per_ue
+          relationship: composite_of
+          use: Computed from GTP rates + dialog count.
+        disambiguators:
+        - metric: ims.rtpengine.errors_per_second
+          separates: RTPEngine relay errors (elevated) vs. UPF-only data plane drop (RTPEngine clean)
+        how_to_verify_live:
+          tool: get_dp_quality_gauges
+          args_hint: Returns UPF in/out pps, RTPEngine sessions; correlate.
+        applicable_use_cases:
+        - vonr
+        tags:
+        - upf
+        - consistency
+        - cross_layer
+      upf_bytes_in:
+        source: prometheus
+        type: counter
+        description: Cumulative bytes received on N3 (gNB to UPF) since UPF started. Counter from Prometheus.
+        healthy:
+          scale_independent: true
+      upf_bytes_out:
+        source: prometheus
+        type: counter
+        description: Cumulative bytes sent on N3 (UPF to gNB) since UPF started. Counter from Prometheus.
+        healthy:
+          scale_independent: true
+      upf_kbps:
+        source: get_dp_quality_gauges
+        type: gauge
+        description: GTP-U throughput (in + out) through the UPF, computed as rate between consecutive
+          5-second Prometheus polls. Includes all PDU session traffic (SIP signaling + RTP media). ~16
+          KB/s during healthy G.711 call.
+        healthy:
+          scale_independent: true
+          during_call: 16
+        alarm_if: = 0 with active sessions (data plane dead) or < 10 during call (degraded)
+        note: GTP-U throughput on voice bearer (QFI=1), computed from consecutive byte-volume snapshots.
+          ~16 KB/s during healthy G.711 bidirectional call.
+      upf_sessions:
+        source: prometheus
+        type: gauge
+        description: Number of active PDU sessions on the UPF. Each UE establishes 2 (internet + IMS APN),
+          so 2 UEs = 4 sessions.
+        healthy:
+          scale_independent: true

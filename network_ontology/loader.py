@@ -24,7 +24,17 @@ _SCHEMA_DIR = Path(__file__).resolve().parent / "schema"
 def _load_yaml(name: str) -> dict:
     path = _DATA_DIR / name
     with open(path) as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    # Schema check: warn on unknown keys. Never blocks the load — the
+    # goal is to surface silent-drop bugs (YAML author added a field,
+    # loader doesn't know about it) without failing a reseed for what
+    # might be a harmless typo.
+    try:
+        from .schema import validate_yaml
+        validate_yaml(name, data)
+    except Exception as exc:  # pragma: no cover — defensive
+        log.warning("schema validation for %s raised unexpectedly: %s", name, exc)
+    return data
 
 
 def load_constraints(tx):
@@ -181,15 +191,29 @@ def load_interfaces(tx):
 
 
 def load_causal_chains(tx):
-    """Load CausalChain nodes and symptom relationships from causal_chains.yaml."""
+    """Load CausalChain nodes and symptom relationships from causal_chains.yaml.
+
+    The cascading_symptoms structure is "branch-first": each entry is a
+    named branch describing one cascading consequence path, carrying its
+    own mechanism, flow source_steps, observable_metrics, and (optional)
+    discriminating_from hint. Negative branches (condition/effect pairs
+    that explicitly rule out a plausible-but-wrong interpretation) are
+    first-class — load them with the same shape so agents can see them.
+    """
+    import json
     data = _load_yaml("causal_chains.yaml")
     for chain_id, chain in data["causal_chains"].items():
-        # Create CausalChain node
+        # --- CausalChain node ---------------------------------------------
         affected_interface = chain.get("affected_interface", "")
         if isinstance(affected_interface, list):
             affected_interface = ",".join(affected_interface)
 
-        possible_causes = chain.get("possible_causes", [])
+        affected_protocol = chain.get("affected_protocol", "")
+        if isinstance(affected_protocol, list):
+            affected_protocol = ",".join(affected_protocol)
+
+        convergence = chain.get("convergence_point")
+        convergence_json = json.dumps(convergence) if convergence else ""
 
         tx.run("""
             MERGE (cc:CausalChain {id: $id})
@@ -198,96 +222,193 @@ def load_causal_chains(tx):
                 cc.affected_protocol = $affected_protocol,
                 cc.failure_domain = $failure_domain,
                 cc.severity = $severity,
-                cc.possible_causes = $possible_causes
+                cc.possible_causes = $possible_causes,
+                cc.convergence_point_json = $convergence_json,
+                cc.hypothesis_testing = $hypothesis_testing
         """,
             id=chain_id,
             description=chain["description"],
             affected_interface=affected_interface,
-            affected_protocol=chain.get("affected_protocol", ""),
+            affected_protocol=affected_protocol,
             failure_domain=chain["failure_domain"],
             severity=chain["severity"],
-            possible_causes=possible_causes,
+            possible_causes=chain.get("possible_causes", []),
+            convergence_json=convergence_json,
+            hypothesis_testing=chain.get("hypothesis_testing", "") or "",
         )
 
-        # Create Symptom nodes from observable_symptoms.immediate
-        observable = chain.get("observable_symptoms", {})
-        for i, effect in enumerate(observable.get("immediate", [])):
+        # --- Immediate symptoms -------------------------------------------
+        # Accepted key variants:
+        #   {metric, becomes|state, at, lag, description}
+        #   {symptom, source, at?, affected?, note?}
+        #   {log, at}
+        #   {from, to, affected}
+        observable = chain.get("observable_symptoms", {}) or {}
+        for i, effect in enumerate(observable.get("immediate", []) or []):
             symptom_id = f"{chain_id}_imm_{i}"
-            metric = effect.get("metric", effect.get("log", ""))
             at = effect.get("at", "")
             if isinstance(at, list):
                 at = ",".join(at)
+            affected = effect.get("affected", [])
+            if isinstance(affected, list):
+                affected = ",".join(affected)
 
             tx.run("""
                 MERGE (s:Symptom {id: $sid})
-                SET s.metric = $metric,
+                SET s.type = 'immediate',
+                    s.metric = $metric,
+                    s.log_pattern = $log_pattern,
+                    s.symptom_text = $symptom_text,
                     s.expected_value = $becomes,
-                    s.lag = $lag,
-                    s.description = $description,
+                    s.source_tool = $source_tool,
                     s.observed_at = $at,
-                    s.type = 'immediate'
+                    s.affected = $affected,
+                    s.from_component = $from_comp,
+                    s.to_component = $to_comp,
+                    s.note = $note,
+                    s.lag = $lag,
+                    s.description = $description
             """,
                 sid=symptom_id,
-                metric=str(metric),
+                metric=str(effect.get("metric", "")),
+                log_pattern=str(effect.get("log", "")),
+                symptom_text=str(effect.get("symptom", "")),
                 becomes=str(effect.get("becomes", effect.get("state", ""))),
+                source_tool=str(effect.get("source", "")),
+                at=at,
+                affected=affected,
+                from_comp=str(effect.get("from", "")),
+                to_comp=str(effect.get("to", "")),
+                note=str(effect.get("note", "")),
                 lag=str(effect.get("lag", "")),
                 description=str(effect.get("description", "")),
-                at=at,
             )
-
             tx.run("""
                 MATCH (cc:CausalChain {id: $chain_id})
                 MATCH (s:Symptom {id: $sid})
                 MERGE (cc)-[:CAUSES_SYMPTOM {order: $order, type: 'immediate'}]->(s)
             """, chain_id=chain_id, sid=symptom_id, order=i)
 
-        # Create Symptom nodes from observable_symptoms.cascading
-        for i, effect in enumerate(observable.get("cascading", [])):
+        # --- Cascading symptoms (branch-first) ----------------------------
+        # New shape: {branch, condition, effect, mechanism, source_steps,
+        #             observable_metrics, discriminating_from}
+        # source_steps are stored as a list of "flow.step_N" string refs;
+        # the explicit (Symptom)-[:DERIVES_FROM_STEP]->(FlowStep) edges
+        # are wired up by `link_symptoms_to_flow_steps` after flows load.
+        for i, effect in enumerate(observable.get("cascading", []) or []):
             symptom_id = f"{chain_id}_casc_{i}"
+            branch_name = effect.get("branch", "") or ""
+            source_steps = effect.get("source_steps", []) or []
+            observable_metrics = effect.get("observable_metrics", []) or []
+            # Flatten observable_metrics entries to strings (YAML authors
+            # sometimes write commented or structured entries)
+            observable_metrics = [str(m) for m in observable_metrics]
+
             tx.run("""
                 MERGE (s:Symptom {id: $sid})
-                SET s.condition = $condition,
+                SET s.type = 'cascading',
+                    s.branch = $branch,
+                    s.condition = $condition,
                     s.description = $description,
-                    s.lag = $lag,
-                    s.type = 'cascading'
+                    s.mechanism = $mechanism,
+                    s.source_steps = $source_steps,
+                    s.observable_metrics = $observable_metrics,
+                    s.discriminating_from = $discriminating_from,
+                    s.lag = $lag
             """,
                 sid=symptom_id,
-                condition=effect.get("condition", ""),
-                description=effect.get("effect", effect.get("description", "")),
+                branch=str(branch_name),
+                condition=str(effect.get("condition", "")),
+                description=str(effect.get("effect", effect.get("description", ""))),
+                mechanism=str(effect.get("mechanism", "")),
+                source_steps=[str(s) for s in source_steps],
+                observable_metrics=observable_metrics,
+                discriminating_from=str(effect.get("discriminating_from", "")),
                 lag=str(effect.get("lag", "")),
             )
-
             tx.run("""
                 MATCH (cc:CausalChain {id: $chain_id})
                 MATCH (s:Symptom {id: $sid})
-                MERGE (cc)-[:CAUSES_SYMPTOM {order: $order, type: 'cascading'}]->(s)
-            """, chain_id=chain_id, sid=symptom_id, order=100 + i)
+                MERGE (cc)-[:CAUSES_SYMPTOM {order: $order, type: 'cascading', branch: $branch}]->(s)
+            """, chain_id=chain_id, sid=symptom_id, order=100 + i, branch=str(branch_name))
 
-        # Store does_NOT_mean
+        # --- does_NOT_mean (chain-level, for chains that retain it) -------
         does_not_mean = chain.get("does_NOT_mean", [])
         if does_not_mean:
+            if isinstance(does_not_mean, str):
+                does_not_mean = [does_not_mean]
             tx.run("""
                 MATCH (cc:CausalChain {id: $chain_id})
                 SET cc.does_not_mean = $dnm
-            """, chain_id=chain_id, dnm=does_not_mean)
+            """, chain_id=chain_id, dnm=[str(x) for x in does_not_mean])
 
-        # Store diagnostic_approach
-        for j, action in enumerate(chain.get("diagnostic_approach", [])):
+        # --- diagnostic_approach ------------------------------------------
+        # Each action is a dict {tool, args?, purpose, priority} (or the
+        # ims_signaling_chain_degraded variant with {tools, step, ...}).
+        # Serialize each as JSON so the structure roundtrips cleanly to
+        # the agent-facing tool output.
+        actions = chain.get("diagnostic_approach", []) or []
+        actions_json = [json.dumps(a, default=str) for a in actions]
+        if actions_json:
             tx.run("""
                 MATCH (cc:CausalChain {id: $chain_id})
-                SET cc.diagnostic_actions = coalesce(cc.diagnostic_actions, []) + [$action]
-            """, chain_id=chain_id, action=str(action))
+                SET cc.diagnostic_approach_json = $actions_json
+            """, chain_id=chain_id, actions_json=actions_json)
 
-        # Store key_diagnostic_signal
-        signals = chain.get("key_diagnostic_signal", [])
+        # --- key_diagnostic_signal ----------------------------------------
+        signals = chain.get("key_diagnostic_signal", []) or []
         if signals:
             tx.run("""
                 MATCH (cc:CausalChain {id: $chain_id})
                 SET cc.key_diagnostic_signal = $signals
-            """, chain_id=chain_id, signals=signals)
+            """, chain_id=chain_id, signals=[str(s) for s in signals])
 
     count = len(data["causal_chains"])
     log.info("Loaded %d causal chains.", count)
+
+
+def link_symptoms_to_flow_steps(tx):
+    """Wire Symptom.source_steps string refs to FlowStep nodes.
+
+    Must run after load_flows, since FlowStep nodes don't exist before
+    that. The ref format is `"<flow_id>.step_<order>"` (matching the
+    step node id `{flow_id}_step_{order}`). Missing refs are warned
+    but not fatal — loader continues.
+    """
+    # Gather all symptoms that have non-empty source_steps
+    result = tx.run("""
+        MATCH (s:Symptom)
+        WHERE s.source_steps IS NOT NULL AND size(s.source_steps) > 0
+        RETURN s.id AS sid, s.source_steps AS refs
+    """)
+    rows = [(r["sid"], r["refs"]) for r in result]
+
+    linked = 0
+    missing = []
+    for sid, refs in rows:
+        for ref in refs:
+            # "vonr_call_setup.step_2" → "vonr_call_setup_step_2"
+            if "." not in ref:
+                missing.append((sid, ref, "malformed (no dot)"))
+                continue
+            flow_id, step_suffix = ref.split(".", 1)
+            step_node_id = f"{flow_id}_{step_suffix}"
+            r = tx.run("""
+                MATCH (s:Symptom {id: $sid})
+                MATCH (fs:FlowStep {id: $step_id})
+                MERGE (s)-[:DERIVES_FROM_STEP {ref: $ref}]->(fs)
+                RETURN count(fs) AS n
+            """, sid=sid, step_id=step_node_id, ref=ref)
+            n = r.single()["n"]
+            if n:
+                linked += 1
+            else:
+                missing.append((sid, ref, f"no FlowStep with id {step_node_id}"))
+
+    log.info("Linked %d Symptom→FlowStep relationships.", linked)
+    if missing:
+        for sid, ref, reason in missing:
+            log.warning("source_steps link skipped: %s -> %s (%s)", sid, ref, reason)
 
 
 def load_log_patterns(tx):
@@ -628,8 +749,16 @@ def load_all(uri: str = "bolt://localhost:7687", auth: tuple = ("neo4j", "ontolo
         session.execute_write(load_signatures)
         session.execute_write(load_stack_rules)
         session.execute_write(load_healthchecks)
-        session.execute_write(load_baselines)
+        # baselines.yaml was retired in Phase 4 — all 77 entries were
+        # migrated into network_ontology/data/metrics.yaml (metric_kb
+        # format), and `compare_to_baseline` now reads from the Python
+        # MetricsKB instead of Neo4j :Metric nodes. Leaving this call
+        # disabled rather than removing the function means a one-line
+        # rollback is possible if any regression appears.
+        # session.execute_write(load_baselines)
         session.execute_write(load_flows)
+        # Must run after load_flows: needs FlowStep nodes to exist.
+        session.execute_write(link_symptoms_to_flow_steps)
 
     driver.close()
     log.info("Ontology loading complete.")

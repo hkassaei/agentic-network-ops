@@ -1,7 +1,7 @@
 {
-  "trained_at": "2026-04-24T19:03:17.598948+00:00",
-  "duration_seconds": 1591,
-  "n_samples": 209,
+  "trained_at": "2026-04-28T01:57:47.502243+00:00",
+  "duration_seconds": 810,
+  "n_samples": 104,
   "n_features": 30,
   "feature_keys": [
     "derived.icscf_lir_timeout_ratio",
@@ -36,5 +36,5 @@
     "scscf.ims_registrar_scscf:sar_avg_response_time"
   ],
   "model_ready": true,
-  "training_samples": 209
+  "training_samples": 104
 }

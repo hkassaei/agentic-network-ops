@@ -33,19 +33,22 @@ from agentic_ops_v6.orchestrator import (
 # ============================================================================
 
 def test_rank_drops_untestable():
-    hypotheses = [
-        Hypothesis(
-            id="h1", statement="testable", primary_suspect_nf="amf",
-            explanatory_fit=0.9,
-            falsification_probes=["probe1"],
-        ),
-        Hypothesis(
-            id="h2", statement="untestable", primary_suspect_nf="amf",
-            explanatory_fit=0.99,  # higher fit but no probes
-            falsification_probes=[],
-        ),
-    ]
-    ranked = _rank_and_cap_hypotheses(hypotheses)
+    # The schema now requires `falsification_probes` to be non-empty,
+    # so a probe-less Hypothesis can't be constructed via normal
+    # validation. The orchestrator's defensive filter still exists
+    # in case the empty-sentinel path (model_construct) lets one
+    # through. Test that the filter still drops it.
+    h_testable = Hypothesis(
+        id="h1", statement="testable", primary_suspect_nf="amf",
+        explanatory_fit=0.9,
+        falsification_probes=["probe1"],
+    )
+    h_untestable = Hypothesis.model_construct(
+        id="h2", statement="untestable", primary_suspect_nf="amf",
+        explanatory_fit=0.99, falsification_probes=[], specificity="moderate",
+        supporting_events=[],
+    )
+    ranked = _rank_and_cap_hypotheses([h_testable, h_untestable])
     assert len(ranked) == 1
     assert ranked[0].id == "h1"
 
@@ -141,17 +144,48 @@ def test_parse_network_analysis_from_dict():
 
 
 def test_parse_network_analysis_from_json_string():
+    # Tightened schema requires `summary` non-empty and `hypotheses`
+    # min_length=1, so the fixture supplies a minimal valid hypothesis.
     data = {
-        "summary": "X", "layer_status": {}, "hypotheses": [],
+        "summary": "X",
+        "layer_status": {},
+        "hypotheses": [
+            {
+                "id": "h1",
+                "statement": "test",
+                "primary_suspect_nf": "amf",
+                "falsification_probes": ["p"],
+            }
+        ],
     }
     report = _parse_network_analysis(json.dumps(data))
     assert report.summary == "X"
+    assert len(report.hypotheses) == 1
 
 
 def test_parse_network_analysis_handles_garbage():
-    """Bad input should yield a minimal report, not crash."""
+    """Bad input should yield the empty sentinel, not crash."""
     report = _parse_network_analysis("not a json string")
+    # Sentinel uses model_construct, sets summary to an unparseable
+    # message and `hypotheses=[]` so downstream skips Phase 4 cleanly.
     assert "unparseable" in report.summary
+    assert report.hypotheses == []
+
+
+def test_parse_network_analysis_handles_schema_violation():
+    """Empty hypotheses list violates the new min_length=1 constraint —
+    helper must catch and return the empty sentinel rather than crash."""
+    report = _parse_network_analysis({"summary": "x", "hypotheses": []})
+    assert report.hypotheses == []
+    # Summary should reflect that something went wrong, not be ""
+    assert report.summary != ""
+
+
+def test_parse_network_analysis_handles_none():
+    """Missing input → empty sentinel (orchestrator's first-call case)."""
+    report = _parse_network_analysis(None)
+    assert report.hypotheses == []
+    assert report.summary != ""
 
 
 def test_parse_plan_set_from_dict():
@@ -204,7 +238,6 @@ def test_parse_plan_set_empty_on_invalid_input():
 # ============================================================================
 
 def test_pretty_print_na_report_includes_all_hypotheses():
-    na = NetworkAnalystReport(summary="summary text")
     hs = [
         Hypothesis(
             id="h1", statement="first hyp", primary_suspect_nf="amf",
@@ -215,6 +248,8 @@ def test_pretty_print_na_report_includes_all_hypotheses():
             explanatory_fit=0.6, falsification_probes=["p3"],
         ),
     ]
+    # NA report must include the hypotheses to satisfy schema (min_length=1).
+    na = NetworkAnalystReport(summary="summary text", hypotheses=hs)
     text = _pretty_print_na_report(na, hs)
     assert "first hyp" in text
     assert "second hyp" in text
@@ -223,8 +258,13 @@ def test_pretty_print_na_report_includes_all_hypotheses():
 
 
 def test_no_hypotheses_diagnosis_is_structured():
-    """The no-hypotheses fallback produces valid markdown fields."""
-    na = NetworkAnalystReport(summary="saw nothing")
+    """The no-hypotheses fallback produces valid markdown fields. The
+    NA sentinel uses model_construct because the live schema requires
+    >= 1 hypothesis; this test exercises the rendering of that
+    sentinel."""
+    na = NetworkAnalystReport.model_construct(
+        summary="saw nothing", layer_status={}, hypotheses=[],
+    )
     text = _render_no_hypotheses_diagnosis(na)
     assert "**summary**" in text
     assert "**root_cause**" in text

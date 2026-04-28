@@ -601,9 +601,33 @@ async def investigate(
 # Helpers
 # ============================================================================
 
+def _empty_na_report(reason: str) -> NetworkAnalystReport:
+    """Sentinel "NA produced nothing usable" value the orchestrator can
+    pass downstream when NA fails. The live schema now requires
+    `summary` to be non-empty and `hypotheses` to have at least 1
+    entry, so a plain `NetworkAnalystReport(summary="...")` with no
+    hypotheses no longer instantiates via normal validation. Use
+    `model_construct` to bypass — downstream code reads `.hypotheses`
+    as `[]`, which the orchestrator already handles by skipping
+    Phase 4 with the "No testable hypotheses" branch.
+    """
+    return NetworkAnalystReport.model_construct(
+        summary=reason, layer_status={}, hypotheses=[],
+    )
+
+
 def _parse_network_analysis(raw: Any) -> NetworkAnalystReport:
+    """Parse the NA's structured output into a NetworkAnalystReport.
+
+    Returns a validation-bypassed empty sentinel when the input is
+    missing or invalid. Validation can fail under the tightened
+    schema (min_length=1 hypotheses, _KnownNF Literal, etc.) when
+    Gemini's `tools + output_schema` short-circuit produces malformed
+    output — the same pathology that caused the Apr-28 p_cscf_latency
+    regression. Downstream sees `.hypotheses == []` and skips Phase 4.
+    """
     if raw is None:
-        return NetworkAnalystReport(summary="NA produced no output")
+        return _empty_na_report("NA produced no output")
     try:
         if isinstance(raw, str):
             data = json.loads(raw)
@@ -612,7 +636,7 @@ def _parse_network_analysis(raw: Any) -> NetworkAnalystReport:
         return NetworkAnalystReport(**data)
     except Exception as e:
         log.warning("Could not parse NA output: %s", e)
-        return NetworkAnalystReport(summary=f"NA output unparseable: {e}")
+        return _empty_na_report(f"NA output unparseable: {e}")
 
 
 def _empty_plan_set() -> FalsificationPlanSet:

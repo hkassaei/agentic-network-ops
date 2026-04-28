@@ -25,6 +25,31 @@ from agentic_ops_common.models import (  # noqa: F401
 
 
 # ============================================================================
+# Shared enumerated types — used by multiple agent schemas
+# ============================================================================
+
+# Enumerated NF names the agents may name as a primary suspect.
+# Matches NF_LAYER in agentic_ops_common.metric_kb.feature_mapping —
+# the same source of truth used by flag-enrichment and raw-lookup. Used
+# by both `Hypothesis.primary_suspect_nf` (NetworkAnalyst output) and
+# `FalsificationPlan.primary_suspect_nf` (InstructionGenerator output).
+# Constraining at the schema layer (Gemini's constrained decoder) means
+# the LLM cannot invent NF names like `hss` (legacy for `pyhss`) or
+# `proxy`; it must commit to a real component the rest of the pipeline
+# can route to.
+#
+# A drift-guard test in agentic_ops_v6/tests/test_wiring.py asserts
+# this stays in sync with the canonical NF list. If someone adds an NF
+# to the deployment, update both sides in the same commit.
+_KnownNF = Literal[
+    "amf", "smf", "upf", "pcf", "ausf", "udm", "udr", "nrf",
+    "pcscf", "icscf", "scscf", "pyhss", "rtpengine",
+    "mongo", "mysql", "dns",
+    "nr_gnb",
+]
+
+
+# ============================================================================
 # NetworkAnalyst output
 # ============================================================================
 
@@ -39,12 +64,16 @@ class Hypothesis(BaseModel):
     """A candidate root-cause hypothesis.
 
     Ranked by explanatory_fit first, testability second, specificity third.
-    Hypotheses without any identifiable falsification probes are DROPPED by
-    the orchestrator (testable=False won't be investigated).
+    Schema-level requirements (enforced by Gemini's constrained decoder):
+      - `primary_suspect_nf` must be a known NF name. Forecloses the
+        "Gemini invents a fake NF" failure mode observed in past runs.
+      - `falsification_probes` must contain at least 1 entry. The
+        prompt already says "untestable hypotheses are DROPPED" — the
+        schema makes that mechanical.
     """
     id: str = Field(..., description="short unique id within this episode, e.g. 'h1'")
-    statement: str = Field(..., description="specific-mechanism claim, 1-2 sentences")
-    primary_suspect_nf: str = Field(..., description="the NF this hypothesis implicates")
+    statement: str = Field(..., min_length=1, description="specific-mechanism claim, 1-2 sentences")
+    primary_suspect_nf: _KnownNF = Field(..., description="the NF this hypothesis implicates")
     supporting_events: list[str] = Field(
         default_factory=list,
         description="event_type ids observed that support this hypothesis",
@@ -54,17 +83,34 @@ class Hypothesis(BaseModel):
         description="0-1 estimate of how well this hypothesis explains observations",
     )
     falsification_probes: list[str] = Field(
-        default_factory=list,
-        description="concrete probes that would disprove this; empty = drop",
+        ...,
+        min_length=1,
+        description="concrete probes that would disprove this; >= 1 required",
     )
     specificity: Literal["specific", "moderate", "vague"] = "moderate"
 
 
 class NetworkAnalystReport(BaseModel):
-    """NA output: layer assessment + ranked hypotheses."""
-    summary: str
+    """NA output: layer assessment + ranked hypotheses.
+
+    Schema-level requirements (enforced by Gemini's constrained decoder):
+      - `summary` must be non-empty. An empty summary signals the
+        Gemini `tools + output_schema` short-circuit that produced the
+        Apr-28 `p_cscf_latency` regression.
+      - `hypotheses` must contain 1–3 entries. The prompt caps at 3
+        ("Cap: produce at most 3 hypotheses"); requiring at least 1
+        prevents the empty-output failure mode where NA emits a
+        hypotheses-less report and the orchestrator skips Phase 4
+        entirely.
+    """
+    summary: str = Field(..., min_length=1)
     layer_status: dict[str, LayerStatus] = Field(default_factory=dict)
-    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(
+        ...,
+        min_length=1,
+        max_length=3,
+        description="1–3 ranked hypotheses (the orchestrator caps parallel investigators at 3).",
+    )
 
 
 # ============================================================================
@@ -116,18 +162,9 @@ _InvestigatorTool = Literal[
     "OntologyConsultationAgent",
 ]
 
-# Enumerated NF names the agent may name as a primary suspect. Matches
-# NF_LAYER in agentic_ops_common.metric_kb.feature_mapping — the same
-# source of truth used by the flag-enrichment and raw-lookup paths.
-# Constraining this field at the schema layer prevents Gemini from
-# inventing NF names like "hss" or "proxy" and forces it to name a
-# real component the rest of the pipeline can route to.
-_KnownNF = Literal[
-    "amf", "smf", "upf", "pcf", "ausf", "udm", "udr", "nrf",
-    "pcscf", "icscf", "scscf", "pyhss", "rtpengine",
-    "mongo", "mysql", "dns",
-    "nr_gnb",
-]
+# `_KnownNF` is defined once at module-top in the "Shared enumerated
+# types" section and reused by both `Hypothesis.primary_suspect_nf`
+# (NetworkAnalyst) and `FalsificationPlan.primary_suspect_nf` (IG).
 
 
 class FalsificationProbe(BaseModel):

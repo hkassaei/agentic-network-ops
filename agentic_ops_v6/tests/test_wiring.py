@@ -207,3 +207,103 @@ def test_falsification_plan_rejects_unknown_nf():
             primary_suspect_nf="hss",  # real name is pyhss
             probes=[probe, probe],
         )
+
+
+# ============================================================================
+# NetworkAnalystReport schema enforcement (mirrors the FalsificationPlanSet
+# tests above — same Gemini failure mode, different agent's schema).
+# ============================================================================
+
+def test_network_analyst_report_requires_min_hypotheses():
+    """An NA report with 0 hypotheses must fail Pydantic validation.
+    This is the core protection against the Apr-28 p_cscf_latency
+    regression where NA emitted no hypotheses and the orchestrator
+    skipped Phase 4 entirely."""
+    from agentic_ops_v6.models import NetworkAnalystReport
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        NetworkAnalystReport(summary="x", hypotheses=[])
+
+
+def test_network_analyst_report_requires_non_empty_summary():
+    """An NA report with empty `summary` must fail. Empty summary is
+    one of the Gemini structured-output short-circuit modes — the
+    constrained decoder is forced to commit to actual content."""
+    from agentic_ops_v6.models import NetworkAnalystReport, Hypothesis
+    from pydantic import ValidationError
+
+    h = Hypothesis(
+        id="h1", statement="x", primary_suspect_nf="amf",
+        falsification_probes=["p"],
+    )
+    with pytest.raises(ValidationError):
+        NetworkAnalystReport(summary="", hypotheses=[h])
+
+
+def test_network_analyst_report_caps_hypotheses_at_3():
+    """The schema enforces what the prompt declares: at most 3
+    hypotheses per report. The orchestrator's MAX_PARALLEL_INVESTIGATORS
+    is also 3 — these stay in lockstep."""
+    from agentic_ops_v6.models import NetworkAnalystReport, Hypothesis
+    from pydantic import ValidationError
+
+    def mk(i):
+        return Hypothesis(
+            id=f"h{i}", statement=f"h{i}",
+            primary_suspect_nf="amf", falsification_probes=["p"],
+        )
+
+    # 3 OK
+    NetworkAnalystReport(summary="x", hypotheses=[mk(1), mk(2), mk(3)])
+    # 4 rejected
+    with pytest.raises(ValidationError):
+        NetworkAnalystReport(
+            summary="x", hypotheses=[mk(1), mk(2), mk(3), mk(4)],
+        )
+
+
+def test_hypothesis_requires_min_one_probe():
+    """The prompt says "Hypotheses with ZERO falsification probes are
+    DROPPED, not ranked low" — the schema makes that mechanical."""
+    from agentic_ops_v6.models import Hypothesis
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Hypothesis(
+            id="h1", statement="x", primary_suspect_nf="amf",
+            falsification_probes=[],
+        )
+
+
+def test_hypothesis_rejects_unknown_nf():
+    """Same _KnownNF Literal as FalsificationPlan — Gemini cannot
+    invent NF names like `hss` or `proxy` at the NA layer either."""
+    from agentic_ops_v6.models import Hypothesis
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Hypothesis(
+            id="h1", statement="x", primary_suspect_nf="proxy",
+            falsification_probes=["p"],
+        )
+
+
+def test_known_nf_literal_is_shared_across_na_and_ig():
+    """Drift guard — the `_KnownNF` Literal must be the same enum on
+    both `Hypothesis.primary_suspect_nf` (NetworkAnalyst output) and
+    `FalsificationPlan.primary_suspect_nf` (InstructionGenerator
+    output). If someone changes one and not the other, NA could emit
+    a hypothesis IG can't accept, breaking the pipeline."""
+    import typing
+    from agentic_ops_v6.models import Hypothesis, FalsificationPlan
+
+    na_nf = Hypothesis.model_fields["primary_suspect_nf"].annotation
+    ig_nf = FalsificationPlan.model_fields["primary_suspect_nf"].annotation
+    assert set(typing.get_args(na_nf)) == set(typing.get_args(ig_nf)), (
+        "Hypothesis.primary_suspect_nf and FalsificationPlan."
+        "primary_suspect_nf must use the same _KnownNF Literal. "
+        "If NA could name an NF that IG can't accept, downstream "
+        "schema validation would fail and Phase 4 would silently "
+        "go INCONCLUSIVE."
+    )

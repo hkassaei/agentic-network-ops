@@ -85,9 +85,56 @@ class CorrelationAnalysis(BaseModel):
 # InstructionGenerator output
 # ============================================================================
 
+# Enumerated tool names the Investigator has access to. When the
+# InstructionGenerator emits a falsification probe, the `tool` field is
+# constrained to these exact strings at Gemini's structured-output
+# decoding layer. This forecloses two Gemini failure modes observed in
+# production: (a) emitting hallucinated tool names ("log_search",
+# "tcpdump"), (b) emitting a probe with empty / plausible-prose values
+# because every required field is a free string.
+#
+# MUST stay in exact sync with `create_investigator_agent().tools=[...]`
+# in agentic_ops_v6/subagents/investigator.py. A regression test in
+# agentic_ops_v6/tests/test_wiring.py asserts the two match. If the
+# Investigator's tool list changes, update this literal in the same
+# commit.
+_InvestigatorTool = Literal[
+    "measure_rtt",
+    "check_process_listeners",
+    "get_nf_metrics",
+    "get_dp_quality_gauges",
+    "get_network_status",
+    "run_kamcmd",
+    "read_running_config",
+    "read_env_config",
+    "query_subscriber",
+    "list_flows",
+    "get_flow",
+    "get_flows_through_component",
+    "get_causal_chain",
+    "find_chains_by_observable_metric",
+    "OntologyConsultationAgent",
+]
+
+# Enumerated NF names the agent may name as a primary suspect. Matches
+# NF_LAYER in agentic_ops_common.metric_kb.feature_mapping — the same
+# source of truth used by the flag-enrichment and raw-lookup paths.
+# Constraining this field at the schema layer prevents Gemini from
+# inventing NF names like "hss" or "proxy" and forces it to name a
+# real component the rest of the pipeline can route to.
+_KnownNF = Literal[
+    "amf", "smf", "upf", "pcf", "ausf", "udm", "udr", "nrf",
+    "pcscf", "icscf", "scscf", "pyhss", "rtpengine",
+    "mongo", "mysql", "dns",
+    "nr_gnb",
+]
+
+
 class FalsificationProbe(BaseModel):
     """One concrete probe the Investigator should run."""
-    tool: str = Field(..., description="the tool name, e.g. 'measure_rtt'")
+    tool: _InvestigatorTool = Field(
+        ..., description="Must be one of the Investigator's registered tools."
+    )
     args_hint: str = Field("", description="natural-language arg guidance")
     expected_if_hypothesis_holds: str
     falsifying_observation: str
@@ -97,20 +144,40 @@ class FalsificationPlan(BaseModel):
     """Plan for falsifying ONE hypothesis.
 
     Produced by the InstructionGenerator, one per hypothesis the NA proposed.
+    Schema-level requirements (enforced by Gemini's constrained decoder at
+    generation time, not just Pydantic-side validation):
+      - `primary_suspect_nf` must be a known NF name.
+      - `probes` must have at least 2 entries and at most 4.
+    These foreclose the "schema-valid but empty" short-circuit failure
+    mode where Gemini would emit plans with zero probes or name an
+    invented NF.
     """
     hypothesis_id: str
     hypothesis_statement: str
-    primary_suspect_nf: str
+    primary_suspect_nf: _KnownNF
     probes: list[FalsificationProbe] = Field(
-        default_factory=list,
-        description="minimum 2, target 3",
+        ...,
+        min_length=2,
+        max_length=4,
+        description="2–4 probes per plan (target 3).",
     )
     notes: str = ""
 
 
 class FalsificationPlanSet(BaseModel):
-    """The full set of per-hypothesis plans the orchestrator will fan out."""
-    plans: list[FalsificationPlan] = Field(default_factory=list)
+    """The full set of per-hypothesis plans the orchestrator will fan out.
+
+    Schema-level requirement: at least one plan. The Network Analyst is
+    required to emit at least one hypothesis (upstream schema), so the
+    IG always has at least one plan to produce. An empty `plans` list is
+    a symptom of the `tools + output_schema` short-circuit and should
+    not be silently accepted.
+    """
+    plans: list[FalsificationPlan] = Field(
+        ...,
+        min_length=1,
+        description="One plan per NA hypothesis.",
+    )
 
 
 # ============================================================================

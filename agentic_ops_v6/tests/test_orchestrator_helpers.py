@@ -155,22 +155,47 @@ def test_parse_network_analysis_handles_garbage():
 
 
 def test_parse_plan_set_from_dict():
+    # The schema now requires >= 2 probes per plan and a recognized NF.
+    # Use a minimally-valid shape so this test stays focused on the
+    # dict->model deserialization path, not on schema constraints
+    # (those are covered by tests in test_wiring.py).
+    probe = {
+        "tool": "measure_rtt",
+        "args_hint": "amf → icscf",
+        "expected_if_hypothesis_holds": "100% loss",
+        "falsifying_observation": "clean RTT",
+    }
     data = {"plans": [
         {
             "hypothesis_id": "h1",
             "hypothesis_statement": "test",
             "primary_suspect_nf": "amf",
-            "probes": [],
+            "probes": [probe, probe],
             "notes": "",
         },
     ]}
     ps = _parse_plan_set(data)
     assert len(ps.plans) == 1
     assert ps.plans[0].hypothesis_id == "h1"
+    assert len(ps.plans[0].probes) == 2
 
 
 def test_parse_plan_set_empty_on_missing():
+    # `_parse_plan_set(None)` must still give the orchestrator an
+    # iterable `.plans` it can treat as "no plan generated" without
+    # blowing up on the tightened schema's min_length=1 constraint.
+    # The sentinel uses model_construct to bypass validation.
     ps = _parse_plan_set(None)
+    assert ps.plans == []
+
+
+def test_parse_plan_set_empty_on_invalid_input():
+    # IG flop case: state contains something non-parseable. The helper
+    # must swallow the error and return the empty sentinel, exactly as
+    # for the None case, so Phase 5 can proceed.
+    ps = _parse_plan_set("not-valid-json {")
+    assert ps.plans == []
+    ps = _parse_plan_set({"plans": "malformed"})
     assert ps.plans == []
 
 

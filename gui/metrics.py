@@ -401,7 +401,72 @@ class MetricsCollector:
         except Exception as e:
             log.debug("rtpengine-ctl: %s", e)
 
-        return {"metrics": m, "badge": badge, "source": "rtpengine-ctl"}
+        # Augment with Prometheus-sourced counters that the rtpengine-ctl
+        # output doesn't carry. These feed the anomaly preprocessor's
+        # `derived.rtpengine_loss_ratio` feature, which is the actual
+        # signal for RTCP-reported loss in our chaos scenario. The
+        # rtpengine-ctl `Packets lost` counter does NOT advance under
+        # tc-injected egress loss (verified empirically 2026-04-27);
+        # the Prometheus `rtpengine_packetloss_total` counter does
+        # because rtpengine accumulates RR-reported loss values into it
+        # at scrape time. See ADR rtpengine_loss_ratio_feature.md.
+        prom = await self._collect_rtpengine_prom()
+        m.update(prom)
+
+        return {"metrics": m, "badge": badge, "source": "rtpengine-ctl+prom"}
+
+    async def _collect_rtpengine_prom(self) -> dict[str, float]:
+        """Pull the rtpengine cumulative counters that drive the
+        loss-ratio feature from Prometheus directly.
+
+        Why two counters and not one:
+          - `rtpengine_packetloss_total` — sum of `packets_lost` values
+            reported across every RTCP RR processed. Increments only
+            when an RR carries non-zero loss.
+          - `rtpengine_packetloss_samples_total` — count of RRs
+            processed. Used as the per-sample normalizer so the feature
+            value is "average reported lost-packets per RR over the
+            window," matching what `Average packet loss` represents in
+            rtpengine-ctl's output.
+
+        The preprocessor's sliding-window rate pipeline derives rates
+        from these two counters; the derived feature is their ratio.
+        """
+        out: dict[str, float] = {}
+        queries = {
+            "prom_packetloss_total": "rtpengine_packetloss_total",
+            "prom_packetloss_samples_total": "rtpengine_packetloss_samples_total",
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                for key, q in queries.items():
+                    try:
+                        async with session.get(
+                            f"{self._prom}/api/v1/query",
+                            params={"query": q},
+                            timeout=aiohttp.ClientTimeout(total=2),
+                        ) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.json()
+                            results = data.get("data", {}).get("result", [])
+                            # Sum across all label combinations so the
+                            # caller sees a single cumulative number,
+                            # matching the rest of the rtpengine dict's
+                            # shape.
+                            total = 0.0
+                            for r in results:
+                                try:
+                                    total += float(r["value"][1])
+                                except (KeyError, IndexError, ValueError):
+                                    continue
+                            out[key] = total
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        log.debug("rtpengine prom query %s failed", q)
+                        continue
+        except Exception as e:
+            log.debug("rtpengine prom collection error: %s", e)
+        return out
 
     # -----------------------------------------------------------------
     # PyHSS (REST API)

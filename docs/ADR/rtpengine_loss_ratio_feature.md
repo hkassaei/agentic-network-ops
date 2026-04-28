@@ -1,6 +1,6 @@
 # ADR: Rate-Based RTPEngine Loss Ratio Feature
 
-**Date:** 2026-04-24
+**Date:** 2026-04-24 (revised 2026-04-27 — sensor source corrected)
 **Status:** Accepted
 **Related ADRs:**
 - [`remove_cumulative_rtpengine_features.md`](remove_cumulative_rtpengine_features.md) — the prior decision to remove rtpengine cumulative absolute values from the feature vector. This ADR does **not** reverse that decision; it refines it.
@@ -33,36 +33,57 @@ Re-admit two rtpengine counters **exclusively as inputs to the sliding-window ra
 
 One new feature:
 
-| Feature | Formula | Type | Range | Healthy |
+| Feature | Formula | Type | Healthy | Under loss |
 |---|---|---|---|---|
-| `derived.rtpengine_loss_ratio` | `packets_lost_rate / (packets_lost_rate + total_relayed_packets_rate)` | `derived` ratio | [0, 1] | 0 |
+| `derived.rtpengine_loss_ratio` | `rate(rtpengine_packetloss_total) / rate(rtpengine_packetloss_samples_total)` | `derived` (per-RR avg) | 0 | rises from 0 to tens|
+
+This is the same quantity rtpengine-ctl labels `Average packet loss`: the per-RR mean of the lost-packet counts that arrive in RTCP Receiver Reports. NOT a fraction of all packets. Empirically verified on 2026-04-27 under a real VoNR call with 30% tc-injected egress loss: value rose from 0 to ~4 at 5s into injection and continued growing past 30 by 30s. The growth happens because each RTCP Receiver Report carries a cumulative-since-call-start lost-packet count; summing across RRs and dividing by sample count gives a number that scales with both loss intensity AND call age.
+
+For anomaly detection this is exactly what we need — the healthy/lossy distinction is dramatic (0 vs tens) and the threshold (`sustained_gt(0.5)`) sits comfortably below any non-trivial loss case. For interpretation, "value 5 at one minute and 30% loss" vs "value 50 at five minutes and 10% loss" CAN both fire equivalently — the metric isn't a clean linear function of loss-percentage alone. Distinguishing loss severity precisely would require an additional sensor; this one's job is reliable detection of "loss is happening on this call's media path."
 
 Where `_rate` is the `preprocessor.py` sliding-window rate (≈30 s, 6 samples).
 
+### Sensor-source correction (2026-04-27)
+
+The original wiring of this feature read `rtpengine.packets_lost` and `rtpengine.total_relayed_packets` from `rtpengine-ctl list totals` output. Empirical testing on 2026-04-27 showed those counters do **not** advance under the chaos framework's tc-egress-loss injection — even with active RTP flowing through the relay. Direct measurement during a real VoNR call with 30% tc loss:
+
+| Counter | Source | Delta over 33 s | Notes |
+|---|---|---|---|
+| `Total relayed packets` | rtpengine-ctl | +173 | normal call traffic |
+| `Packets lost` | rtpengine-ctl | **+0** | did not respond to fault |
+| `rtpengine_packetloss_total` | Prometheus | **+304** | responds correctly |
+| qdisc internal `dropped` | `tc -s qdisc show` | +85 | ground truth |
+
+The two counter names look interchangeable but they're not. `Packets lost` from `list totals` is populated under specific RTCP-handling code paths that don't fire on this fault mode in our deployment. `rtpengine_packetloss_total` accumulates `packets_lost` values from every RTCP Receiver Report that arrives — and in our setup the receivers' RRs do come through and rtpengine does process them.
+
+The fix was a sensor-source swap: pull the two Prometheus counters via the metrics collector and use them as the rate inputs. The feature name, the event trigger, the causal chain, and `EXPECTED_FEATURE_KEYS` all stay; only the data path underneath changed.
+
 ### What the model does NOT see
 
-- `rtpengine.packets_lost` (absolute value) — never emitted as a feature; only its rate feeds into the ratio above.
-- `rtpengine.total_relayed_packets` (absolute value) — same: never emitted as a feature.
+- `rtpengine.prom_packetloss_total` (absolute value) — never emitted as a feature; only its rate feeds into the ratio above.
+- `rtpengine.prom_packetloss_samples_total` (absolute value) — same: never emitted as a feature.
+- `rtpengine.packets_lost` and `rtpengine.total_relayed_packets` from rtpengine-ctl — **dropped entirely** from `_COLLECT_METRICS` after the 2026-04-27 sensor-source correction. They were the wrong counters for this fault mode and their continued presence would only add noise.
 - `rtpengine.average_packet_loss`, `rtpengine.average_mos`, `rtpengine.packet_loss_standard_deviation`, `rtpengine.total_number_of_1_way_streams`, `rtpengine.total_relayed_packet_errors` — remain excluded per `remove_cumulative_rtpengine_features.md`. These are lifetime averages or non-loss counters whose rate form would either be meaningless (an average-of-an-average is noise) or redundant with the new ratio.
 
 ### Why rates are immune to the pollution the original ADR called out
 
-The pollution argument was: absolute values persist across chaos runs. A cumulative counter sitting at `packets_lost = 1,000,000` from prior faults looks alarming to the model, forever, regardless of what's happening right now.
+The pollution argument was: absolute values persist across chaos runs. A cumulative counter sitting at `prom_packetloss_total = 1,000,000` from prior faults looks alarming to the model, forever, regardless of what's happening right now.
 
 Rates evade this. The preprocessor's 30-second ring buffer only retains the last ~6 samples. The rate is `(current - oldest_in_buffer) / window_dt`. If the counter has been stationary for 30 seconds, the rate is 0 — regardless of how large the absolute value is. Stale accumulation from a fault last week is invisible to a rate sampled this minute.
 
-Concretely, with `packets_lost = 1,000,000` as the starting value:
+Concretely, with `prom_packetloss_total = 1,000,000` as the starting value:
 
-- **Healthy window:** all 6 samples show `1,000,000`. Rate = `0/30 = 0`. Ratio = `0/(0 + relayed_rate) = 0`. Clean.
-- **Loss injection window:** delta of 30,000 over the 30 s window. Rate = 1000/s. If `total_relayed_packets_rate` ≈ 2000/s over the same window, ratio ≈ `1000/(1000+2000) = 0.33`. Anomalous.
+- **Healthy window (idle stack or healthy calls):** RRs that arrive carry `packets_lost = 0`, so the cumulative counter doesn't advance. Rate = `0`. Samples-rate is whatever (e.g. 0.3 RR/s during a healthy call). Ratio = `0 / 0.3 = 0`. Clean.
+- **Loss injection window:** delta of 300 over the 30 s window. Rate = 10/s. Samples-rate ≈ 0.3 RR/s. Ratio ≈ `10 / 0.3 ≈ 33` per RR — at the high end of what 30% loss produces (the precise scaling depends on how many streams are in each RR; in our test we observed ~5).
 
 The large pre-existing absolute value plays no role in either computation. The window is bounded; what happened before it is gone.
 
 ### Accompanying changes (for cross-reference; not ADR decisions themselves)
 
-- New KB entry `ims.rtpengine.loss_ratio` in `metrics.yaml` with one event trigger (`sustained_gt(0.05, min_duration='15s')`, clear on `sustained_lt(0.01, min_duration='30s')`), emitting `ims.rtpengine.packet_loss_sustained`.
+- New KB entry `ims.rtpengine.loss_ratio` in `metrics.yaml` with one event trigger (`sustained_gt(0.5, min_duration='15s')`, clear on `sustained_lt(0.1, min_duration='30s')`), emitting `ims.rtpengine.packet_loss_sustained`. The threshold sits well below the empirical 10%-loss value (~1.7) and well above noise (a single transient 1-packet RR averages to <0.5 over the window), so 10% and 30% scenarios both fire reliably and remain distinguishable in the model's anomaly attribution.
 - New causal chain `rtpengine_media_degradation` in `causal_chains.yaml` with one positive branch (`vonr_rtp_loss`) and three negative branches (`sip_signaling_unaffected`, `n3_user_plane_unaffected`, `hss_cx_unaffected`) authored to suppress the "blame HSS / PCF / UPF" hallucinations seen in the motivating episodes.
-- Anomaly model retrained with the new feature (24 features total, up from 23).
+- `gui/metrics.py::_collect_rtpengine` augmented with a Prometheus pull (`_collect_rtpengine_prom`) that fetches `rtpengine_packetloss_total` and `rtpengine_packetloss_samples_total` and merges them into the rtpengine metric dict. The existing rtpengine-ctl path stays for the rest of the per-call summary metrics; only the loss-counter source changed.
+- Anomaly model trained with the new feature (30 features total, including the 6 temporal Cx response-time features now correctly reported per the `_feature_keys` property fix). No retrain required to switch the sensor source: `derived.rtpengine_loss_ratio` continues to be 0 during healthy traffic regardless of which underlying counter populates it, so the trained baseline stays correct.
 
 ## Consequences
 
@@ -74,9 +95,9 @@ The large pre-existing absolute value plays no role in either computation. The w
 
 ### Risk
 
-- **Counter reset behavior.** If rtpengine restarts, both `packets_lost` and `total_relayed_packets` reset to 0. The preprocessor's `max(0.0, current - oldest)` clamp prevents negative deltas — restarts will simply produce `rate = 0` for the window spanning the restart, not a huge spike. Verified in the preprocessor code (`preprocessor.py:320`).
-- **Numerator-denominator correlation.** During a fault on the rtpengine-upstream path (e.g., UPF-side loss), BOTH `packets_lost_rate` and a reduction in `total_relayed_packets_rate` could move, compressing the signal. The causal chain's correlation hints (`correlates_with` on `core.upf.gtp_*_per_ue_drop`) address this interpretively; the feature still fires, just with attribution requiring the combined reading.
-- **Schema forward-compatibility.** The preprocessor's `_COUNTER_PATTERNS` now contains two entries (`packets_lost`, `total_relayed_packets`) that are *only* used internally for derived features. A future maintainer who assumes everything in `_COUNTER_PATTERNS` is emitted as a feature would misread. Mitigated by an inline comment pointing at this ADR.
+- **Counter reset behavior.** If rtpengine restarts, both `prom_packetloss_total` and `prom_packetloss_samples_total` reset to 0. The preprocessor's `max(0.0, current - oldest)` clamp prevents negative deltas — restarts will simply produce `rate = 0` for the window spanning the restart, not a huge spike. Verified in the preprocessor code (`preprocessor.py:320`).
+- **No active calls means feature is 0.** When no calls are active, no RTCP RRs are processed — both rates are 0 and `_safe_ratio(0, 0) = 0`. This is correct behavior (no media to report on means no loss to report) but means the feature is silent during quiet periods. Detection still requires that some media flow exist, which is the same precondition any RTCP-based metric has.
+- **Schema forward-compatibility.** The preprocessor's `_COUNTER_PATTERNS` now contains two entries (`prom_packetloss_total`, `prom_packetloss_samples_total`) that are *only* used internally for derived features. A future maintainer who assumes everything in `_COUNTER_PATTERNS` is emitted as a feature would misread. Mitigated by an inline comment pointing at this ADR.
 
 ### Alternatives considered
 

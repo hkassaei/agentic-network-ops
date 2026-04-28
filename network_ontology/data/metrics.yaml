@@ -1415,46 +1415,63 @@ metrics:
         alarm_if: '> 5 (noticeable quality impact) or > 20 (severe degradation)'
         note: Average packet loss from RTCP reports. Directly degrades MOS.
       loss_ratio:
-        display_name: RTPEngine packet-loss ratio (sliding window)
+        display_name: RTPEngine RTCP-reported per-RR average packet loss
         source: derived
         type: ratio
-        unit: ratio
+        unit: packets_per_rr
         protocol: RTP
         interface: Mb
         plane: media
         description: |
-          Proportion of RTP packets lost on the rtpengine relay over the
-          most recent sliding window (≈30 s), computed as the counter-
-          rate ratio packets_lost_rate / (packets_lost_rate +
-          total_relayed_packets_rate). Absolute lifetime counter values
-          from prior chaos runs have no effect — only the post-fault
-          delta matters, which is why this feature survives the
-          concerns documented in ADR remove_cumulative_rtpengine_features.md.
+          Average number of `packets_lost` values reported per RTCP
+          Receiver Report processed by rtpengine, over the ≈30 s
+          preprocessor window. Computed as
+            rate(rtpengine_packetloss_total) /
+            rate(rtpengine_packetloss_samples_total)
+          — the same quantity rtpengine-ctl shows as `Average packet
+          loss`. NOT a fraction of total packets; it's the per-RR
+          mean. Healthy: 0 (RRs report 0 loss). Empirically verified
+          2026-04-27 under 30% tc-injected egress loss on a real VoNR
+          call: value rose from 0 past 4 within 5 s and continued
+          climbing past 30 by 30 s. Each RR carries a cumulative-
+          since-call-start loss count, so the per-RR average scales
+          with BOTH loss intensity AND call age — it's a reliable
+          detection signal but not a clean linear function of loss-
+          percentage alone (a long 10% call can produce a higher
+          value than a short 30% call).
         meaning:
           what_it_signals: |
-            Direct live measure of media-plane packet loss through
-            rtpengine. Zero during healthy traffic; any sustained
-            non-zero value is a voice-quality-affecting fault.
+            Live measure of media-plane packet loss as observed by
+            the far end of each call (via RTCP RRs) and aggregated
+            into per-RR mean. Zero during healthy traffic regardless
+            of call volume; rises when receivers report missing
+            packets. Magnitude scales with loss intensity, so a
+            higher value indicates more packets lost per report.
           spike: |
-            RTP packets are being dropped on or before the rtpengine
-            relay. Could be upstream path loss that rtpengine
-            observes as it receives streams, OR a local fault on the
-            rtpengine container (iptables / tc / interface
-            congestion).
-          steady_non_zero: "Ongoing loss at whatever rate the window captures."
-          zero: "Healthy — no loss observed, or no RTP flowing."
+            Receivers are reporting packet loss back to rtpengine.
+            Could be loss on the rtpengine container's egress
+            (iptables / tc / interface congestion), loss anywhere
+            upstream of the receiver, or — with simultaneous UPF
+            counter degradation — loss on the N3 path.
+          steady_non_zero: "Ongoing reported loss; magnitude reflects severity."
+          zero: "Healthy — RRs report 0 loss, OR no calls active to generate RRs."
         healthy:
           scale_independent: true
-          typical_range: [0.0, 0.01]
+          typical_range: [0.0, 0.1]
         event_triggers:
           - id: ims.rtpengine.packet_loss_sustained
-            trigger: sustained_gt(0.05, min_duration='15s')
-            clear_condition: sustained_lt(0.01, min_duration='30s')
+            # Threshold 0.5: well above noise (a single transient
+            # 1-packet report contributes <0.5 averaged across
+            # multiple RRs in the window) but well below even mild
+            # injection (10% network loss observed at ~1.7).
+            trigger: sustained_gt(0.5, min_duration='15s')
+            clear_condition: sustained_lt(0.1, min_duration='30s')
             local_meaning: |
-              rtpengine has observed >5% RTP packet loss sustained for
-              at least 15 s. Direct voice-quality degradation; MOS
-              cumulative average will follow this signal over
-              successive calls but lags.
+              rtpengine's RTCP-reported average per-RR packet loss
+              has been > 0.5 for at least 15 s — receivers are
+              consistently reporting missing packets. Voice-quality
+              affecting; MOS cumulative average will follow this
+              signal but with a lag.
             magnitude_captured:
               - current_value
               - prior_stable_value
@@ -1496,7 +1513,7 @@ metrics:
           - packet_loss
           - live_rate
         expected: 0
-        alarm_if: "> 0.05 during active VoNR call"
+        alarm_if: "> 0.5 during active VoNR call"
       rtpengine_loss_stddev:
         source: get_dp_quality_gauges
         type: gauge

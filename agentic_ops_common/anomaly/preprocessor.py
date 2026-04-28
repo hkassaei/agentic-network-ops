@@ -84,16 +84,26 @@ _COUNTER_PATTERNS = [
     "ims_auth:mar_replies_received",
     "ims_registrar_scscf:sar_timeouts",
     "ims_registrar_scscf:sar_replies_received",
-    # RTPEngine — raw cumulative counters used ONLY via the sliding-window
-    # rate form, never as absolute values. This is the reintroduction path
-    # described in docs/ADR/rtpengine_loss_ratio_feature.md: the absolute
-    # values of packets_lost / total_relayed_packets are polluted across
-    # chaos runs (the ADR that removed them is correct), but their
-    # *rates* over the ~30 s preprocessor window are immune — the oldest
-    # sample in the ring is at most ~30 s old, so delta/dt only reflects
-    # current behavior. Together these feed derived.rtpengine_loss_ratio.
-    "packets_lost",
-    "total_relayed_packets",
+    # RTPEngine — Prometheus-sourced cumulative counters used ONLY via
+    # the sliding-window rate pipeline, never as absolute values.
+    #
+    # We do NOT use rtpengine-ctl's `Packets lost` counter (verified
+    # empirically 2026-04-27 to remain at 0 even with active RTP and
+    # 30% tc-injected egress loss). The Prometheus `rtpengine_*` family
+    # accumulates loss differently and DOES respond to that fault mode.
+    # See ADR rtpengine_loss_ratio_feature.md for the full empirical
+    # comparison.
+    #
+    # `prom_packetloss_total` is a SUM of every per-RR `packets_lost`
+    # value rtpengine has processed; its rate is "lost-packets reported
+    # per second by the far end via RTCP." `prom_packetloss_samples_total`
+    # is the count of RRs processed; its rate is "RRs per second." The
+    # ratio of the two — derived.rtpengine_loss_ratio — is the average
+    # number of lost packets reported per RR over the sliding window.
+    # Healthy: 0 (RRs report 0 loss). Lossy: positive, scaling roughly
+    # with the actual loss percentage.
+    "prom_packetloss_total",
+    "prom_packetloss_samples_total",
 ]
 
 _COUNTER_SET = set(_COUNTER_PATTERNS)
@@ -154,22 +164,19 @@ _COLLECT_METRICS = {
     "ims_auth:mar_replies_received",
     "ims_registrar_scscf:sar_timeouts",
     "ims_registrar_scscf:sar_replies_received",
-    # RTPEngine — only point-in-time gauges plus a pair of cumulative
-    # counters that are rate-computed (never passed through as absolute
-    # values). average_packet_loss, packet_loss_standard_deviation,
-    # average_mos, total_number_of_1_way_streams,
-    # total_relayed_packet_errors were removed (ADR:
-    # remove_cumulative_rtpengine_features.md) because they're lifetime
-    # AVERAGES/COUNTERS that carry pollution across runs. packets_lost
-    # and total_relayed_packets are pure counters — we now admit them
-    # here AS COLLECTIONS for the sliding-window rate pipeline to
-    # derive rtpengine_loss_ratio from.
+    # RTPEngine — only point-in-time gauges plus the two Prometheus-
+    # sourced cumulative counters that drive `derived.rtpengine_loss_ratio`.
+    # We deliberately do NOT collect rtpengine-ctl's `Packets lost` or
+    # `Total relayed packets` because (a) the former is dead under the
+    # tc-egress fault mode the chaos framework injects, and (b) the
+    # equivalent Prometheus counters fire correctly. ADRs:
+    # remove_cumulative_rtpengine_features.md, rtpengine_loss_ratio_feature.md.
     "errors_per_second_(total)",
     "packets_per_second_(total)",
     "total_sessions",
     "owned_sessions",
-    "packets_lost",
-    "total_relayed_packets",
+    "prom_packetloss_total",
+    "prom_packetloss_samples_total",
     # PyHSS
     "ims_subscribers",
     # MongoDB
@@ -576,21 +583,42 @@ class MetricPreprocessor:
         else:
             features["derived.upf_activity_during_calls"] = 1.0
 
-        # RTPEngine packet-loss ratio — the fraction of RTP packets lost
-        # over the sliding window. Computed from counter RATES (not
-        # absolute values), so lifetime pollution from earlier chaos
-        # runs does not affect it. Near zero during healthy traffic (no
-        # loss AND some packets flowing → small numerator / small
-        # denominator → 0). Rises into (0, 1) range during an active
-        # packet-loss injection. When no RTP is flowing at all (both
-        # counters stationary), _safe_ratio returns 0, so the feature
-        # is effectively a "media-plane loss when media is flowing"
-        # detector.
-        rtp_lost_rate = rates.get("rtpengine.packets_lost", 0)
-        rtp_relayed_rate = rates.get("rtpengine.total_relayed_packets", 0)
-        features["derived.rtpengine_loss_ratio"] = _safe_ratio(
-            rtp_lost_rate, rtp_lost_rate + rtp_relayed_rate
-        )
+        # RTPEngine loss ratio — the average number of `packets_lost`
+        # values reported per RTCP RR over the sliding window. This is
+        # NOT a fraction of all packets; it's the same quantity
+        # rtpengine-ctl displays as `Average packet loss` (sum-of-
+        # losses / sample-count). Computed from counter RATES so prior
+        # accumulated values from earlier chaos runs are invisible.
+        #
+        # Behavior:
+        #   - No call active     → both rates 0 → _safe_ratio(0, 0) = 0
+        #   - Healthy call       → loss_rate = 0 (RRs report 0 loss),
+        #                          samples_rate > 0, ratio = 0
+        #   - 10% loss injection → ratio ≈ 1–2 (per-RR avg lost count)
+        #   - 30% loss injection → ratio ≈ 4–6 (per-RR avg lost count)
+        #
+        # Empirically the value scales with both loss intensity AND
+        # call age (each RR carries a cumulative-since-call-start lost
+        # count, so summing across RRs grows linearly with time even
+        # at constant loss rate). Reliable for detection — the
+        # threshold sustained_gt(0.5) is well below any non-trivial
+        # loss reading — but NOT a clean linear function of loss
+        # percentage alone.
+        #
+        # NOTE: we cannot use `_safe_ratio` here because that helper
+        # clamps the result to [0, 1] (correct for the SIP/Diameter
+        # error ratios above, where the result IS a fraction). The
+        # per-RR average is unbounded above — at 30% network loss it
+        # commonly reads 5+, and clamping it would erase the signal
+        # we explicitly want for distinguishing loss severities.
+        rtp_loss_rate = rates.get("rtpengine.prom_packetloss_total", 0)
+        rtp_samples_rate = rates.get("rtpengine.prom_packetloss_samples_total", 0)
+        if rtp_samples_rate > 0:
+            features["derived.rtpengine_loss_ratio"] = round(
+                rtp_loss_rate / rtp_samples_rate, 4
+            )
+        else:
+            features["derived.rtpengine_loss_ratio"] = 0.0
 
         # Infrastructure health (binary-ish)
         # Note: health indicators (ran_ue, gnb, upf_sessions, ims_registered)

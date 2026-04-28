@@ -615,9 +615,29 @@ def _parse_network_analysis(raw: Any) -> NetworkAnalystReport:
         return NetworkAnalystReport(summary=f"NA output unparseable: {e}")
 
 
+def _empty_plan_set() -> FalsificationPlanSet:
+    """Sentinel "no plan" value the orchestrator can pass to Phase 5
+    when IG failed. The live schema now requires `plans` to have at
+    least 1 entry, which would block `FalsificationPlanSet(plans=[])`
+    from instantiating via normal validation — use model_construct to
+    bypass. Downstream readers see `.plans == []` and skip.
+    """
+    return FalsificationPlanSet.model_construct(plans=[])
+
+
 def _parse_plan_set(raw: Any) -> FalsificationPlanSet:
+    """Parse the IG's structured output into a FalsificationPlanSet.
+
+    Returns a validation-bypassed empty sentinel when the input is
+    missing/invalid. The orchestrator then passes `.plans == []` to
+    Phase 5, which turns every hypothesis into an INCONCLUSIVE verdict
+    with "no falsification plan was generated." Downstream agents and
+    the recorder both handle that case cleanly. The tightened schema
+    still guarantees that any value IG *does* successfully produce is
+    well-formed.
+    """
     if raw is None:
-        return FalsificationPlanSet()
+        return _empty_plan_set()
     try:
         if isinstance(raw, str):
             data = json.loads(raw)
@@ -626,7 +646,7 @@ def _parse_plan_set(raw: Any) -> FalsificationPlanSet:
         return FalsificationPlanSet(**data)
     except Exception as e:
         log.warning("Could not parse IG output: %s", e)
-        return FalsificationPlanSet()
+        return _empty_plan_set()
 
 
 def _rank_and_cap_hypotheses(hypotheses: list[Hypothesis]) -> list[Hypothesis]:

@@ -702,6 +702,106 @@ metrics:
         - uar
         - timeout
         - ratio
+      lir_timeout_ratio:
+        display_name: I-CSCF LIR timeout ratio
+        source: derived
+        type: ratio
+        unit: ratio
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Ratio of LIR timeouts to (timeouts + replies). LIR is the
+          location-info request issued during call setup to find the
+          serving S-CSCF for the callee. Rises when HSS Diameter LIR
+          handler is partitioned, overloaded past its timeout, or the
+          Cx path loses packets.'
+        meaning:
+          what_it_signals: 'Partial partition or severe overload on the Cx path
+            during call routing. Zero in healthy operation; non-zero
+            means some LIR queries did not receive a response within
+            the timeout window.'
+          spike: HSS partitioned during call setup, overloaded, or Cx path losing packets.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
+        event_triggers:
+        - id: ims.icscf.lir_timeouts_observed
+          trigger: current > 0.05 and sustained_gt(0.02, min_duration='60s')
+          clear_condition: sustained_lt(0.01, min_duration='60s')
+          local_meaning: 'Non-trivial fraction of LIR queries timing out — call
+            routing is breaking due to HSS partition or overload.'
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: ims.icscf.cdp_latency_elevated
+            composite_interpretation: HSS approaching or exceeding timeout ceiling on call-routing path
+          - event_id: infrastructure.pyhss.unreachable
+            composite_interpretation: HSS partition confirmed
+        related_metrics:
+        - metric: ims.icscf.lir_avg_response_time
+          relationship: discriminator_for
+          use: Timeout + elevated latency = overload; timeout + clean latency = partition.
+        - metric: ims.icscf.uar_timeout_ratio
+          relationship: peer_of
+          use: UAR fires during REGISTER, LIR fires during INVITE — both timing out indicates HSS-wide failure.
+        disambiguators:
+        - metric: ims.icscf.lir_avg_response_time
+          separates: Overload (both elevated) vs. partial partition (timeouts but latency missing because no replies arrive)
+        how_to_verify_live:
+          tool: run_kamcmd
+          args_hint: run_kamcmd("icscf", "stats.fetch ims_icscf:lir_timeouts") + replies counter.
+        feeds_model_features:
+        - derived.icscf_lir_timeout_ratio
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - lir
+        - timeout
+        - ratio
+      cdp_replies_per_ue:
+        display_name: I-CSCF Diameter reply rate per UE
+        source: derived
+        type: ratio
+        unit: replies_per_second_per_ue
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Per-UE rate of Diameter reply receipts at I-CSCF, computed
+          as rate(cdp:replies_received) / registered_UEs. Aggregates UAR/LIR
+          replies normalized by IMS-registered subscriber count, so the
+          value is independent of UE pool size. Zero or near-zero during
+          steady-state idle; rises during REGISTER bursts and call setup.'
+        meaning:
+          what_it_signals: 'Liveness of the I-CSCF↔HSS Cx path. Drops to 0 when
+            HSS is unreachable OR when no signaling is occurring at the
+            I-CSCF (idle or upstream P-CSCF partitioned).'
+          drop: 'Either HSS is unreachable or upstream signaling has stopped reaching I-CSCF.'
+          steady_non_zero: 'I-CSCF is actively conversing with HSS — healthy.'
+          zero: 'No Cx replies in the window. Could be healthy idle OR a Cx-path fault.'
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 1.0
+        related_metrics:
+        - metric: ims.icscf.uar_timeout_ratio
+          relationship: discriminator_for
+          use: cdp_replies_per_ue == 0 with timeout_ratio == 0 = no traffic; cdp_replies_per_ue == 0 with timeout_ratio > 0 = HSS unreachable.
+        feeds_model_features:
+        - normalized.icscf.cdp_replies_per_ue
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - per_ue
+        - rate
   mongo:
     layer: infrastructure
     metrics:
@@ -998,7 +1098,7 @@ metrics:
         - metric: core.smf.bearers_per_ue
           relationship: correlated_with
           use: Dedicated voice bearer establishment tracks dialog creation in VoNR.
-        - metric: core.upf.upf_activity_during_calls
+        - metric: core.upf.activity_during_calls
           relationship: discriminator_for
           use: If dialogs_per_ue > 0 but upf_activity == 0, media plane is broken while signaling appears
             healthy.
@@ -1357,7 +1457,7 @@ metrics:
           - event_id: core.upf.activity_during_calls_collapsed
             composite_interpretation: Media failure at RTPEngine, reflected downstream in UPF activity
         related_metrics:
-        - metric: core.upf.upf_activity_during_calls
+        - metric: core.upf.activity_during_calls
           relationship: correlated_with
           use: Both reflect media-plane health; RTPEngine errors are the direct signal.
         disambiguators:
@@ -1765,6 +1865,104 @@ metrics:
         - diameter
         - mar
         - timeout
+      sar_timeout_ratio:
+        display_name: S-CSCF SAR timeout ratio
+        source: derived
+        type: ratio
+        unit: ratio
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Ratio of SAR timeouts to (timeouts + replies) at S-CSCF.
+
+          '
+        meaning:
+          what_it_signals: 'S-CSCF-side evidence of HSS partition or overload during
+            registration assignment.
+
+            '
+          spike: HSS unreachable or too slow on Server-Assignment.
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 0.0
+          invariant: Zero in healthy operation.
+        event_triggers:
+        - id: ims.scscf.sar_timeouts_observed
+          trigger: current > 0.05 and sustained_gt(0.02, min_duration='60s')
+          clear_condition: sustained_lt(0.01, min_duration='60s')
+          local_meaning: 'SAR queries timing out. HSS partition or severe overload.
+
+            '
+          magnitude_captured:
+          - current_value
+          - first_observed_at
+          correlates_with:
+          - event_id: infrastructure.pyhss.unreachable
+            composite_interpretation: HSS partition confirmed from S-CSCF SAR path
+          - event_id: ims.scscf.mar_timeouts_observed
+            composite_interpretation: Both MAR and SAR timing out — HSS-wide outage
+        related_metrics:
+        - metric: ims.scscf.mar_timeout_ratio
+          relationship: correlated_with
+          use: Both timeout types confirm HSS partition.
+        disambiguators: []
+        how_to_verify_live:
+          tool: run_kamcmd
+        feeds_model_features:
+        - derived.scscf_sar_timeout_ratio
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - sar
+        - timeout
+      cdp_replies_per_ue:
+        display_name: S-CSCF CDP Diameter replies per UE
+        source: derived
+        type: derived
+        unit: replies_per_second_per_ue
+        protocol: Diameter
+        interface: Cx
+        plane: control
+        description: 'Per-UE rate of Diameter replies received via the C Diameter
+          Peer (CDP) module at S-CSCF.
+
+          '
+        meaning:
+          what_it_signals: 'Active S-CSCF Diameter traffic with HSS. Near-zero when
+            registrations idle OR HSS partition.
+
+            '
+          drop: Diameter peering loss with HSS.
+          zero: No active S-CSCF Diameter exchanges (idle or partitioned).
+        healthy:
+          scale_independent: true
+          typical_range:
+          - 0.0
+          - 1.0
+          invariant: Per-UE rate; varies with registration/auth load.
+        event_triggers: []
+        related_metrics:
+        - metric: ims.icscf.cdp_replies_per_ue
+          relationship: correlated_with
+          use: Both CSCFs run CDP toward same HSS.
+        - metric: ims.scscf.mar_timeout_ratio
+          relationship: discriminator_for
+          use: CDP flat AND MAR timeouts → HSS partition.
+        disambiguators: []
+        how_to_verify_live:
+          tool: run_kamcmd
+        feeds_model_features:
+        - scscf.cdp:replies_per_ue
+        applicable_use_cases:
+        - ims_signaling
+        tags:
+        - ims
+        - diameter
+        - cdp
       rcv_requests_invite_per_ue:
         display_name: SIP INVITE rate per UE at S-CSCF
         source: derived
@@ -2306,7 +2504,7 @@ metrics:
         - metric: core.upf.gtp_outdatapktn3upf_per_ue
           relationship: peer_of
           use: Uplink and downlink typically move together. Asymmetry = directional path failure.
-        - metric: core.upf.upf_activity_during_calls
+        - metric: core.upf.activity_during_calls
           relationship: composite_of
           use: Contributes to the upf_activity signal.
         disambiguators:
@@ -2406,7 +2604,7 @@ metrics:
         - n3
         - gtp
         - user_plane
-      upf_activity_during_calls:
+      activity_during_calls:
         display_name: UPF activity consistency with active dialogs
         source: derived
         type: derived

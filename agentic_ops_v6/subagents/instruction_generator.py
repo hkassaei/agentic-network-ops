@@ -9,6 +9,7 @@ from google.adk.agents import LlmAgent
 from agentic_ops_common import tools
 
 from ..models import FalsificationPlanSet
+from ..retry_config import make_retry_config
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "instruction_generator.md"
 
@@ -56,4 +57,7 @@ def create_instruction_generator() -> LlmAgent:
             tools.get_flow,
             tools.get_flows_through_component,
         ],
+        # Enable client-side retry on 429 / 408 / 5xx per Google ADK
+        # docs (error-code-429-resource_exhausted). See retry_config.py.
+        generate_content_config=make_retry_config(),
     )

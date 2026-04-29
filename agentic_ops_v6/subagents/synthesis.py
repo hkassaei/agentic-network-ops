@@ -6,6 +6,8 @@ from pathlib import Path
 
 from google.adk.agents import LlmAgent
 
+from ..retry_config import make_retry_config
+
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "synthesis.md"
 
 
@@ -25,4 +27,7 @@ def create_synthesis_agent() -> LlmAgent:
         ),
         output_key="diagnosis",
         tools=[],  # pure synthesis
+        # Enable client-side retry on 429 / 408 / 5xx per Google ADK
+        # docs (error-code-429-resource_exhausted). See retry_config.py.
+        generate_content_config=make_retry_config(),
     )

@@ -10,6 +10,7 @@ from google.adk.tools import AgentTool
 from agentic_ops_common import tools
 
 from ..models import NetworkAnalystReport
+from ..retry_config import make_retry_config
 from .ontology_consultation import create_ontology_consultation_agent
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "network_analyst.md"
@@ -59,4 +60,7 @@ def create_network_analyst() -> LlmAgent:
             tools.get_flows_through_component,
             AgentTool(ontology, skip_summarization=True),
         ],
+        # Enable client-side retry on 429 / 408 / 5xx per Google ADK
+        # docs (error-code-429-resource_exhausted). See retry_config.py.
+        generate_content_config=make_retry_config(),
     )

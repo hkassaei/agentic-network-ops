@@ -31,6 +31,25 @@ HEALTH_CHECKS = {
     "ims_usrloc_scscf:active_contacts": {"expected": 2.0, "source": "scscf", "description": "Active contacts at S-CSCF"},
 }
 
+# Containers that must be in `running` state for any chaos scenario or
+# training run. The metric-based HEALTH_CHECKS above are NOT sufficient
+# on their own: some NFs (notably SCP, NRF, AUSF, UDR, UDM, PCF, DNS)
+# don't expose any of the six metrics, so they can crash mid-batch
+# without the metric checks noticing until downstream NFs start
+# failing. This list is the floor — every entry must be `running`.
+#
+# Kept in sync with `gui/server.py:REQUIRED_CONTAINERS`. If you add a
+# container there, add it here too (and vice versa).
+REQUIRED_CONTAINERS = [
+    # 5G Core
+    "mongo", "nrf", "scp", "ausf", "udr", "udm", "amf", "smf", "upf",
+    "pcf", "dns", "mysql",
+    # IMS
+    "pyhss", "icscf", "scscf", "pcscf", "rtpengine",
+]
+GNB_CONTAINER = "nr_gnb"
+UE_CONTAINERS = ["e2e_ue1", "e2e_ue2"]
+
 
 async def collect_health_metrics() -> dict[str, float]:
     """Collect key health metrics from the live network.
@@ -72,6 +91,99 @@ async def _shell(cmd: str, timeout: int = 60) -> tuple[int, str]:
         return 1, "timeout"
 
 
+async def _container_status(name: str) -> str:
+    """Return 'running', 'exited', 'created', or 'absent' for a container.
+
+    'absent' covers both "container does not exist" (docker inspect
+    errors) and "inspect succeeded but state was empty" (rare). Any
+    other value (e.g. 'paused', 'restarting', 'dead') is returned
+    verbatim so the caller can log it precisely.
+    """
+    rc, out = await _shell(
+        f"docker inspect -f '{{{{.State.Status}}}}' {name} 2>/dev/null",
+        timeout=5,
+    )
+    if rc != 0:
+        return "absent"
+    return out.strip() or "absent"
+
+
+async def check_containers_running() -> dict[str, str]:
+    """Return a dict mapping container_name → current_status for every
+    container in REQUIRED_CONTAINERS + GNB + UE_CONTAINERS that is NOT
+    currently 'running'.
+
+    An empty return value means the entire stack is up. This is the
+    container-state check that the metric-based HEALTH_CHECKS cannot
+    do — see the comment on REQUIRED_CONTAINERS for why both checks
+    are necessary.
+    """
+    all_names = REQUIRED_CONTAINERS + [GNB_CONTAINER] + UE_CONTAINERS
+    statuses = await asyncio.gather(
+        *(_container_status(n) for n in all_names)
+    )
+    return {
+        name: status
+        for name, status in zip(all_names, statuses)
+        if status != "running"
+    }
+
+
+async def restart_exited_containers(non_running: dict[str, str]) -> dict[str, str]:
+    """Attempt to bring each non-running container back to 'running'.
+
+    Strategy:
+      - For 'exited' / 'created' / 'paused' / 'restarting' / 'dead':
+        the container exists in the docker engine, so `docker start`
+        (or `docker unpause` for paused) is sufficient. This is the
+        common case after a crash during a chaos scenario.
+      - For 'absent': the container has been removed entirely. We can
+        only log it loudly — bringing it back requires running the
+        operator's deploy script for whichever compose file owns it,
+        and we don't want to second-guess that here. The pre-check
+        will fail and the operator can re-deploy manually.
+
+    Args:
+        non_running: dict from `check_containers_running()`.
+
+    Returns:
+        dict of {container_name: final_status} after the restart
+        attempt — same shape as `check_containers_running()`. Empty
+        dict means every container that was down is now running.
+    """
+    if not non_running:
+        return {}
+
+    log.warning(
+        "Container-state recovery: %d container(s) not running: %s",
+        len(non_running),
+        ", ".join(f"{n}={s}" for n, s in sorted(non_running.items())),
+    )
+
+    for name, status in non_running.items():
+        if status == "absent":
+            log.error(
+                "Container %s is ABSENT — can't restart it from here. "
+                "Re-deploy manually with the appropriate compose file.",
+                name,
+            )
+            continue
+        if status == "paused":
+            log.info("Unpausing container %s", name)
+            await _shell(f"docker unpause {name}", timeout=10)
+            continue
+        # exited, created, restarting, dead — all recoverable via start
+        log.info("Starting container %s (was %s)", name, status)
+        await _shell(f"docker start {name}", timeout=30)
+
+    # Allow time for containers to initialize. SCP/AMF/SMF need
+    # ~10–15s before they accept requests; PyHSS+CSCFs need similar.
+    log.info("Container-state recovery: waiting 20s for stabilization...")
+    await asyncio.sleep(20)
+
+    return await check_containers_running()
+
+
 async def auto_heal_stack() -> bool:
     """Diagnose and fix stack health issues.
 
@@ -92,6 +204,30 @@ async def auto_heal_stack() -> bool:
        Redeploy via deploy-ues.sh.
     """
     log.info("Auto-heal: diagnosing issues...")
+
+    # Step 0: Container-state recovery. Must run BEFORE the metric-
+    # based diagnosis because if e.g. SCP is exited, the metrics from
+    # AMF (which depends on SCP for service discovery) will be stale
+    # or missing and the metric-based heuristics below will misdiagnose.
+    # Restart any exited containers and let them stabilize before
+    # collecting health metrics.
+    non_running = await check_containers_running()
+    if non_running:
+        still_down = await restart_exited_containers(non_running)
+        if still_down:
+            absent = [n for n, s in still_down.items() if s == "absent"]
+            if absent:
+                log.error(
+                    "Auto-heal: container(s) still absent after recovery: %s. "
+                    "Manual re-deploy required.", absent,
+                )
+                return False
+            log.warning(
+                "Auto-heal: %d container(s) still not running after restart "
+                "attempt: %s — proceeding with metric-based heal anyway.",
+                len(still_down),
+                ", ".join(f"{n}={s}" for n, s in sorted(still_down.items())),
+            )
 
     health = await collect_health_metrics()
     issues: set[str] = set()
@@ -373,12 +509,36 @@ async def check_stack_health(purpose: str = "operation") -> bool:
     """
     log.info("Pre-check: verifying stack health...")
 
+    # Gate 1: Container running-state. The metric checks below assume
+    # every NF is at least running; if e.g. SCP exited mid-batch, the
+    # metric path can't catch it (SCP exposes none of the six metrics
+    # in HEALTH_CHECKS, so AMF/SMF/CSCFs continue reporting cached
+    # values until traffic flows and downstream calls fail). Catch
+    # missing containers explicitly here.
+    non_running = await check_containers_running()
+    if non_running:
+        log.warning(
+            "Pre-check: %d container(s) not running: %s",
+            len(non_running),
+            ", ".join(f"{n}={s}" for n, s in sorted(non_running.items())),
+        )
+        # Fall through to the existing "unhealthy stack" handling
+        # path. CHAOS_AUTO_HEAL=1 triggers `auto_heal_stack()`, whose
+        # Step 0 now restarts exited containers. Interactive mode
+        # prompts the operator. Either way, the run does not proceed
+        # silently with a broken stack.
+        failures = [
+            f"  container {name}: {status} (expected running)"
+            for name, status in sorted(non_running.items())
+        ]
+    else:
+        failures = []
+
     health = await collect_health_metrics()
-    if not health:
+    if not health and not failures:
         log.warning("Pre-check: could not collect health metrics — proceeding anyway")
         return True
 
-    failures: list[str] = []
     for metric, check in HEALTH_CHECKS.items():
         actual = health.get(metric)
         expected = check["expected"]
@@ -396,7 +556,7 @@ async def check_stack_health(purpose: str = "operation") -> bool:
     print("  STACK HEALTH CHECK FAILED")
     print("=" * 60)
     print()
-    print("The following metrics are not at expected values:")
+    print("The following checks failed:")
     for f in failures:
         print(f)
     print()
@@ -416,6 +576,16 @@ async def check_stack_health(purpose: str = "operation") -> bool:
         healed = await auto_heal_stack()
         if not healed:
             log.error("Pre-check: auto-heal failed (CHAOS_AUTO_HEAL mode) — aborting scenario")
+            return False
+        # Re-verify both gates: containers running AND metrics healthy.
+        # Either gate failing aborts the scenario.
+        non_running2 = await check_containers_running()
+        if non_running2:
+            log.error(
+                "Pre-check: container(s) still not running after auto-heal "
+                "(CHAOS_AUTO_HEAL mode) — aborting scenario: %s",
+                ", ".join(f"{n}={s}" for n, s in sorted(non_running2.items())),
+            )
             return False
         health2 = await collect_health_metrics()
         still_bad = []

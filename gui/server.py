@@ -178,14 +178,31 @@ async def handle_status(request: web.Request) -> web.Response:
         tasks[name] = asyncio.create_task(_container_status(name))
     results = {name: await t for name, t in tasks.items()}
 
-    # Determine phase
-    core_up = all(results.get(c) == "running" for c in REQUIRED_CONTAINERS)
+    # Determine phase.
+    #
+    # Semantics:
+    #   ready   — every required container + gNB + UEs is running.
+    #   partial — at least one tracked container is running, but the
+    #             stack is not fully ready (e.g. one core NF crashed,
+    #             or UEs not yet deployed).
+    #   down    — literally nothing running across required + gNB + UEs.
+    #
+    # The previous logic treated "any required container missing" as
+    # "down", which made `Tear Down Stack` refuse to clean up a stack
+    # where 16 of 17 containers were still running because one (e.g.
+    # SCP) had exited — exactly the case where an operator most needs
+    # to be able to tear it down. The button-disable rule reads `phase
+    # === 'down'`; under the new semantics that correctly means "nothing
+    # to tear down" rather than "stack is in some kind of bad state".
+    core_all = all(results.get(c) == "running" for c in REQUIRED_CONTAINERS)
+    core_any = any(results.get(c) == "running" for c in REQUIRED_CONTAINERS)
     gnb_up = results.get(GNB_CONTAINER) == "running"
     ues_up = all(results.get(c) == "running" for c in UE_CONTAINERS)
+    ues_any = any(results.get(c) == "running" for c in UE_CONTAINERS)
 
-    if core_up and gnb_up and ues_up:
+    if core_all and gnb_up and ues_up:
         phase = "ready"
-    elif core_up:
+    elif core_any or gnb_up or ues_any:
         phase = "partial"
     else:
         phase = "down"

@@ -8,7 +8,7 @@ from google.adk.agents import LlmAgent
 
 from agentic_ops_common import tools
 
-from ..retry_config import make_retry_config
+from ..retry_config import make_retry_model
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "ontology_consultation.md"
 
@@ -16,7 +16,9 @@ _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "ontology_consu
 def create_ontology_consultation_agent() -> LlmAgent:
     return LlmAgent(
         name="OntologyConsultationAgent",
-        model="gemini-2.5-flash",
+        # Gemini model wrapper carries retry_options for 429 / 408 / 5xx
+        # transparently — see retry_config.py.
+        model=make_retry_model("gemini-2.5-flash"),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Consults the network ontology. Matches symptoms, checks stack "
@@ -33,7 +35,4 @@ def create_ontology_consultation_agent() -> LlmAgent:
             tools.get_causal_chain_for_component,
             tools.find_chains_by_observable_metric,
         ],
-        # Enable client-side retry on 429 / 408 / 5xx per Google ADK
-        # docs (error-code-429-resource_exhausted). See retry_config.py.
-        generate_content_config=make_retry_config(),
     )

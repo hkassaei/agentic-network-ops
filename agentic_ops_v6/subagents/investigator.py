@@ -14,7 +14,7 @@ from google.adk.tools import AgentTool
 from agentic_ops_common import tools
 
 from ..models import InvestigatorVerdict
-from ..retry_config import make_retry_config
+from ..retry_config import make_retry_model
 from .ontology_consultation import create_ontology_consultation_agent
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "investigator.md"
@@ -31,7 +31,11 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
 
     return LlmAgent(
         name=name,
-        model="gemini-2.5-pro",
+        # Gemini model wrapper carries retry_options for 429 / 408 / 5xx
+        # transparently. Phase 5 fans out 1-3 of these in parallel and
+        # each consumes 50-60k tokens with thinking — the highest-quota-
+        # risk agent in the pipeline. See retry_config.py.
+        model=make_retry_model("gemini-2.5-pro"),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Falsifies one specific hypothesis by running targeted probes "
@@ -75,10 +79,4 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
             tools.find_chains_by_observable_metric,
             AgentTool(ontology, skip_summarization=True),
         ],
-        # Enable client-side retry on 429 / 408 / 5xx per Google ADK
-        # docs (error-code-429-resource_exhausted). The Investigator is
-        # the highest-quota-risk agent because Phase 5 fans out 1–3 of
-        # them in parallel and each consumes 50–60k tokens with
-        # thinking. See retry_config.py for backoff schedule.
-        generate_content_config=make_retry_config(),
     )

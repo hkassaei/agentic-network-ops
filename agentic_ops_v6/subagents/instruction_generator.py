@@ -9,7 +9,7 @@ from google.adk.agents import LlmAgent
 from agentic_ops_common import tools
 
 from ..models import FalsificationPlanSet
-from ..retry_config import make_retry_config
+from ..retry_config import make_retry_model
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "instruction_generator.md"
 
@@ -28,7 +28,9 @@ def create_instruction_generator() -> LlmAgent:
         # past ~80 lines of rules. Pro tolerates the complexity; the
         # other pipeline LlmAgents (NetworkAnalyst, Investigator,
         # Synthesis) all use Pro for the same reason.
-        model="gemini-2.5-pro",
+        # Gemini model wrapper carries retry_options for 429 / 408 / 5xx
+        # transparently — see retry_config.py.
+        model=make_retry_model("gemini-2.5-pro"),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Generates one focused falsification plan per NA hypothesis. "
@@ -57,7 +59,4 @@ def create_instruction_generator() -> LlmAgent:
             tools.get_flow,
             tools.get_flows_through_component,
         ],
-        # Enable client-side retry on 429 / 408 / 5xx per Google ADK
-        # docs (error-code-429-resource_exhausted). See retry_config.py.
-        generate_content_config=make_retry_config(),
     )

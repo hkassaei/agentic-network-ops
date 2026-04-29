@@ -6,7 +6,7 @@ from pathlib import Path
 
 from google.adk.agents import LlmAgent
 
-from ..retry_config import make_retry_config
+from ..retry_config import make_retry_model
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "synthesis.md"
 
@@ -19,7 +19,9 @@ def create_synthesis_agent() -> LlmAgent:
     """
     return LlmAgent(
         name="SynthesisAgent",
-        model="gemini-2.5-pro",
+        # Gemini model wrapper carries retry_options for 429 / 408 / 5xx
+        # transparently — see retry_config.py.
+        model=make_retry_model("gemini-2.5-pro"),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Aggregates per-hypothesis Investigator verdicts into a NOC-ready "
@@ -27,7 +29,4 @@ def create_synthesis_agent() -> LlmAgent:
         ),
         output_key="diagnosis",
         tools=[],  # pure synthesis
-        # Enable client-side retry on 429 / 408 / 5xx per Google ADK
-        # docs (error-code-429-resource_exhausted). See retry_config.py.
-        generate_content_config=make_retry_config(),
     )

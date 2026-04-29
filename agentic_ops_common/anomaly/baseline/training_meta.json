@@ -1,9 +1,12 @@
 {
-  "trained_at": "2026-04-28T01:57:47.502243+00:00",
-  "duration_seconds": 810,
-  "n_samples": 104,
-  "n_features": 30,
+  "trained_at": "2026-04-29T02:38:45.756441+00:00",
+  "duration_seconds": 1845,
+  "n_samples": 323,
+  "n_features": 33,
   "feature_keys": [
+    "context.calls_active",
+    "context.cx_active",
+    "context.registration_in_progress",
     "derived.icscf_lir_timeout_ratio",
     "derived.icscf_sip_error_ratio",
     "derived.icscf_uar_timeout_ratio",
@@ -36,5 +39,5 @@
     "scscf.ims_registrar_scscf:sar_avg_response_time"
   ],
   "model_ready": true,
-  "training_samples": 104
+  "training_samples": 323
 }

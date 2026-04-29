@@ -318,6 +318,15 @@ EXPECTED_FEATURE_KEYS: frozenset[str] = frozenset({
     "derived.upf_activity_during_calls",
     "derived.pcscf_avg_register_time_ms",
     "derived.rtpengine_loss_ratio",
+
+    # -- Operational context (binary 0/1) --
+    # Encodes "what state is the stack in right now?" so HalfSpaceTrees
+    # can split conditionally instead of treating idle and active states
+    # as the same distribution. See ADR anomaly_model_overflagging.md
+    # "Update 2026-04-28: re-framing the fix space" / Option 1.
+    "context.calls_active",
+    "context.registration_in_progress",
+    "context.cx_active",
 })
 
 
@@ -626,6 +635,40 @@ class MetricPreprocessor:
         # about UE/gNB count that don't generalize — a production network has
         # varying UE counts. These values are used internally for per-UE
         # normalization but not fed to the anomaly model.
+
+        # --- Category 6: Operational context (binary 0/1) ---
+        # Three flags telling the model "what state is the stack in?".
+        # Without these, HalfSpaceTrees treats idle and active snapshots
+        # as one distribution and over-flags either side. With them, the
+        # trees can split early on context and learn dense regions per
+        # state. ADR: anomaly_model_overflagging.md, Option 1.
+        #
+        # Calls active: directly read from the SIP dialog state at P-CSCF.
+        # Registration in progress: any REGISTER request was processed in
+        # the last sliding-rate window (~30s). Uses the rate of the same
+        # counter that drives `rcv_requests_register_per_ue`, so the two
+        # stay consistent.
+        # Cx active: any Cx Diameter response was received in the last
+        # sliding-rate window. Covers all six gating counters used by the
+        # temporal-feature pre-filter, so the binary "Cx is doing
+        # something" answers a strict superset of those individual gates.
+        features["context.calls_active"] = (
+            1.0 if raw_features.get("pcscf.dialog_ng:active", 0) > 0 else 0.0
+        )
+        features["context.registration_in_progress"] = (
+            1.0 if rates.get("pcscf.core:rcv_requests_register", 0) > 0 else 0.0
+        )
+        cx_counter_keys = (
+            "icscf.cdp:replies_received",
+            "icscf.ims_icscf:uar_replies_received",
+            "icscf.ims_icscf:lir_replies_received",
+            "scscf.cdp:replies_received",
+            "scscf.ims_auth:mar_replies_received",
+            "scscf.ims_registrar_scscf:sar_replies_received",
+        )
+        features["context.cx_active"] = (
+            1.0 if any(rates.get(k, 0) > 0 for k in cx_counter_keys) else 0.0
+        )
 
         # Populate liveness for rate features (never filtered; used only for
         # silent-failure severity escalation at scoring time). A rate feature

@@ -285,6 +285,19 @@ def build_parser() -> argparse.ArgumentParser:
 # -------------------------------------------------------------------------
 
 def main() -> int:
+    # Restore default SIGPIPE behavior so piping output through `head`,
+    # `less`, etc. doesn't surface a BrokenPipeError traceback when the
+    # downstream tool stops reading. Python by default ignores SIGPIPE
+    # and turns the EPIPE on next write into the exception we see in
+    # the traceback. Resetting to SIG_DFL makes the process terminate
+    # cleanly on a closed pipe — the standard Unix-tool behavior.
+    # No-op on platforms without SIGPIPE (e.g. Windows).
+    try:
+        import signal
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    except (ImportError, AttributeError):
+        pass
+
     parser = build_parser()
     args = parser.parse_args()
     _setup_logging(args.verbose)

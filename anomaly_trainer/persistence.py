@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import pickle
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -97,6 +98,28 @@ def _check_feature_coverage(
         )
 
 
+def _backup_existing_model(out_dir: Path) -> list[Path]:
+    """Copy any existing `model.pkl` / `training_meta.json` aside before
+    overwriting them. Returns the list of backup paths created (empty if
+    no existing files to back up).
+
+    Backup naming: `<original_name>.bak.<utc_timestamp>` so successive
+    backups don't collide and the timestamp is filename-safe across
+    Linux/macOS/Windows. Example: `model.pkl.bak.20260428T193045Z`.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    created: list[Path] = []
+    for name in ("model.pkl", "training_meta.json"):
+        src = out_dir / name
+        if not src.exists():
+            continue
+        dst = out_dir / f"{name}.bak.{stamp}"
+        shutil.copy2(src, dst)
+        created.append(dst)
+        log.info("Backed up existing %s → %s", src.name, dst.name)
+    return created
+
+
 def save_model(
     screener: AnomalyScreener,
     output_dir: Path | None = None,
@@ -104,6 +127,7 @@ def save_model(
     n_samples: int = 0,
     *,
     allow_missing_features: bool = False,
+    backup_existing: bool = True,
 ) -> Path:
     """Save trained model to disk.
 
@@ -116,6 +140,10 @@ def save_model(
             from a hard refusal to a warning. Use only for experimental
             training profiles that intentionally omit part of the
             expected feature set.
+        backup_existing: If True (default), copy any existing model.pkl
+            and training_meta.json to timestamped `.bak.<utc>` siblings
+            before overwriting. Lets the operator compare batch results
+            against the previous model without making a manual copy.
 
     Returns:
         Path to the output directory.
@@ -136,6 +164,14 @@ def save_model(
 
     out = output_dir or _DEFAULT_DIR
     out.mkdir(parents=True, exist_ok=True)
+
+    # Back up the previous on-disk model BEFORE overwriting. The save
+    # itself is non-atomic (open in "wb" truncates), so without this an
+    # interrupted save would leave neither a working old model nor a
+    # working new one. Backups also let downstream comparison runs load
+    # the previous baseline by path.
+    if backup_existing:
+        _backup_existing_model(out)
 
     with open(out / "model.pkl", "wb") as f:
         pickle.dump(screener, f)

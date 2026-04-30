@@ -179,35 +179,129 @@ def _accumulate_phase_traces(state: dict, new_traces: list) -> None:
     state["phase_traces_so_far"] = current
 
 
-# Phase 4 falsification-plan key the InstructionGenerator agent writes to
-# via its `output_key`. Constants kept here so the retry helper and the
-# main orchestrator agree on the exact key name.
+# Output keys each LlmAgent phase writes to via its `output_key`.
+# Constants kept here so the generic retry helper and the main
+# orchestrator agree on the exact key names. If a subagent's
+# output_key changes, update the matching constant in the same commit.
+_NA_OUTPUT_KEY = "network_analysis"
 _IG_OUTPUT_KEY = "falsification_plan_set"
+_INVESTIGATOR_OUTPUT_KEY = "investigator_verdict"
+_SYNTHESIS_OUTPUT_KEY = "diagnosis"
 
 
-def _ig_output_present(state: dict) -> bool:
-    """Did the InstructionGenerator successfully write a non-empty
-    structured output to state?
+def _output_present(state: dict, key: str) -> bool:
+    """Did the named LlmAgent phase write a non-empty output to state?
 
     ADK's `LlmAgent.__maybe_save_output_to_state` silently bails (no
-    state write, no exception raised) when the model emits a final
+    state write, no exception raised) when Gemini emits a final
     response whose text content is empty or whitespace-only — see
-    `agents/llm_agent.py` `if not result.strip(): return`. The wrapper
-    around `_run_phase` catches genuine exceptions but cannot detect
+    `agents/llm_agent.py` `if not result.strip(): return`. The
+    `_run_phase` wrapper catches genuine exceptions but cannot detect
     that silent-bail path. We detect it here by checking the state
     key directly.
 
     Treat "missing", "None", and "empty/whitespace string" as failure.
-    A non-empty value is taken at face value here; the downstream
-    `_parse_plan_set` does its own validation and falls back to the
-    empty sentinel if the content is unparseable.
+    A non-empty value is taken at face value here; downstream parsing
+    in each phase does its own schema validation.
+
+    The IG-specific `_ig_output_present` below is a thin wrapper kept
+    for the test suite; callers in this file use the generic form
+    directly.
     """
-    raw = state.get(_IG_OUTPUT_KEY)
+    raw = state.get(key)
     if raw is None:
         return False
     if isinstance(raw, str):
         return bool(raw.strip())
     return True
+
+
+def _ig_output_present(state: dict) -> bool:
+    """Backward-compat wrapper for the IG-specific tests. Prefer
+    `_output_present(state, _IG_OUTPUT_KEY)` in new code."""
+    return _output_present(state, _IG_OUTPUT_KEY)
+
+
+async def _run_phase_with_empty_output_retry(
+    agent_factory,
+    state: dict[str, Any],
+    question: str,
+    session_service: InMemorySessionService,
+    on_event,
+    output_key: str,
+    phase_label: str,
+) -> tuple[dict[str, Any], list[PhaseTrace], bool]:
+    """Run an LlmAgent phase with one retry on empty-output silent-bail.
+
+    Two failure modes are handled:
+      1. `_run_phase` raises an exception (genuine ADK / Gemini error).
+      2. `_run_phase` returns successfully but `state[output_key]` is
+         unset / empty — the silent-bail path described in
+         `_output_present`. This is the failure shape originally
+         observed in run_20260429_031341 (IG, Phase 4) and again in
+         run_20260430_020337 (NA, Phase 3). Both runs were
+         indistinguishable from success at the orchestrator level
+         until this guard was generalized.
+
+    Either failure triggers ONE retry. If both attempts fail, the
+    function returns `success=False` and the caller is responsible
+    for writing a phase-appropriate sentinel into `state[output_key]`
+    so the recorder can surface the failure instead of silently
+    flowing forward with an empty value.
+
+    Why each retry creates a fresh agent via `agent_factory` rather
+    than reusing the same instance: the IG retry experience showed
+    that re-instantiation is consistently safer than re-running the
+    same agent object (avoids any session-state side effects from
+    the failed attempt).
+
+    Returns:
+      (state, combined_traces, success).
+
+    `combined_traces` aggregates the traces from BOTH attempts so the
+    recorder shows the retry attempt explicitly. Caller must extend
+    its `all_phases` list and call `_accumulate_phase_traces` once
+    (the helper does NOT, to keep coupling to the outer trace
+    plumbing minimal).
+    """
+    combined_traces: list[PhaseTrace] = []
+
+    # Attempt 1
+    try:
+        state, traces = await _run_phase(
+            agent_factory(), state, question, session_service, on_event,
+        )
+        combined_traces.extend(traces)
+    except Exception as e:
+        log.error("%s attempt 1 failed: %s", phase_label, e, exc_info=True)
+        state.pop(output_key, None)
+
+    if _output_present(state, output_key):
+        return state, combined_traces, True
+
+    # Attempt 2 — same call, same prompt. The bug is non-deterministic
+    # (Gemini sometimes emits a thinking-only final chunk that ADK
+    # strips). A second roll usually succeeds.
+    log.warning(
+        "%s produced no output on attempt 1 — retrying once. "
+        "ADK silently bails when Gemini emits an empty final-response "
+        "chunk; see agents/llm_agent.py `if not result.strip(): return`.",
+        phase_label,
+    )
+    try:
+        state, traces = await _run_phase(
+            agent_factory(), state, question, session_service, on_event,
+        )
+        combined_traces.extend(traces)
+    except Exception as e:
+        log.error("%s attempt 2 failed: %s", phase_label, e, exc_info=True)
+        state.pop(output_key, None)
+
+    if _output_present(state, output_key):
+        return state, combined_traces, True
+
+    log.error("%s produced no output on both attempts.", phase_label)
+    return state, combined_traces, False
 
 
 async def _run_ig_with_retry(
@@ -217,70 +311,29 @@ async def _run_ig_with_retry(
     on_event,
     all_phases: list[PhaseTrace],
 ) -> tuple[dict[str, Any], FalsificationPlanSet]:
-    """Run the InstructionGenerator with one retry on empty output.
+    """IG-specific wrapper around `_run_phase_with_empty_output_retry`.
 
-    Two failure modes are handled:
-      1. `_run_phase` raises an exception (genuine ADK / Gemini error).
-      2. `_run_phase` returns successfully but `state[_IG_OUTPUT_KEY]`
-         is unset / empty (the silent-bail path described in
-         `_ig_output_present`). This is the failure shape that
-         produced run_20260429_031341 and was indistinguishable from
-         success at the orchestrator level until we added this guard.
-
-    Either failure triggers ONE retry. If the retry also produces no
-    plan, we write a sentinel that surfaces the failure clearly in
-    Phase 4 of the recorded report rather than letting Phase 5 run
-    with an empty plan and produce a fabricated-citations verdict.
-
-    Returns the updated state and the parsed `FalsificationPlanSet`
-    (which may be the empty sentinel if both attempts failed).
+    On both-attempts-failed, writes the IG-specific sentinel into
+    `state[_IG_OUTPUT_KEY]` so the recorder shows the failure verbatim
+    in Phase 4 of the report and downstream parsing treats it as an
+    empty plan_set. Phase 5 then runs with no plan rather than with a
+    silently-missing key that produces fabricated-citations verdicts.
     """
-    # Attempt 1
-    try:
-        state, traces = await _run_phase(
-            create_instruction_generator(), state, question,
-            session_service, on_event,
-        )
-        all_phases.extend(traces)
-        _accumulate_phase_traces(state, traces)
-    except Exception as e:
-        log.error("InstructionGenerator attempt 1 failed: %s", e, exc_info=True)
-        # Drop any partial state-key write the failed attempt may have left.
-        state.pop(_IG_OUTPUT_KEY, None)
+    state, traces, success = await _run_phase_with_empty_output_retry(
+        agent_factory=create_instruction_generator,
+        state=state,
+        question=question,
+        session_service=session_service,
+        on_event=on_event,
+        output_key=_IG_OUTPUT_KEY,
+        phase_label="Phase 4 InstructionGenerator",
+    )
+    all_phases.extend(traces)
+    _accumulate_phase_traces(state, traces)
 
-    if _ig_output_present(state):
+    if success:
         return state, _parse_plan_set(state.get(_IG_OUTPUT_KEY))
 
-    # Attempt 2 — same call, same prompt. The bug is non-deterministic
-    # (Gemini sometimes emits a thinking-only final chunk that ADK
-    # strips). A second roll usually succeeds.
-    log.warning(
-        "Phase 4 IG produced no output on attempt 1 — retrying once. "
-        "ADK silently bails when Gemini emits an empty final-response "
-        "chunk; see agents/llm_agent.py `if not result.strip(): return`."
-    )
-    try:
-        state, traces = await _run_phase(
-            create_instruction_generator(), state, question,
-            session_service, on_event,
-        )
-        all_phases.extend(traces)
-        _accumulate_phase_traces(state, traces)
-    except Exception as e:
-        log.error("InstructionGenerator attempt 2 failed: %s", e, exc_info=True)
-        state.pop(_IG_OUTPUT_KEY, None)
-
-    if _ig_output_present(state):
-        return state, _parse_plan_set(state.get(_IG_OUTPUT_KEY))
-
-    # Both attempts produced no plan. Write a sentinel that the
-    # recorder will render verbatim in Phase 4, and that downstream
-    # parsing will treat as an empty plan_set. This makes the failure
-    # visible in the report instead of silently flowing into Phase 5.
-    log.error(
-        "Phase 4 IG produced no output on both attempts. Phase 5 will "
-        "run with an empty plan_set and the report will surface this."
-    )
     state[_IG_OUTPUT_KEY] = json.dumps({
         "plans": [],
         "_orchestrator_note": (
@@ -535,7 +588,6 @@ async def _run_parallel_investigators(
             )
 
         agent_name = f"InvestigatorAgent_{h.id}"
-        agent = create_investigator_agent(name=agent_name)
 
         # Build prompt state
         plan_dict = plan.model_dump()
@@ -551,12 +603,25 @@ async def _run_parallel_investigators(
         }
 
         question = f"Falsify hypothesis {h.id}: {h.statement}"
-        state_after, traces = await _run_phase(
-            agent, sub_state, question, session_service, on_event,
+
+        # Same empty-output silent-bail can hit a sub-Investigator. The
+        # existing parse-error path below would catch it as a JSON
+        # parse failure and force INCONCLUSIVE — but only after
+        # consuming the run with no retry. With the generic retry
+        # guard, we get a second chance to produce a verdict before
+        # falling through.
+        state_after, traces, _success = await _run_phase_with_empty_output_retry(
+            agent_factory=lambda: create_investigator_agent(name=agent_name),
+            state=sub_state,
+            question=question,
+            session_service=session_service,
+            on_event=on_event,
+            output_key=_INVESTIGATOR_OUTPUT_KEY,
+            phase_label=f"Phase 5 {agent_name}",
         )
 
         # Parse the verdict
-        verdict_raw = state_after.get("investigator_verdict")
+        verdict_raw = state_after.get(_INVESTIGATOR_OUTPUT_KEY)
         try:
             if isinstance(verdict_raw, str):
                 verdict_dict = json.loads(verdict_raw)
@@ -692,16 +757,35 @@ async def investigate(
     state["correlation_analysis"] = correlation.hypotheses_text
 
     # -------- Phase 3: NetworkAnalyst --------
-    try:
-        state, traces = await _run_phase(
-            create_network_analyst(), state, question, session_service, on_event,
-        )
-        all_phases.extend(traces)
-        _accumulate_phase_traces(state, traces)
-    except Exception as e:
-        log.error("NetworkAnalyst failed: %s", e, exc_info=True)
-        state["network_analysis"] = json.dumps({
-            "summary": f"NA failed: {e}",
+    # Same empty-output silent-bail observed for IG can hit NA. Run
+    # 20260430_020337_call_quality_degradation scored 15% because NA
+    # made 7 tool calls and 7 LLM calls but emitted nothing — ADK
+    # silently bailed on the empty final response and the orchestrator
+    # ran Phase 4 with no `network_analysis` to read. Wrap with the
+    # same retry guard as IG. On both-attempts failure, write a
+    # phase-appropriate sentinel that downstream parsing handles
+    # cleanly (empty `hypotheses` list → "no testable hypotheses"
+    # diagnosis).
+    state, na_traces, na_success = await _run_phase_with_empty_output_retry(
+        agent_factory=create_network_analyst,
+        state=state,
+        question=question,
+        session_service=session_service,
+        on_event=on_event,
+        output_key=_NA_OUTPUT_KEY,
+        phase_label="Phase 3 NetworkAnalyst",
+    )
+    all_phases.extend(na_traces)
+    _accumulate_phase_traces(state, na_traces)
+    if not na_success:
+        state[_NA_OUTPUT_KEY] = json.dumps({
+            "summary": (
+                "NetworkAnalyst produced empty output on two consecutive "
+                "attempts. ADK's silent-bail on empty Gemini final-response "
+                "(agents/llm_agent.py:__maybe_save_output_to_state) prevented "
+                "the schema-validation error from surfacing. No hypotheses "
+                "were produced; the pipeline will skip the Investigator phase."
+            ),
             "layer_status": {},
             "hypotheses": [],
         })
@@ -786,16 +870,28 @@ async def investigate(
     all_phases.append(ev_trace)
 
     # -------- Phase 7: Synthesis --------
-    try:
-        state, traces = await _run_phase(
-            create_synthesis_agent(), state, question,
-            session_service, on_event,
+    # Same empty-output retry guard as NA / IG. Synthesis is the
+    # final user-visible diagnosis; an empty output here would render
+    # as a blank "Diagnosis" section in the recorded report.
+    state, syn_traces, syn_success = await _run_phase_with_empty_output_retry(
+        agent_factory=create_synthesis_agent,
+        state=state,
+        question=question,
+        session_service=session_service,
+        on_event=on_event,
+        output_key=_SYNTHESIS_OUTPUT_KEY,
+        phase_label="Phase 7 Synthesis",
+    )
+    all_phases.extend(syn_traces)
+    _accumulate_phase_traces(state, syn_traces)
+    if not syn_success:
+        state[_SYNTHESIS_OUTPUT_KEY] = (
+            "Synthesis produced empty output on two consecutive attempts. "
+            "ADK's silent-bail on empty Gemini final-response prevented the "
+            "diagnosis from being written. Inspect the per-Investigator "
+            "verdicts and EvidenceValidator output above to derive the "
+            "diagnosis manually."
         )
-        all_phases.extend(traces)
-        _accumulate_phase_traces(state, traces)
-    except Exception as e:
-        log.error("Synthesis failed: %s", e, exc_info=True)
-        state["diagnosis"] = f"Synthesis failed: {e}"
 
     return _build_result(state, all_phases, run_start)
 

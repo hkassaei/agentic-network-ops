@@ -75,3 +75,185 @@ def test_detector_treats_empty_dict_as_success_for_downstream_parse():
     schema-invalid."""
     state = {_IG_OUTPUT_KEY: {"some_partial_field": "x"}}
     assert _ig_output_present(state) is True
+
+
+# ============================================================================
+# Generic empty-output retry — applied to every LlmAgent phase
+# ============================================================================
+#
+# After observing the same Gemini empty-final-response failure mode hit
+# Phase 3 NetworkAnalyst (run_20260430_020337_call_quality_degradation =
+# 15%), the IG-specific retry was generalized to a phase-agnostic helper.
+# These tests cover the generic detector and the helper's behaviour on
+# both attempts succeeding, the second succeeding after a first empty,
+# and both failing.
+
+def test_generic_detector_works_for_arbitrary_keys():
+    """The generic `_output_present` is the workhorse used by every
+    phase wrapper. The IG-specific `_ig_output_present` is a thin
+    wrapper around it. Verify the generic form behaves identically
+    across different keys (NA, Synthesis, Investigator)."""
+    from agentic_ops_v6.orchestrator import (
+        _NA_OUTPUT_KEY,
+        _SYNTHESIS_OUTPUT_KEY,
+        _INVESTIGATOR_OUTPUT_KEY,
+        _output_present,
+    )
+    for key in (_NA_OUTPUT_KEY, _SYNTHESIS_OUTPUT_KEY, _INVESTIGATOR_OUTPUT_KEY):
+        assert _output_present({}, key) is False
+        assert _output_present({key: None}, key) is False
+        assert _output_present({key: ""}, key) is False
+        assert _output_present({key: "  \n  "}, key) is False
+        assert _output_present({key: "non-empty"}, key) is True
+        assert _output_present({key: {"any": "dict"}}, key) is True
+
+
+@pytest.mark.asyncio
+async def test_generic_retry_returns_success_when_first_attempt_writes_output(monkeypatch):
+    """Happy path — the agent writes a non-empty value on the first
+    attempt; helper returns success without re-running."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = {"n": 0}
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count["n"] += 1
+        return ({**state, "diagnosis": '{"some": "payload"}'}, [])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+
+    state, traces, success = await orch._run_phase_with_empty_output_retry(
+        agent_factory=lambda: object(),
+        state={},
+        question="q",
+        session_service=None,
+        on_event=None,
+        output_key="diagnosis",
+        phase_label="test phase",
+    )
+    assert success is True
+    assert call_count["n"] == 1
+    assert state["diagnosis"] == '{"some": "payload"}'
+
+
+@pytest.mark.asyncio
+async def test_generic_retry_succeeds_on_second_attempt_after_first_empty(monkeypatch):
+    """The exact bug shape — first attempt silently bails (no state
+    write); second attempt produces output. Verify the helper retries
+    and returns success."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = {"n": 0}
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # ADK silent-bail: no state write on the output key.
+            return (state, [])
+        return ({**state, "diagnosis": '{"second": "attempt"}'}, [])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+
+    state, traces, success = await orch._run_phase_with_empty_output_retry(
+        agent_factory=lambda: object(),
+        state={},
+        question="q",
+        session_service=None,
+        on_event=None,
+        output_key="diagnosis",
+        phase_label="test phase",
+    )
+    assert success is True
+    assert call_count["n"] == 2
+    assert state["diagnosis"] == '{"second": "attempt"}'
+
+
+@pytest.mark.asyncio
+async def test_generic_retry_returns_failure_when_both_attempts_empty(monkeypatch):
+    """Both attempts silently bail. Helper returns success=False;
+    caller is responsible for writing a phase-appropriate sentinel."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = {"n": 0}
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count["n"] += 1
+        return (state, [])  # never writes the output key
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+
+    state, traces, success = await orch._run_phase_with_empty_output_retry(
+        agent_factory=lambda: object(),
+        state={},
+        question="q",
+        session_service=None,
+        on_event=None,
+        output_key="diagnosis",
+        phase_label="test phase",
+    )
+    assert success is False
+    assert call_count["n"] == 2
+    assert "diagnosis" not in state
+
+
+@pytest.mark.asyncio
+async def test_generic_retry_returns_failure_when_first_raises_and_second_empty(monkeypatch):
+    """Mixed failure path: first attempt raises (genuine ADK / Gemini
+    error), second attempt silent-bails. Helper still treats both as
+    failure and returns success=False without raising."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = {"n": 0}
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated Gemini error")
+        return (state, [])  # silent-bail
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+
+    state, traces, success = await orch._run_phase_with_empty_output_retry(
+        agent_factory=lambda: object(),
+        state={},
+        question="q",
+        session_service=None,
+        on_event=None,
+        output_key="diagnosis",
+        phase_label="test phase",
+    )
+    assert success is False
+    assert call_count["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generic_retry_recreates_agent_each_attempt(monkeypatch):
+    """The factory is called fresh on each attempt — re-instantiation
+    is intentional (avoids any session-state side effects from a
+    failed first call)."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    factory_calls = {"n": 0}
+    run_calls = {"n": 0}
+
+    def factory():
+        factory_calls["n"] += 1
+        return object()
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        run_calls["n"] += 1
+        return (state, [])  # silent-bail both times
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+
+    await orch._run_phase_with_empty_output_retry(
+        agent_factory=factory,
+        state={},
+        question="q",
+        session_service=None,
+        on_event=None,
+        output_key="diagnosis",
+        phase_label="test phase",
+    )
+    assert factory_calls["n"] == 2
+    assert run_calls["n"] == 2

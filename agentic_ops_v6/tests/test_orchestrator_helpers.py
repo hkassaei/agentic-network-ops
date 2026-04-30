@@ -269,3 +269,103 @@ def test_no_hypotheses_diagnosis_is_structured():
     assert "**summary**" in text
     assert "**root_cause**" in text
     assert "**confidence**: low" in text
+
+
+# ============================================================================
+# Sub-Investigator state plumbing — regression for the
+# "Context variable not found: anomaly_screener_snapshot_ts" crash that
+# took out all 3 sub-Investigators in
+# run_20260429_233451_call_quality_degradation. The orchestrator's
+# top-level state initialized the sentinel keys, but
+# `_run_parallel_investigators` built a fresh `sub_state` dict that
+# omitted them, so the prompt template
+# `{anomaly_screener_snapshot_ts}` failed to resolve.
+# ============================================================================
+
+def test_run_parallel_investigators_signature_carries_anomaly_timestamps():
+    """The function must accept the three anomaly-window timestamps as
+    forwardable kwargs. Locks in the contract that the orchestrator
+    can pass them through to sub-state."""
+    import inspect
+
+    from agentic_ops_v6.orchestrator import _run_parallel_investigators
+
+    sig = inspect.signature(_run_parallel_investigators)
+    for name in (
+        "anomaly_window_start_ts",
+        "anomaly_window_end_ts",
+        "anomaly_screener_snapshot_ts",
+    ):
+        assert name in sig.parameters, (
+            f"_run_parallel_investigators must accept {name} so the "
+            f"investigator prompt's `{{{name}}}` template can resolve"
+        )
+
+
+@pytest.mark.asyncio
+async def test_sub_investigator_state_includes_anomaly_timestamps(monkeypatch):
+    """End-to-end: _run_parallel_investigators must seed the three
+    timestamp keys into each sub-Investigator's session state so the
+    prompt template resolves. We stub the underlying `_run_phase` to
+    capture the `sub_state` dict it's called with and assert the keys
+    are present."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    captured_states: list[dict] = []
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        captured_states.append(dict(state))
+        # Return a verdict the orchestrator's parser will accept.
+        verdict = {
+            "hypothesis_id": state["hypothesis_id"],
+            "hypothesis_statement": state["hypothesis_statement"],
+            "verdict": "INCONCLUSIVE",
+            "reasoning": "stub",
+        }
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(
+        orch, "create_investigator_agent",
+        lambda name=None: object(),  # placeholder; not exercised by stub
+    )
+
+    h = Hypothesis(
+        id="h1",
+        statement="UPF transient drop",
+        primary_suspect_nf="upf",
+        fit=0.9,
+        specificity="specific",
+        supporting_event_ids=[],
+        falsification_probes=["check N3 vs N6"],
+    )
+    probe = {
+        "tool": "get_dp_quality_gauges",
+        "args_hint": "window_seconds=60",
+        "expected_if_hypothesis_holds": "x",
+        "falsifying_observation": "y",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1",
+        hypothesis_statement="UPF transient drop",
+        primary_suspect_nf="upf",
+        probes=[probe, probe],  # >= 2 required
+        notes="",
+    )
+
+    await orch._run_parallel_investigators(
+        hypotheses=[h],
+        plans=[plan],
+        network_analysis_text="na",
+        session_service=None,  # not used by the stub
+        all_phases=[],
+        anomaly_window_start_ts=1777505000.0,
+        anomaly_window_end_ts=1777505030.0,
+        anomaly_screener_snapshot_ts=1777505020.0,
+    )
+
+    assert len(captured_states) == 1
+    state = captured_states[0]
+    assert state["anomaly_window_start_ts"] == 1777505000.0
+    assert state["anomaly_window_end_ts"] == 1777505030.0
+    assert state["anomaly_screener_snapshot_ts"] == 1777505020.0

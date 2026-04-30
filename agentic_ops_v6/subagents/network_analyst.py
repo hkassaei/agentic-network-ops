@@ -37,8 +37,14 @@ def create_network_analyst() -> LlmAgent:
         output_key="network_analysis",
         output_schema=NetworkAnalystReport,
         tools=[
-            # Diagnostic tools for confirmation before committing
-            tools.get_nf_metrics,
+            # Diagnostic tools for confirmation before committing.
+            # `get_diagnostic_metrics` is the curated successor to
+            # `get_nf_metrics` per ADR get_diagnostic_metrics_tool.md —
+            # returns the screener's view (model features + learned
+            # baselines) plus KB-tagged supporting metrics, with the
+            # noise / dead-counter / lifetime-misread classes filtered
+            # out.
+            tools.get_diagnostic_metrics,
             tools.get_dp_quality_gauges,
             tools.get_network_status,
             tools.measure_rtt,

@@ -84,6 +84,60 @@ def _tool_name(t) -> str:
     return getattr(t, "__name__", getattr(t, "name", repr(t)))
 
 
+def test_get_nf_metrics_not_in_any_agent_toolset():
+    """Regression guard for ADR get_diagnostic_metrics_tool.md Step 4.
+
+    `get_nf_metrics` was removed from the agent toolsets in favor of
+    the curated `get_diagnostic_metrics`. The unfiltered tool was
+    leading agents into lifetime-counter misreads and false-negative
+    reads of dead-by-design RTPEngine counters. If anyone re-adds
+    `get_nf_metrics` to NA / IG / Investigator / OntologyConsultation
+    in the future without an explicit ADR superseding the curation
+    decision, this test fails.
+
+    `get_nf_metrics` itself stays in the codebase — it serves the
+    GUI's live-metrics panel and internal callers (compare_to_baseline
+    and the chaos framework's traffic-generation verification). Just
+    not in agent tool lists.
+    """
+    factories = {
+        "NetworkAnalyst": create_network_analyst,
+        "InstructionGenerator": create_instruction_generator,
+        "Investigator": create_investigator_agent,
+        "OntologyConsultation": create_ontology_consultation_agent,
+    }
+    for label, factory in factories.items():
+        agent = factory()
+        names = {_tool_name(t) for t in agent.tools}
+        assert "get_nf_metrics" not in names, (
+            f"{label} has `get_nf_metrics` in its tool list. Per ADR "
+            f"get_diagnostic_metrics_tool.md Step 4, agents must use "
+            f"`get_diagnostic_metrics` exclusively for metric reads. "
+            f"If you intentionally re-added it, write a superseding ADR."
+        )
+
+
+def test_get_diagnostic_metrics_present_in_metric_reading_agents():
+    """Counterpart to the test above: NA and Investigator both need
+    a metric-reading tool; after the swap, that tool is
+    `get_diagnostic_metrics`. If someone removes it without a
+    replacement, the agents would be unable to read NF state at all."""
+    na = create_network_analyst()
+    inv = create_investigator_agent()
+
+    na_tool_names = {_tool_name(t) for t in na.tools}
+    inv_tool_names = {_tool_name(t) for t in inv.tools}
+
+    assert "get_diagnostic_metrics" in na_tool_names, (
+        "NetworkAnalyst lost get_diagnostic_metrics. Agent has no way "
+        "to read NF state. ADR: get_diagnostic_metrics_tool.md Step 4."
+    )
+    assert "get_diagnostic_metrics" in inv_tool_names, (
+        "Investigator lost get_diagnostic_metrics. Probes that need "
+        "current NF metrics will fail. ADR: get_diagnostic_metrics_tool.md."
+    )
+
+
 def test_falsification_probe_tool_enum_matches_investigator_tools():
     """Regression guard — the `_InvestigatorTool` Literal in
     agentic_ops_v6/models.py must list every name Gemini's constrained

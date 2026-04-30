@@ -45,18 +45,26 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
         output_key="investigator_verdict",
         output_schema=InvestigatorVerdict,
         tools=[
-            # All diagnostic tools. Two tools are intentionally absent:
+            # All diagnostic tools. Three tools are intentionally absent:
             #   - `query_prometheus`: removed per ADR kb_backed_tool_outputs_and_no_raw_promql.md
-            #     (agents use `get_nf_metrics` / `get_dp_quality_gauges` instead,
-            #     which are KB-annotated and cannot return hallucinated names).
+            #     (agents use `get_diagnostic_metrics` / `get_dp_quality_gauges`
+            #     instead, which are KB-annotated and cannot return
+            #     hallucinated names).
             #   - `read_container_logs` / `search_logs`: removed per ADR
             #     remove_log_probes_from_investigator.md (agent-authored grep
             #     patterns are unreliable and "no matches" is mis-read as
             #     strong contradicting evidence; the recurring mongodb_gone
             #     mis-diagnoses traced directly to this).
+            #   - `get_nf_metrics`: removed per ADR get_diagnostic_metrics_tool.md
+            #     in favor of the curated `get_diagnostic_metrics`. The
+            #     unfiltered get_nf_metrics output (~100 raw values) was
+            #     repeatedly leading agents into lifetime-counter misreads
+            #     and false-negative reads of dead-by-design RTPEngine
+            #     counters. The curated tool returns model features +
+            #     KB-tagged supporting metrics, with no overlap.
             tools.measure_rtt,
             tools.check_process_listeners,
-            tools.get_nf_metrics,
+            tools.get_diagnostic_metrics,
             tools.get_dp_quality_gauges,
             tools.get_network_status,
             tools.run_kamcmd,

@@ -147,7 +147,12 @@ class CorrelationAnalysis(BaseModel):
 _InvestigatorTool = Literal[
     "measure_rtt",
     "check_process_listeners",
-    "get_nf_metrics",
+    # `get_nf_metrics` was replaced with `get_diagnostic_metrics` per
+    # ADR `get_diagnostic_metrics_tool.md`. The constrained-decoder
+    # enum here gates what tool names the InstructionGenerator's plans
+    # can reference; since IG can no longer ask the Investigator to
+    # call get_nf_metrics, the literal must reflect that.
+    "get_diagnostic_metrics",
     "get_dp_quality_gauges",
     "get_network_status",
     "run_kamcmd",
@@ -168,13 +173,39 @@ _InvestigatorTool = Literal[
 
 
 class FalsificationProbe(BaseModel):
-    """One concrete probe the Investigator should run."""
+    """One concrete probe the Investigator should run.
+
+    `conflates_with` exists because some probe readings are
+    compositional — their value is a function of more than one
+    element (directional path probes, request-response timings,
+    throughput ratios across a boundary). A single reading from
+    such a probe cannot, in general, identify which element owns a
+    deviation. The IG must list the alternative explanations whose
+    contribution would produce the same reading; the plan must then
+    include a partner probe whose path shares some of those elements
+    with the first and differs in the one the hypothesis names. The
+    Investigator reads `conflates_with` and refuses to declare
+    DISPROVEN on a compositional probe alone.
+    """
     tool: _InvestigatorTool = Field(
         ..., description="Must be one of the Investigator's registered tools."
     )
     args_hint: str = Field("", description="natural-language arg guidance")
     expected_if_hypothesis_holds: str
     falsifying_observation: str
+    conflates_with: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Alternative explanations whose contribution to this "
+            "probe's reading is indistinguishable from the "
+            "hypothesized cause. Required (non-empty) when the probe's "
+            "reading composes contributions from more than one "
+            "element. The plan must include a partner probe whose "
+            "path differs in the element the hypothesis names so the "
+            "comparison localizes. Empty means the probe's reading "
+            "uniquely identifies the hypothesized cause."
+        ),
+    )
 
 
 class FalsificationPlan(BaseModel):

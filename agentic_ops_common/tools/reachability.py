@@ -10,6 +10,22 @@ async def measure_rtt(container: str, target_ip: str) -> str:
     Normal Docker bridge RTT is <1ms. Elevated RTT (>10ms) indicates
     abnormal latency or congestion.
 
+    Compositional structure of the reading. A measure_rtt result is a
+    function of the source container's networking stack, every link
+    and intermediate hop on the path, and the target container's
+    networking stack. A deviation from healthy (elevated latency or
+    packet loss) is the sum of contributions from every element on
+    that path — the reading alone is structurally ambiguous about
+    which element produced it.
+
+    Disambiguation requires a comparison. To attribute a deviation
+    to a specific element, take a second measurement whose path
+    shares some elements with the first and differs in others.
+    Elements common to both paths cancel out of the comparison; the
+    differing elements are what the comparison localizes. Without
+    such a comparison, a single reading cannot, in general, name the
+    responsible element.
+
     Args:
         container: Source container name (e.g. 'pcscf', 'icscf').
         target_ip: Target IP address to ping (e.g. '172.22.0.19').

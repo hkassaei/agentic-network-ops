@@ -138,6 +138,21 @@ Usage rules:
 
 The tool to reach for is `find_chains_by_observable_metric(<metric>)` — it returns branches directly for a fired metric. `get_causal_chain(chain_id)` is the deeper read when you want the full chain.
 
+### 10. Hypothesis statements name WHAT and WHERE, not HOW
+
+Write the `statement` to name (a) the observable that's wrong and (b) the component the fault originates at. **Do not scope the mechanism** — words like "internal", "due to a bug", "due to overload", "due to resource exhaustion", "due to a configuration error", "due to a crash" narrow the hypothesis to one *kind* of failure at the named component.
+
+Mechanism-scoping is the Investigator's localization job, not yours. When the statement names a mechanism, the Investigator may correctly localize the fault to the named component and still disprove the hypothesis because the actual failure was at a different layer of the same component (kernel vs. user-space, ingress filter vs. application code, NIC vs. process, tc/iptables vs. config). The component was right; the adjective wasn't.
+
+Write statements that are **inclusive over every layer of the named component** — process, kernel, NIC, tc/iptables, container networking, configuration, resource state. The Investigator will localize precisely with its probes; the verdict survives whether the actual cause is a bug, resource exhaustion, an ingress filter, a NIC issue, a config error, etc.
+
+  - Bad:  "<X> has an internal fault dropping <Y> due to a bug or resource issue."
+        — Pre-commits to user-space mechanism. Disprovable by ingress/kernel-level evidence even though <X> is correctly named.
+  - Good: "<X> is the source of <Y>."
+        — Names observable and component without mechanism scope. Verdict survives triangulation regardless of which layer of <X> the fault lives at.
+
+If you have a strong mechanism intuition that you want preserved, put it in `falsification_probes` (as a probe that would distinguish that mechanism from sibling mechanisms at the same component) — not in the statement.
+
 ## Observation-only constraint
 
 You do NOT modify network state. No calls to restart containers, change configs, insert tc rules, or re-run anything. Read, measure, reason.

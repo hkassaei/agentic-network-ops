@@ -20,11 +20,13 @@ The orchestrator will spawn one parallel Investigator sub-agent per plan. Each s
 3. **Probes MUST use only tools the Investigator has access to** (see list below). Any probe naming a non-existent tool will fail.
 4. **Probes should be distinguishing.** For each probe: state what result WOULD hold if the hypothesis is correct, and what result WOULD FALSIFY it. Use the KB's `disambiguators` (already surfaced in the NA report) whenever possible.
 5. **Do NOT include redundant probes** that the NA already mentioned as direct evidence. Target cross-layer probes, adjacent-NF probes, or liveness checks that the NA didn't cover.
-6. **Triangulation for directional probes (MANDATORY).** When a probe measures a *directional* property between two components A and B — `measure_rtt(A, B_ip)`, a request-response latency, or any tool whose output is the composite of both endpoints — the plan MUST include **at least one triangulation probe** that would isolate which side owns the problem. Acceptable triangulation forms:
-   - Reverse direction: `measure_rtt` from B (or a container adjacent to B) to A's IP
-   - Third-target probe from the same source: `measure_rtt` from A to a known-good target C whose path does not cross B
-   - Third-source probe to the same target: `measure_rtt` from a known-good X to B's IP
-   Without a triangulation probe, a directional result is attributable to *either* endpoint and cannot by itself falsify a hypothesis that named only one of them.
+6. **Compositional probes require a disambiguation partner (MANDATORY).** A probe whose reading composes contributions from more than one element — directional path probes (`measure_rtt(A, B_ip)`), request-response timings, throughput ratios across a boundary, anything whose value is a function of more than one component — does NOT, on its own, identify which element owns a deviation. The reading is structurally ambiguous.
+
+   For every such probe, the plan MUST:
+   (a) populate the probe's `conflates_with` field with the other elements whose contribution could produce the same reading, AND
+   (b) include a second probe whose path shares some elements with the first and differs in the one the hypothesis names, so the comparison localizes which element the deviation belongs to.
+
+   The disambiguation partner is the work the Investigator cannot do retroactively — only a second reading whose path differs in the right place can collapse the ambiguity. A plan without it concedes the result. The Investigator is instructed to refuse a DISPROVEN verdict on a compositional probe whose `conflates_with` is non-empty if the partner probe is missing or itself ambiguous; it will return INCONCLUSIVE instead, which is a wasted run.
 7. **Activity-vs-drops discriminator.** Applies only to hypotheses claiming an NF is *dropping / silently failing / not responding* based on low or zero traffic AT THAT NF. For those, the plan must include one probe that reads the upstream NF's outbound counter for the same traffic class (e.g., gNB's GTP-U out for UPF-N3; P-CSCF's `httpclient:connok` for PCF-N5). Skip this rule for hypotheses that name a component as the root cause for non-silence reasons (container exited, config error, etc.) — there is no "upstream" to check.
 8. **Negative-result falsification weight.** If a probe is expected to produce an error/log/metric when the hypothesis holds, a clean/empty result from that probe is a *contradiction*, not a neutral data point. Write probes so that their negative result is genuinely incompatible with the hypothesis — i.e. the pattern must be broad enough that a real failure of this mode would hit it.
 9. **Flow-anchored probes (strongly preferred).** Before writing a plan, call `get_flows_through_component(nf)` on the hypothesis's `primary_suspect_nf` to see every flow that touches it, then `get_flow(flow_id)` on the most relevant one. Each step's `failure_modes` entries describe what the implementation *actually does* on error (SIP response codes, log strings, metric spikes). Write probes that look for those specific observables. A plan whose probes correspond to authored `failure_modes` is stronger than one assembled from generic 3GPP priors.
@@ -69,23 +71,57 @@ If a probe you'd like to run has no matching tool, express it via the closest av
 
 ## Format
 
-Return a `FalsificationPlanSet`:
+Return a `FalsificationPlanSet`. The schema is shown below using **placeholders** (`<X>`, `<Y>`, `<source>`, `<element>`) — instantiate them against the hypothesis you're planning for. Two example shapes are given because they correspond to the two structurally different cases probes have to handle:
 
 ```
 plans:
-  - hypothesis_id: h1
+  - hypothesis_id: <id>
     hypothesis_statement: "<statement from NA>"
     primary_suspect_nf: <nf>
     probes:
-      - tool: measure_rtt
-        args_hint: "pcscf → icscf_ip"
-        expected_if_hypothesis_holds: "100% packet loss (partition)"
-        falsifying_observation: "clean RTT (< 5ms) — hypothesis disproven"
-      - ... (min 2, target 3 per plan)
-    notes: "cross-layer focus: ..."
-  - hypothesis_id: h2
+
+      # Shape A — hypothesis is a binary claim about a single element.
+      # e.g. "the link/connection between <X> and <Y> is partitioned",
+      # "<X>'s container is up", "process <P> is listening on port <N>".
+      # The probe's reading uniquely identifies the claimed cause;
+      # `conflates_with` is empty.
+      - tool: <tool>
+        args_hint: "<args identifying the element being tested>"
+        expected_if_hypothesis_holds: "<reading consistent with hypothesis>"
+        falsifying_observation: "<reading that contradicts the binary claim>"
+        conflates_with: []
+
+      # Shape B — hypothesis names ONE element on a path/composite whose
+      # reading is a function of multiple elements (directional path
+      # probes, request-response timings, ratios across a boundary,
+      # any tool whose value composes contributions from more than one
+      # component). e.g. "<element> is the source of an observed
+      # deviation in a measurement that crosses (source + path +
+      # element)". A single reading from such a probe cannot localize
+      # which element produced the deviation.
+      - tool: <compositional_tool>
+        args_hint: "<source> → <element being tested>"
+        expected_if_hypothesis_holds: "<deviation observed>"
+        falsifying_observation: "<no deviation — but only meaningful when read together with the partner probe below>"
+        conflates_with:
+          - "<source>'s contribution could produce the same reading"
+          - "the path/intermediate elements between <source> and <element being tested> could produce the same reading"
+      # Partner probe — chosen so its path shares some elements with
+      # the first and differs in <element being tested>. The
+      # comparison localizes which element owns any deviation seen
+      # by the first probe.
+      - tool: <compositional_tool>
+        args_hint: "<different source whose path to <element being tested> does NOT share the elements listed in conflates_with>"
+        expected_if_hypothesis_holds: "<same deviation observed — the hypothesized element is the source>"
+        falsifying_observation: "<no deviation — original reading was attributable to one of the conflates_with entries, not <element being tested>>"
+        conflates_with: []
+
+    notes: "<branch references, source_step ids, anything that anchors the plan to KB content>"
+  - hypothesis_id: <next id>
     ...
 ```
+
+The two shapes are not optional alternatives — pick whichever matches the *structure of the hypothesis*. A hypothesis that names an element on a multi-element path (Shape B) without a partner probe is structurally underspecified; the Investigator will return INCONCLUSIVE.
 
 ## Observation-only constraint
 

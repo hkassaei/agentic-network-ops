@@ -255,6 +255,30 @@ class MetricEntry(BaseModel):
     # residual after restart — OK to ignore if < 5").
     note: Optional[str] = None
 
+    # --- Agent-facing curation (ADR: get_diagnostic_metrics_tool.md) ---
+    # Opt-in flag for the `get_diagnostic_metrics` tool's "diagnostic
+    # supporting" block. False/absent = not exposed to agents in that
+    # tool. True = include in the curated agent view. Note that model
+    # features (members of `MetricPreprocessor.EXPECTED_FEATURE_KEYS`)
+    # are auto-included in `get_diagnostic_metrics` regardless of this
+    # flag — this field gates ONLY the supporting-metric block.
+    #
+    # No accompanying `agent_purpose` field by deliberate design: every
+    # MetricEntry already carries `description`, `meaning.what_it_signals`
+    # / `spike` / `drop` / `zero`, `healthy.typical_range` / `invariant`,
+    # `related_metrics` (including `discriminator_for` relationships),
+    # `disambiguators`, and `tags`. The tool's render layer projects
+    # these existing fields into agent-readable output. Adding a parallel
+    # `agent_purpose` field would duplicate this content and invite
+    # drift; existing fields are the single source of truth.
+    #
+    # For metrics where the agent needs scale-dependent reading
+    # guidance (e.g. `ran_ue`, `amf_session` — agent should check
+    # non-zero presence rather than absolute count, since deployments
+    # vary), tag the metric with `tags: [scale_dependent]` and the
+    # render layer will wrap the value with the appropriate hint.
+    agent_exposed: bool = False
+
 
 class NFBlock(BaseModel):
     """Metrics grouped under one NF (the NF owns them semantically)."""

@@ -31,6 +31,12 @@ from .causal_reasoning import (
 )
 from .flows import list_flows, get_flow, get_flows_through_component
 from .data_plane import get_dp_quality_gauges
+# get_diagnostic_metrics is the curated agent-facing successor to
+# get_nf_metrics: returns model features (the screener's view) +
+# diagnostic supporting metrics (KB-tagged via agent_exposed=True).
+# Step 4 of the diagnostic-tool ADR removes get_nf_metrics from
+# agent toolsets and routes the agent through this tool exclusively.
+from .diagnostic_metrics import get_diagnostic_metrics
 from .vonr_scope import get_vonr_components
 
 __all__ = [
@@ -47,5 +53,6 @@ __all__ = [
     "get_causal_chain", "get_causal_chain_for_component", "find_chains_by_observable_metric",
     "list_flows", "get_flow", "get_flows_through_component",
     "get_dp_quality_gauges",
+    "get_diagnostic_metrics",
     "get_vonr_components",
 ]

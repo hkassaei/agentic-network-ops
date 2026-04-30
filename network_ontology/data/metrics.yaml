@@ -5,11 +5,14 @@ metrics:
       amf_session:
         source: prometheus
         type: counter
+        agent_exposed: true
         description: Active NAS sessions on the AMF. Each UE has 2 (internet + IMS APN).
         healthy:
           scale_independent: false
           invariant: amf_session == ran_ue * configured_apns_per_ue (typically 2). Ratio should stay constant;
             absolute count scales with UE pool.
+        tags:
+        - scale_dependent
         expected: 4
         note: 2 UEs x 2 sessions (internet + IMS APN)
       fivegs_amffunction_amf_authfail:
@@ -50,6 +53,7 @@ metrics:
         display_name: Connected gNBs
         source: prometheus
         type: gauge
+        agent_exposed: true
         unit: count
         protocol: NGAP
         interface: N2
@@ -106,12 +110,14 @@ metrics:
         - ran
         - n2
         - liveness
+        - scale_dependent
         expected: 1
         alarm_if: = 0 (all gNBs disconnected) or dropped from prior stable value
       ran_ue:
         display_name: RAN-attached UEs
         source: prometheus
         type: gauge
+        agent_exposed: true
         unit: count
         protocol: NGAP
         interface: N2
@@ -205,6 +211,7 @@ metrics:
         - ran
         - attachment
         - liveness
+        - scale_dependent
         expected: 2
         alarm_if: = 0 (RAN failure) or dropped from prior stable value (partial failure)
   icscf:
@@ -244,6 +251,7 @@ metrics:
       cdp:timeout:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: Diameter Cx query timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity
           issues.
         healthy:
@@ -360,6 +368,7 @@ metrics:
       ims_icscf:lir_timeouts:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: Location-Info-Request (LIR) query timeouts to HSS. Expected 0.
         healthy:
           scale_independent: true
@@ -368,6 +377,7 @@ metrics:
       ims_icscf:uar_timeouts:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: User-Agent-Route (UAR) query timeouts to HSS. Expected 0.
         healthy:
           scale_independent: true
@@ -826,12 +836,14 @@ metrics:
       fivegs_pcffunction_pa_policyamassoreq:
         source: prometheus
         type: counter
+        agent_exposed: true
         description: AM policy association requests (counter).
         healthy:
           scale_independent: true
       fivegs_pcffunction_pa_policyamassosucc:
         source: prometheus
         type: counter
+        agent_exposed: true
         description: Successful AM policy associations (counter).
         healthy:
           scale_independent: true
@@ -1122,6 +1134,7 @@ metrics:
       httpclient:connfail:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: HTTP client connection failures (counter). Baseline 1300-1500 is pre-existing due
           to SCP_BIND_IP placeholder. Only alert if delta > 100.
         healthy:
@@ -1136,6 +1149,7 @@ metrics:
       httpclient:connok:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: Successful HTTP client connections (counter).
         healthy:
           scale_independent: true
@@ -1377,6 +1391,7 @@ metrics:
       sl:4xx_replies:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: 4xx client error SIP responses (counter). Non-zero delta indicates client errors.
         healthy:
           scale_independent: true
@@ -1384,6 +1399,7 @@ metrics:
       sl:5xx_replies:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: 5xx server error SIP responses (counter). Non-zero delta indicates server failures.
         healthy:
           scale_independent: true
@@ -1702,6 +1718,7 @@ metrics:
       cdp:timeout:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: Diameter Cx timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity issues.
         healthy:
           scale_independent: true
@@ -1720,7 +1737,17 @@ metrics:
       ims_auth:mar_timeouts:
         source: kamcmd
         type: counter
+        agent_exposed: true
         description: Multimedia-Auth-Request (MAR) timeouts to HSS. Expected 0.
+        healthy:
+          scale_independent: true
+        expected: 0
+        alarm_if: '> 0'
+      ims_registrar_scscf:sar_timeouts:
+        source: kamcmd
+        type: counter
+        agent_exposed: true
+        description: Server-Assignment-Request (SAR) timeouts to HSS. Expected 0.
         healthy:
           scale_independent: true
         expected: 0
@@ -2291,12 +2318,15 @@ metrics:
       fivegs_smffunction_sm_sessionnbr:
         source: prometheus
         type: counter
+        agent_exposed: true
         description: Active PDU sessions managed by the SMF. Each UE establishes 2 (internet + IMS APN).
         healthy:
           scale_independent: false
           invariant: sessionnbr == ues_active * configured_apns_per_ue. Ratio is the invariant; absolute
             value scales with UE count.
           condition: 2 UEs x 2 PDU sessions each
+        tags:
+        - scale_dependent
         expected: 4
       pfcp_sessions_active:
         source: prometheus

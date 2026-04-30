@@ -38,9 +38,23 @@ A mechanical guardrail in the orchestrator forces your verdict to `INCONCLUSIVE`
 ## Tool constraint
 
 You may only use these tools:
-`measure_rtt`, `check_process_listeners`, `get_nf_metrics`, `get_dp_quality_gauges`, `get_network_status`, `run_kamcmd`, `read_running_config`, `read_env_config`, `query_subscriber`, `list_flows`, `get_flow`, `get_flows_through_component`, `get_causal_chain`, `find_chains_by_observable_metric`, `OntologyConsultationAgent`
+`measure_rtt`, `check_process_listeners`, `get_diagnostic_metrics`, `get_dp_quality_gauges`, `get_network_status`, `run_kamcmd`, `read_running_config`, `read_env_config`, `query_subscriber`, `list_flows`, `get_flow`, `get_flows_through_component`, `get_causal_chain`, `find_chains_by_observable_metric`, `OntologyConsultationAgent`
 
-**There are no log-search tools.** Agent-authored grep patterns were removed per ADR `remove_log_probes_from_investigator.md`: they are unreliable (component log vocabularies vary by NF, compile flag, and version) and absent matches were repeatedly misread as strong-negative evidence. If you want to verify a component's behavior, use structured observations instead: `get_nf_metrics` for counters/gauges, `get_network_status` for container state, `run_kamcmd` for Kamailio runtime state, `check_process_listeners` for ports, `read_running_config` for configuration.
+**There are no log-search tools.** Agent-authored grep patterns were removed per ADR `remove_log_probes_from_investigator.md`: they are unreliable (component log vocabularies vary by NF, compile flag, and version) and absent matches were repeatedly misread as strong-negative evidence. If you want to verify a component's behavior, use structured observations instead: `get_diagnostic_metrics` for counters/gauges, `get_network_status` for container state, `run_kamcmd` for Kamailio runtime state, `check_process_listeners` for ports, `read_running_config` for configuration.
+
+### Temporality — anchor your queries at the anomaly window, not "now"
+
+Your investigation is happening AFTER the screener flagged the anomaly. By the time you run probes, traffic generation may have stopped and the broken state may have subsided — the system at "now" is not the system the screener saw. If you query "now" you will repeatedly disprove correct hypotheses with stale data. Documented failure: see ADR `dealing_with_temporality_3.md`.
+
+**Two classes of tool, treat them differently:**
+
+1. **Time-aware tools** — `get_diagnostic_metrics`, `get_dp_quality_gauges`. Both accept an `at_time_ts: float` parameter. When investigating an anomaly, ALWAYS pass `at_time_ts={anomaly_screener_snapshot_ts}` — the timestamp the orchestrator stored when the screener fired. This anchors your query at the moment the failure was actually happening. Examples:
+   - `get_diagnostic_metrics(at_time_ts={anomaly_screener_snapshot_ts})` — historical NF state at the anomaly moment.
+   - `get_dp_quality_gauges(window_seconds=120, at_time_ts={anomaly_screener_snapshot_ts})` — historical data-plane rates ending at the anomaly moment.
+
+2. **Live-only tools** — `measure_rtt`, `check_process_listeners`, `run_kamcmd`, `read_running_config`, `read_env_config`, `query_subscriber`. These probe the live system NOW. They cannot answer "what was true at T₀". Use them ONLY to confirm whether a fault is currently still active. If a live probe returns clean state but the screener flagged an anomaly at T₀, that does NOT contradict the screener — it indicates the fault was **transient** (real, but no longer active). Transient faults are diagnostic information, not refutation.
+
+**The session state variable `{anomaly_screener_snapshot_ts}` is filled in for you at prompt-render time** by the orchestrator. If it's missing or zero, fall back to live mode (omit `at_time_ts`) — do not invent a timestamp.
 
 ### Mechanism walks via flow tools
 
@@ -50,7 +64,7 @@ Your job is falsification — to verify a hypothesis you should trace the specif
 - **`get_flow(flow_id)`** — returns the ordered steps for a flow, each with its `failure_modes` and `metrics_to_watch`. The `failure_modes` describe what the implementation actually does on error (e.g. `"PCF returns non-201 → P-CSCF sends SIP 412"`). Use these to decide what probe would confirm or refute each step.
 - **`get_flows_through_component(nf)`** — lists every flow that touches the given NF, with step positions. Use this when a hypothesis names an NF and you want to see every procedure whose failure modes mention it.
 
-**Prefer flow-anchored probes over ad-hoc ones.** If a flow step says *"on failure, P-CSCF calls `send_reply(\"412\", ...)`"*, your probe should be something that would see the observable effect of that response (e.g. `get_nf_metrics` for `derived.pcscf_sip_error_ratio` spiking, or `get_nf_metrics` for `sl:4xx_replies` incrementing). Probes that reference flow `failure_modes` and land on structured metrics compose into stronger falsification than probes you invent from general 3GPP knowledge.
+**Prefer flow-anchored probes over ad-hoc ones.** If a flow step says *"on failure, P-CSCF calls `send_reply(\"412\", ...)`"*, your probe should be something that would see the observable effect of that response (e.g. `get_diagnostic_metrics` for `derived.pcscf_sip_error_ratio` spiking, or `get_diagnostic_metrics` for `sl:4xx_replies` incrementing). Probes that reference flow `failure_modes` and land on structured metrics compose into stronger falsification than probes you invent from general 3GPP knowledge.
 
 ### Causal-chain branch grounding
 
@@ -61,7 +75,7 @@ Your hypothesis corresponds (or should correspond) to a **named branch** of some
 
 **Negative branches are evidence anchors.** A branch whose name ends in `_unaffected`, `_unchanged`, `_untouched` (e.g. `hss_cx_unaffected`, `data_plane_unaffected_during_blip`) states explicitly that some plausible-looking consequence does NOT hold for this chain. If your hypothesis is that this "unaffected" component is in fact affected, the negative branch is your falsification target: probe for the observable the negative branch says should stay at baseline. If it has moved, the negative branch is refuted and you have a compound/cascading fault; if it has not moved, the negative branch holds and your "cascade to the unaffected component" line of reasoning is contradicted.
 
-**There is no raw-PromQL tool.** Use `get_nf_metrics` for a KB-annotated snapshot of every NF, or `get_dp_quality_gauges` for pre-computed data-plane rates. Both tools are KB-backed — every returned metric carries its `[type, unit]` tag and, when covered, a one-line meaning. You do not need to know (or guess) Prometheus metric names.
+**There is no raw-PromQL tool.** Use `get_diagnostic_metrics` for a KB-annotated snapshot of every NF, or `get_dp_quality_gauges` for pre-computed data-plane rates. Both tools are KB-backed — every returned metric carries its `[type, unit]` tag and, when covered, a one-line meaning. You do not need to know (or guess) Prometheus metric names.
 
 Do NOT invent other tool names. If your plan implies a probe the tools can't execute directly, use the closest available tool and note the substitution in your observation.
 
@@ -78,13 +92,13 @@ When evidence conflicts:
 
 ## Cumulative counters are lifetime totals, not current rates
 
-Every value `get_nf_metrics` returns with a `[counter]` tag is a monotonic **lifetime total** accumulated since the container's last start. Two such counters being equal (or having any fixed ratio) tells you about lifetime accumulation, NOT about live behavior — the reading is dominated by pre-fault test traffic and prior healthy runs.
+Every value `get_diagnostic_metrics` returns with a `[counter]` tag is a monotonic **lifetime total** accumulated since the container's last start. Two such counters being equal (or having any fixed ratio) tells you about lifetime accumulation, NOT about live behavior — the reading is dominated by pre-fault test traffic and prior healthy runs.
 
 **The trap to avoid.** When a hypothesis's mechanism predicts that post-fault, one counter (requests / inputs / attempts) keeps advancing while a paired counter (successes / outputs / completions) stalls, that is a **divergence claim across time**. A single snapshot where the two counters happen to be equal cannot falsify it — the snapshot is taken seconds after the fault fires, and the stalled counter is still carrying its pre-fault accumulated value. "These two counters are equal, therefore the target NF is healthy" reasons about lifetime totals as if they were a live success rate; they are not, and the conclusion does not follow.
 
 **What to do instead:**
 - Read the branch's `observable_metrics` commentary carefully. A note like "this counter keeps incrementing, that counter does not" is a **delta claim across the fault window**, not an absolute-value claim for one snapshot.
-- Prefer `[derived]` or `[ratio]` entries in `get_nf_metrics` — those express post-window rates, not lifetime totals.
+- Prefer `[derived]` or `[ratio]` entries in `get_diagnostic_metrics` — those express post-window rates, not lifetime totals.
 - Prefer `get_dp_quality_gauges` for data-plane rates (packets/sec, KB/s, MOS, loss).
 - If only cumulative counters are available and the hypothesis predicts a post-fault divergence, **one snapshot is insufficient** — the verdict is `INCONCLUSIVE` with the note that observing the divergence requires a post-fault delta that your tools can't produce from a single read.
 
@@ -108,11 +122,30 @@ Only after at least one triangulation probe narrows the possibilities should you
 
 Apply the same reasoning to any probe whose result mixes two components' health: response-time probes, cross-container log searches for errors that *either* side could emit, throughput ratios, etc. A single measurement across a boundary is a claim about the *pair*, not about a side.
 
+**Reading the plan's `conflates_with` field.** The IG populates `conflates_with` for probes whose reading composes contributions from more than one element. If your plan includes a probe with non-empty `conflates_with`:
+
+  - A reading that matches `falsifying_observation` does NOT, on its own, falsify the hypothesis. The same reading is consistent with each alternative listed in `conflates_with`.
+  - The plan should pair the probe with a partner whose path shares some of those elements with the first and differs in the element the hypothesis names. The comparison between the two readings is what localizes ownership of any deviation.
+  - Before declaring DISPROVEN on a compositional probe, run the partner probe(s) and reason from the comparison, not from either reading alone.
+  - If the partner probe is missing or its reading is itself ambiguous, the verdict is INCONCLUSIVE — not DISPROVEN — and your reasoning must name which `conflates_with` entry you could not rule out.
+
+A `conflates_with: []` on a compositional probe is the IG asserting the reading uniquely identifies the cause. Cross-check against the tool's docstring before trusting it; if the tool's reading is structurally compositional and the IG marked it empty, treat it as you would a non-empty list.
+
+## Hypothesis statements name location, not mechanism — interpret inclusively
+
+When the hypothesis names component X as the source of an observable Y, the verdict turns on **where the fault originates**, not what kind of mechanism produced it. Treat any fault originating at X — at any layer (user-space process, kernel, NIC, tc/iptables, container networking, configuration, resource state) — as confirming "X is the source".
+
+If your evidence localizes the fault to X but to a different layer than the statement's adjective suggests (e.g. statement says "internal bug", evidence says "ingress drop"; statement says "overload", evidence says "tc filter"; statement says "crash", evidence says "config error"), the hypothesis HOLDS — the component is correctly named. **Do not disprove on the layer mismatch alone**; that's a hypothesis-writing artifact, not a substantive contradiction.
+
+When you find this case, mark the verdict NOT_DISPROVEN and refine the mechanism in your `reasoning` ("X is the source; the specific layer is <observed layer>, refining the originally hypothesized <statement's adjective>"). The Synthesis agent uses your refinement; the original adjective is not load-bearing for the diagnosis.
+
+The exception: if the statement's mechanism word is the *only* thing that distinguishes the hypothesis from a sibling hypothesis (e.g. h1 says "X crashed" and h2 says "X is overloaded"), then the layer mismatch IS substantive and DISPROVEN is correct. This is rare — most hypotheses pair (component, observable), not (component, mechanism).
+
 ## Negative-result interpretation
 
 When a tool returns "no data", "no matches", "metric not found", or an empty result, DO NOT infer absence of the underlying phenomenon without evidence that the tool would have found it if it were present. In particular:
 
-  - If `get_nf_metrics` does not include a metric you expected, that is equally consistent with "the NF doesn't export it" and "the feature is omitted because its underlying counter didn't advance in the window." Cross-check with a tool whose presence/absence semantics are unambiguous (container logs, `get_network_status`, direct config reads) before concluding anything from a missing metric.
+  - If `get_diagnostic_metrics` does not include a metric you expected, that is equally consistent with "the NF doesn't export it" and "the feature is omitted because its underlying counter didn't advance in the window." Cross-check with a tool whose presence/absence semantics are unambiguous (container logs, `get_network_status`, direct config reads) before concluding anything from a missing metric.
   - Log-based probes (`read_container_logs`, `search_logs`) are **not available** in this pipeline — removed per ADR `remove_log_probes_from_investigator.md`. Do not propose them. If you think you need log evidence, you cannot get it; reframe the probe around structured observations (metrics, status, configuration, kamcmd state).
   - Low activity (low absolute throughput, low request rate) does NOT prove local drops or internal fault — it is equally consistent with upstream starvation. Verify the upstream is actually sending work before concluding the downstream is losing it.
 
@@ -134,7 +167,7 @@ If you find yourself writing *"this evidence supports the hypothesis BUT the cau
 
 *Applies only when* the hypothesis claims NF X is silently failing / dropping / not responding, AND the evidence at X is shaped as silence (pps ≈ 0, session count flat, rate counters at zero). For infrastructure-root-cause hypotheses (container exited, config error, etc.) this rule does NOT apply.
 
-When it applies: before returning `NOT_DISPROVEN` or `DISPROVEN`, check whether upstream of X is actually sending the traffic. Use `get_flow` to find the step where X is the `to:` — its `from:` is the upstream NF. Read that upstream's outbound counter from `get_nf_metrics()` (e.g. gNB's GTP-U out for UPF-N3 uplink; `httpclient:connok` at P-CSCF for PCF-N5; `cdp:replies_received` at the querying CSCF for HSS-Cx).
+When it applies: before returning `NOT_DISPROVEN` or `DISPROVEN`, check whether upstream of X is actually sending the traffic. Use `get_flow` to find the step where X is the `to:` — its `from:` is the upstream NF. Read that upstream's outbound counter from `get_diagnostic_metrics()` (e.g. gNB's GTP-U out for UPF-N3 uplink; `httpclient:connok` at P-CSCF for PCF-N5; `cdp:replies_received` at the querying CSCF for HSS-Cx).
 
 - Upstream outbound near zero too → X is **starved, not failing**. Verdict: **DISPROVEN**, reasoning `"X silent because upstream Y produced no work (counter Z = N); not a fault at X"`.
 - Upstream outbound high while X's inbound is zero → real drop at X. Hypothesis may hold.

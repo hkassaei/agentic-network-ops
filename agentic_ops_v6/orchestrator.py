@@ -303,7 +303,21 @@ async def _phase0_anomaly_screener(
     metric_snapshots: Optional[list[dict]],
     all_phases: list,
 ) -> None:
-    """Run the anomaly screener. Same logic as v5; outputs `anomaly_report`."""
+    """Run the anomaly screener. Same logic as v5; outputs `anomaly_report`.
+
+    Also captures the canonical anomaly-window timestamps that downstream
+    phases use to anchor their queries (per ADR
+    `dealing_with_temporality_3.md`):
+      * `state["anomaly_window_start_ts"]` — earliest snapshot timestamp
+        in the observation window the screener consumed.
+      * `state["anomaly_window_end_ts"]` — latest snapshot timestamp.
+      * `state["anomaly_screener_snapshot_ts"]` — timestamp of the
+        specific snapshot that produced the highest anomaly score
+        (the canonical "what time should phases ask about?" value).
+
+    All three are floats (seconds since epoch). Absent from state if
+    Phase 0 produced no scoring snapshots (e.g. no trained model).
+    """
     try:
         from anomaly_trainer.persistence import load_model
         from agentic_ops_common.anomaly.preprocessor import MetricPreprocessor
@@ -321,10 +335,21 @@ async def _phase0_anomaly_screener(
             from agentic_ops_common import tools as common_tools
             text = await common_tools.get_nf_metrics()
             raw = parse_nf_metrics_text(text)
-            snapshots = [{"_parsed": raw}]
+            # No real timestamp available for the synthetic single-snapshot
+            # fallback. Use phase0_start so downstream queries have *some*
+            # anchor; worst case it's slightly stale relative to the actual
+            # metric collection moment.
+            snapshots = [{"_parsed": raw, "_timestamp": phase0_start}]
 
         pp = MetricPreprocessor()
         best_report = None
+        # Track the timestamp of the snapshot that produced `best_report`
+        # — this becomes `anomaly_screener_snapshot_ts`. Initialized to
+        # None; set the first time a snapshot scores.
+        best_snap_ts: Optional[float] = None
+        # Track the time-extent of the snapshots actually consumed (skipping
+        # the first 6 warm-up samples — see the rate-window comment below).
+        scored_snap_timestamps: list[float] = []
         for i, snap in enumerate(snapshots):
             raw_metrics = {}
             snap_ts = snap.get("_timestamp")
@@ -339,10 +364,17 @@ async def _phase0_anomaly_screener(
                 elif isinstance(data, dict):
                     raw_metrics[comp] = data
             features = pp.process(raw_metrics, timestamp=snap_ts)
+            # i < 6 is rate-window warmup (the preprocessor needs at least
+            # 6 samples to compute sliding-window rates; earlier ones
+            # produce empty feature dicts).
             if i >= 6 and features:
                 report = screener.score(features, liveness=pp.liveness_signals())
+                if isinstance(snap_ts, (int, float)):
+                    scored_snap_timestamps.append(float(snap_ts))
                 if best_report is None or report.overall_score > best_report.overall_score:
                     best_report = report
+                    if isinstance(snap_ts, (int, float)):
+                        best_snap_ts = float(snap_ts)
 
         if best_report is not None:
             # Enrich flags with KB semantic context so the NA sees *what
@@ -361,6 +393,19 @@ async def _phase0_anomaly_screener(
                 )
             state["anomaly_report"] = best_report.to_prompt_text()
             state["anomaly_flags"] = best_report.to_dict_list()
+
+            # Anomaly-window timestamps (ADR: dealing_with_temporality_3.md
+            # Layer 1). These are the canonical reference for any
+            # downstream phase asking "what time should I query?". For
+            # now they're just stored in state — Layer 2 of the same ADR
+            # will start consuming them in time-anchored Prometheus
+            # queries; Layer 3 in snapshot-replay; Layer 4 in agent
+            # prompts.
+            if scored_snap_timestamps:
+                state["anomaly_window_start_ts"] = min(scored_snap_timestamps)
+                state["anomaly_window_end_ts"] = max(scored_snap_timestamps)
+            if best_snap_ts is not None:
+                state["anomaly_screener_snapshot_ts"] = best_snap_ts
         else:
             state["anomaly_report"] = (
                 f"Anomaly screening produced no results ({len(snapshots)} snapshots)."
@@ -456,10 +501,20 @@ async def _run_parallel_investigators(
     network_analysis_text: str,
     session_service: InMemorySessionService,
     all_phases: list,
+    anomaly_window_start_ts: float = 0.0,
+    anomaly_window_end_ts: float = 0.0,
+    anomaly_screener_snapshot_ts: float = 0.0,
     on_event=None,
 ) -> list[InvestigatorVerdict]:
     """Spawn one sub-Investigator per hypothesis, run in parallel, return
     verdicts. Applies the minimum-tool-call guardrail per sub-agent.
+
+    The `anomaly_*_ts` timestamps come from Phase 0 and are forwarded
+    into each sub-Investigator's session state so the prompt's
+    `{anomaly_screener_snapshot_ts}` template (per ADR
+    `dealing_with_temporality_3.md`) resolves. 0.0 sentinel = "no
+    anchor available; fall back to live mode" (the prompt instructs
+    the agent to drop `at_time_ts` in that case).
     """
     # Cap at MAX_PARALLEL_INVESTIGATORS
     selected_hypotheses = hypotheses[:MAX_PARALLEL_INVESTIGATORS]
@@ -490,6 +545,9 @@ async def _run_parallel_investigators(
             "primary_suspect_nf": h.primary_suspect_nf,
             "falsification_plan": json.dumps(plan_dict, indent=2),
             "network_analysis": network_analysis_text,
+            "anomaly_window_start_ts": anomaly_window_start_ts,
+            "anomaly_window_end_ts": anomaly_window_end_ts,
+            "anomaly_screener_snapshot_ts": anomaly_screener_snapshot_ts,
         }
 
         question = f"Falsify hypothesis {h.id}: {h.statement}"
@@ -588,6 +646,16 @@ async def investigate(
 
     log.info("Starting v6 investigation for episode=%s", episode_id)
 
+    # Make observation snapshots available to time-aware tools via the
+    # snapshot-replay contextvar (ADR `dealing_with_temporality_3.md`
+    # Layer 3). Tools that take an `at_time_ts` parameter can call
+    # `get_observation_snapshots()` to fetch the recorded history,
+    # find the closest snapshot to the requested time, and read NF
+    # state historically — without us having to thread the snapshot
+    # list through every tool's signature.
+    from agentic_ops_common.tools.snapshot_replay import set_observation_snapshots
+    set_observation_snapshots(metric_snapshots)
+
     session_service = InMemorySessionService()
     state: dict[str, Any] = {
         "episode_id": episode_id,
@@ -597,6 +665,16 @@ async def investigate(
         "seconds_since_observation": seconds_since_observation,
         "event_lookback_seconds": max(300, observation_window_duration),
         "anomaly_window_hint_seconds": anomaly_window_hint_seconds,
+        # Anomaly-window timestamps initialized to 0.0 sentinel so ADK
+        # template substitution in agent prompts (notably the
+        # Investigator's `{anomaly_screener_snapshot_ts}` reference)
+        # always resolves. Phase 0 will overwrite with real values
+        # when it finds a scoring snapshot. The Investigator prompt
+        # treats 0.0 as "no anchor available, fall back to live mode".
+        # ADR: dealing_with_temporality_3.md Layer 1.
+        "anomaly_window_start_ts": 0.0,
+        "anomaly_window_end_ts": 0.0,
+        "anomaly_screener_snapshot_ts": 0.0,
     }
 
     all_phases: list[PhaseTrace] = []
@@ -669,11 +747,17 @@ async def investigate(
     )
 
     # -------- Phase 5: Parallel Investigators --------
+    # Forward anomaly-window timestamps so each sub-Investigator's
+    # session state can resolve `{anomaly_screener_snapshot_ts}` in
+    # the prompt (ADR dealing_with_temporality_3.md Layer 1).
     verdicts = await _run_parallel_investigators(
         hypotheses, plan_set.plans,
         network_analysis_text=state.get("network_analysis", ""),
         session_service=session_service,
         all_phases=all_phases,
+        anomaly_window_start_ts=float(state.get("anomaly_window_start_ts", 0.0) or 0.0),
+        anomaly_window_end_ts=float(state.get("anomaly_window_end_ts", 0.0) or 0.0),
+        anomaly_screener_snapshot_ts=float(state.get("anomaly_screener_snapshot_ts", 0.0) or 0.0),
         on_event=on_event,
     )
     state["investigator_verdicts"] = json.dumps(

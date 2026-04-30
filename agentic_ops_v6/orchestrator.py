@@ -573,6 +573,71 @@ async def _run_parallel_investigators(
     selected_hypotheses = hypotheses[:MAX_PARALLEL_INVESTIGATORS]
     plans_by_id = {p.hypothesis_id: p for p in plans}
 
+    # ------------------------------------------------------------------
+    # Fan-out audit — surface silent plan-drops and hypothesis/plan
+    # NF mismatches that would otherwise pass unnoticed.
+    #
+    # Original failure: run_20260430_013055_gnb_radio_link_failure had
+    # NA produce 1 hypothesis (h1 nr_gnb) and IG produce 3 plans (h1,
+    # h2, h3 — re-anchored on the correlation engine's H1/H2/H3
+    # hypotheses, all targeting amf instead of nr_gnb). The orchestrator
+    # ran 1 investigator paired with a cross-NF-mismatched plan, and
+    # silently dropped the other 2 IG plans because no hypothesis
+    # matched their ids. None of this was logged. The dropped plans
+    # represented LLM work that was paid for and discarded; the NF
+    # mismatch produced an investigator verdict that probed the wrong
+    # NF for the wrong hypothesis.
+    #
+    # Audit prints (warning level so they show up in run logs but
+    # don't fail the pipeline) cover three cases:
+    #   1. Hypotheses without a matching plan — already handled inside
+    #      run_one(); summarized here for visibility.
+    #   2. Plans without a matching hypothesis — silent drops. Each
+    #      represents wasted IG output and possibly a sign that IG
+    #      mis-read its inputs.
+    #   3. NF mismatch between a hypothesis and its plan — the plan
+    #      probes a different component than the hypothesis names.
+    # ------------------------------------------------------------------
+    hypothesis_ids = {h.id for h in selected_hypotheses}
+    plan_ids = set(plans_by_id.keys())
+
+    hyps_without_plan = [
+        h for h in selected_hypotheses if h.id not in plan_ids
+    ]
+    plans_without_hyp = [pid for pid in plan_ids if pid not in hypothesis_ids]
+    nf_mismatches: list[tuple[str, str, str]] = []
+    for h in selected_hypotheses:
+        plan = plans_by_id.get(h.id)
+        if plan is not None and plan.primary_suspect_nf != h.primary_suspect_nf:
+            nf_mismatches.append((h.id, h.primary_suspect_nf, plan.primary_suspect_nf))
+
+    log.info(
+        "Phase 5 fan-out audit — %d NA hypothesis(es), %d IG plan(s); "
+        "running %d sub-Investigator(s).",
+        len(selected_hypotheses), len(plans), len(selected_hypotheses),
+    )
+    if hyps_without_plan:
+        log.warning(
+            "Phase 5 fan-out: %d hypothesis(es) have no matching plan and "
+            "will return INCONCLUSIVE: %s",
+            len(hyps_without_plan), [h.id for h in hyps_without_plan],
+        )
+    if plans_without_hyp:
+        log.warning(
+            "Phase 5 fan-out: %d IG plan(s) have no matching NA hypothesis "
+            "and were SILENTLY DROPPED: %s. This usually means IG produced "
+            "plans for hypothesis ids that NA did not emit (e.g., copied "
+            "ids from the correlation engine's output instead of NA's).",
+            len(plans_without_hyp), plans_without_hyp,
+        )
+    for hid, hyp_nf, plan_nf in nf_mismatches:
+        log.warning(
+            "Phase 5 fan-out: hypothesis %s names primary_suspect_nf=%s but "
+            "the matching plan targets primary_suspect_nf=%s. The plan's "
+            "probes will run against %s while the hypothesis is about %s.",
+            hid, hyp_nf, plan_nf, plan_nf, hyp_nf,
+        )
+
     async def run_one(h: Hypothesis) -> tuple[InvestigatorVerdict, list[PhaseTrace]]:
         plan = plans_by_id.get(h.id)
         if plan is None:
@@ -683,6 +748,46 @@ async def _run_parallel_investigators(
             v, traces = r
             verdicts.append(v)
             all_phases.extend(traces)
+
+    # Surface the fan-out audit into the recorded report. A PhaseTrace
+    # with a synthetic agent_name preserves the audit alongside the
+    # other phase entries the recorder iterates over. Empty/clean
+    # audits are still recorded (output_summary="all matched") so the
+    # absence of a warning in a report is meaningful.
+    audit_lines: list[str] = []
+    audit_lines.append(
+        f"NA hypotheses: {len(selected_hypotheses)} | "
+        f"IG plans: {len(plans)} | "
+        f"sub-Investigators run: {len(verdicts)}"
+    )
+    if plans_without_hyp:
+        audit_lines.append(
+            f"DROPPED PLANS (no matching NA hypothesis id): "
+            f"{plans_without_hyp}"
+        )
+    if hyps_without_plan:
+        audit_lines.append(
+            f"HYPOTHESES WITHOUT PLAN (forced INCONCLUSIVE): "
+            f"{[h.id for h in hyps_without_plan]}"
+        )
+    for hid, hyp_nf, plan_nf in nf_mismatches:
+        audit_lines.append(
+            f"NF MISMATCH on {hid}: hypothesis names {hyp_nf}, "
+            f"plan probes {plan_nf}"
+        )
+    audit_summary = (
+        "all matched" if (
+            not plans_without_hyp and not hyps_without_plan and not nf_mismatches
+        ) else "; ".join(audit_lines[1:])
+    )
+    audit_trace = PhaseTrace(
+        agent_name="Phase5FanOutAudit",
+        started_at=time.time(),
+        finished_at=time.time(),
+        duration_ms=0,
+        output_summary=audit_summary,
+    )
+    all_phases.append(audit_trace)
 
     return verdicts
 

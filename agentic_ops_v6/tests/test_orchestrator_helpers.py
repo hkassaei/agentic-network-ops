@@ -302,6 +302,164 @@ def test_run_parallel_investigators_signature_carries_anomaly_timestamps():
         )
 
 
+# ============================================================================
+# Phase 5 fan-out audit — surfaces silent plan-drops + NF mismatches
+# ============================================================================
+#
+# Regression for run_20260430_013055_gnb_radio_link_failure: NA produced
+# 1 hypothesis (h1 nr_gnb), IG produced 3 plans (h1, h2, h3 — re-anchored
+# on the correlation engine's hypotheses, all targeting amf instead of
+# nr_gnb). Orchestrator silently dropped 2 plans and ran the remaining
+# investigator against a cross-NF-mismatched plan. None of this was
+# logged. The audit added in `_run_parallel_investigators` records all
+# three failure modes both to the live log AND as a Phase5FanOutAudit
+# trace in the recorded report.
+
+@pytest.mark.asyncio
+async def test_fan_out_audit_records_clean_run_with_all_matched(monkeypatch):
+    """When NA and IG agree on hypothesis ids and NF targets, the
+    audit records a clean summary with output_summary='all matched'."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        verdict = {
+            "hypothesis_id": state["hypothesis_id"],
+            "hypothesis_statement": state["hypothesis_statement"],
+            "verdict": "INCONCLUSIVE",
+            "reasoning": "stub",
+        }
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(orch, "create_investigator_agent", lambda name=None: object())
+
+    h = Hypothesis(
+        id="h1", statement="UPF drop", primary_suspect_nf="upf",
+        falsification_probes=["p1"],
+    )
+    probe = {
+        "tool": "get_dp_quality_gauges", "args_hint": "x",
+        "expected_if_hypothesis_holds": "y", "falsifying_observation": "z",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1", hypothesis_statement="UPF drop",
+        primary_suspect_nf="upf", probes=[probe, probe],
+    )
+    all_phases: list = []
+
+    await orch._run_parallel_investigators(
+        hypotheses=[h], plans=[plan],
+        network_analysis_text="na", session_service=None,
+        all_phases=all_phases,
+    )
+
+    audit_traces = [t for t in all_phases if t.agent_name == "Phase5FanOutAudit"]
+    assert len(audit_traces) == 1
+    assert audit_traces[0].output_summary == "all matched"
+
+
+@pytest.mark.asyncio
+async def test_fan_out_audit_flags_silently_dropped_plans(monkeypatch):
+    """Reproduces the gnb-run pattern: NA produces 1 hypothesis (h1),
+    IG produces 3 plans (h1, h2, h3). Plans h2 and h3 have no matching
+    hypothesis and were silently dropped before this audit was added.
+    The audit must surface both dropped ids."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        verdict = {
+            "hypothesis_id": state["hypothesis_id"],
+            "hypothesis_statement": state["hypothesis_statement"],
+            "verdict": "INCONCLUSIVE",
+            "reasoning": "stub",
+        }
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(orch, "create_investigator_agent", lambda name=None: object())
+
+    h = Hypothesis(
+        id="h1", statement="gNB down", primary_suspect_nf="nr_gnb",
+        falsification_probes=["p1"],
+    )
+    probe = {
+        "tool": "get_network_status", "args_hint": "x",
+        "expected_if_hypothesis_holds": "y", "falsifying_observation": "z",
+    }
+    plans = [
+        FalsificationPlan(
+            hypothesis_id=hid, hypothesis_statement=stmt,
+            primary_suspect_nf="nr_gnb", probes=[probe, probe],
+        )
+        for hid, stmt in [
+            ("h1", "gNB down"), ("h2", "extra plan"), ("h3", "another extra"),
+        ]
+    ]
+    all_phases: list = []
+
+    await orch._run_parallel_investigators(
+        hypotheses=[h], plans=plans,
+        network_analysis_text="na", session_service=None,
+        all_phases=all_phases,
+    )
+
+    audit_traces = [t for t in all_phases if t.agent_name == "Phase5FanOutAudit"]
+    assert len(audit_traces) == 1
+    summary = audit_traces[0].output_summary
+    assert "DROPPED PLANS" in summary
+    assert "h2" in summary and "h3" in summary
+    assert "h1" not in summary.split("DROPPED PLANS")[1]  # h1 is matched
+
+
+@pytest.mark.asyncio
+async def test_fan_out_audit_flags_nf_mismatch(monkeypatch):
+    """The other half of the gnb-run pattern: hypothesis names nr_gnb
+    but the matching plan targets amf. The audit surfaces the
+    mismatch so the recorded report makes the cross-NF probe pairing
+    visible."""
+    from agentic_ops_v6 import orchestrator as orch
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        verdict = {
+            "hypothesis_id": state["hypothesis_id"],
+            "hypothesis_statement": state["hypothesis_statement"],
+            "verdict": "INCONCLUSIVE",
+            "reasoning": "stub",
+        }
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(orch, "create_investigator_agent", lambda name=None: object())
+
+    h = Hypothesis(
+        id="h1", statement="gNB down", primary_suspect_nf="nr_gnb",
+        falsification_probes=["p1"],
+    )
+    probe = {
+        "tool": "get_network_status", "args_hint": "x",
+        "expected_if_hypothesis_holds": "y", "falsifying_observation": "z",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1", hypothesis_statement="Total RAN outage",
+        primary_suspect_nf="amf",  # mismatch with hypothesis's nr_gnb
+        probes=[probe, probe],
+    )
+    all_phases: list = []
+
+    await orch._run_parallel_investigators(
+        hypotheses=[h], plans=[plan],
+        network_analysis_text="na", session_service=None,
+        all_phases=all_phases,
+    )
+
+    audit_traces = [t for t in all_phases if t.agent_name == "Phase5FanOutAudit"]
+    assert len(audit_traces) == 1
+    summary = audit_traces[0].output_summary
+    assert "NF MISMATCH" in summary
+    assert "nr_gnb" in summary and "amf" in summary
+    assert "h1" in summary
+
+
 @pytest.mark.asyncio
 async def test_sub_investigator_state_includes_anomaly_timestamps(monkeypatch):
     """End-to-end: _run_parallel_investigators must seed the three

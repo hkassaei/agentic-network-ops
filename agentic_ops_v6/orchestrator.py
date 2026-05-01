@@ -70,6 +70,7 @@ from .guardrails.investigator_minimum import (
     MIN_TOOL_CALLS_PER_INVESTIGATOR,
     apply_min_tool_call_guardrail,
 )
+from .guardrails.mechanism_grounding import lint_mechanism_grounding
 from .guardrails.na_linter import lint_na_hypotheses
 from .guardrails.na_ranking import (
     get_known_nfs,
@@ -1048,10 +1049,13 @@ async def investigate(
         _ranking_kb = None
 
     def _na_combined_guardrail(report):
+        # Decision D — layer-scoping blocklist on hypothesis statements
         d_result = lint_na_hypotheses(report)
         if d_result.verdict is not GuardrailVerdict.PASS:
             log.info("Decision D linter REJECT: %s", d_result.reason[:200])
             return d_result
+
+        # Decision H — direct-vs-derived flag ranking coverage
         flags = state.get("anomaly_flags") or []
         log.info(
             "Decision H linter — invoking with %d anomaly flags "
@@ -1074,7 +1078,18 @@ async def investigate(
             (h_result.notes or {}).get("findings_count", 0)
             if h_result.notes else 0,
         )
-        return h_result
+        if h_result.verdict is not GuardrailVerdict.PASS:
+            return h_result
+
+        # Decision G — narrative-mechanism fabrication grounding (PR 8)
+        g_result = lint_mechanism_grounding(report)
+        log.info(
+            "Decision G linter result: verdict=%s, flagged=%d",
+            g_result.verdict.value,
+            (g_result.notes or {}).get("flagged_count", 0)
+            if g_result.notes else 0,
+        )
+        return g_result
 
     state, na_traces, na_success, na_report = await run_phase_with_guardrail(
         agent_factory=create_network_analyst,

@@ -1,0 +1,965 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260501_212815_mongodb_gone",
+  "timestamp": "2026-05-01T21:28:17.770604+00:00",
+  "duration_seconds": 543.276734,
+  "scenario": {
+    "name": "MongoDB Gone",
+    "description": "Kill MongoDB \u2014 the 5G core subscriber data store. UDR loses its backend, new PDU sessions cannot be created, and subscriber queries fail. Existing sessions may survive briefly.",
+    "category": "container",
+    "blast_radius": "global",
+    "faults": [
+      {
+        "fault_type": "container_kill",
+        "target": "mongo",
+        "params": {},
+        "ttl_seconds": 600
+      }
+    ],
+    "expected_symptoms": [
+      "UDR connection errors to MongoDB",
+      "New PDU session creation fails",
+      "5G subscriber queries fail",
+      "AMF registration may still work (cached)"
+    ],
+    "escalation": false,
+    "observation_traffic_seconds": 120,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 600
+  },
+  "baseline": {
+    "timestamp": "2026-05-01T21:28:17.770604+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 512028.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 493698.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 28482227.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 35404469.0,
+          "_gauge_upf_kbps": 0.03
+        },
+        "badge": "0.0 KB/s",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 12.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 12.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 18.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 18.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 50.0,
+          "core:rcv_requests_register": 5.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 51.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 1.0,
+          "script:register_success": 2.0,
+          "script:register_time": 632.0,
+          "sl:1xx_replies": 5.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 65.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 74.0,
+          "cdp:replies_response_time": 4875.0,
+          "cdp:timeout": 1.0,
+          "core:rcv_requests_invite": 18.0,
+          "core:rcv_requests_register": 121.0,
+          "ims_icscf:lir_avg_response_time": 70.0,
+          "ims_icscf:lir_replies_received": 18.0,
+          "ims_icscf:lir_replies_response_time": 1269.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 64.0,
+          "ims_icscf:uar_replies_received": 56.0,
+          "ims_icscf:uar_replies_response_time": 3606.0,
+          "ims_icscf:uar_timeouts": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "121 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 104.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 419.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 4.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 101.0,
+          "ims_auth:mar_replies_received": 2.0,
+          "ims_auth:mar_replies_response_time": 202.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 2.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 108.0,
+          "ims_registrar_scscf:sar_replies_received": 2.0,
+          "ims_registrar_scscf:sar_replies_response_time": 217.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 17.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 10.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 7.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 503743.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 13404762.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 503743.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 13404762.0,
+          "total_number_of_streams_with_no_relayed_packets": 1.0,
+          "total_number_of_1_way_streams": 2.0,
+          "sum_of_all_mos_values_sampled": 166196.8,
+          "sum_of_all_mos_square_values_sampled": 710115.74,
+          "total_number_of_mos_samples": 39084.0,
+          "average_mos": 4.2,
+          "mos_standard_deviation": 0.02,
+          "sum_of_all_jitter_(reported)_values_sampled": 32889.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 823731.0,
+          "total_number_of_jitter_(reported)_samples": 39113.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 4.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 250617605.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 15760446043937.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 39113.0,
+          "average_end_to_end_round_trip_time": 6407.0,
+          "end_to_end_round_trip_time_standard_deviation": 19023.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 126497611.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 10596434473531.0,
+          "total_number_of_discrete_round_trip_time_samples": 39113.0,
+          "average_discrete_round_trip_time": 3234.0,
+          "discrete_round_trip_time_standard_deviation": 16138.0,
+          "sum_of_all_packet_loss_values_sampled": 101855.0,
+          "sum_of_all_packet_loss_square_values_sampled": 3978065.0,
+          "total_number_of_packet_loss_samples": 39113.0,
+          "average_packet_loss": 2.0,
+          "packet_loss_standard_deviation": 9.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 101855.0,
+          "prom_packetloss_samples_total": 39113.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_f8997e09",
+      "fault_type": "container_kill",
+      "target": "mongo",
+      "params": {},
+      "mechanism": "docker kill mongo",
+      "heal_command": "docker start mongo",
+      "injected_at": "2026-05-01T21:28:17.771175+00:00",
+      "ttl_seconds": 600,
+      "expires_at": "2026-05-01T21:38:17.771175+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "Expected 'exited', got 'exited'"
+    }
+  ],
+  "fault_verification": {
+    "verdict": "confirmed",
+    "wait_seconds": 0,
+    "elapsed_seconds": 0.0,
+    "verified_at": "2026-05-01T21:30:35.333085+00:00",
+    "filtered_deltas": {
+      "scscf": {
+        "ims_registrar_scscf:accepted_regs": {
+          "baseline": 2.0,
+          "current": 3.0,
+          "delta": 1.0
+        },
+        "core:rcv_requests_register": {
+          "baseline": 4.0,
+          "current": 6.0,
+          "delta": 2.0
+        },
+        "ims_auth:mar_replies_response_time": {
+          "baseline": 202.0,
+          "current": 352.0,
+          "delta": 150.0
+        },
+        "ims_registrar_scscf:sar_replies_received": {
+          "baseline": 2.0,
+          "current": 3.0,
+          "delta": 1.0
+        },
+        "ims_auth:mar_replies_received": {
+          "baseline": 2.0,
+          "current": 3.0,
+          "delta": 1.0
+        },
+        "cdp:average_response_time": {
+          "baseline": 104.0,
+          "current": 129.0,
+          "delta": 25.0
+        },
+        "cdp:replies_response_time": {
+          "baseline": 419.0,
+          "current": 775.0,
+          "delta": 356.0
+        },
+        "ims_registrar_scscf:sar_replies_response_time": {
+          "baseline": 217.0,
+          "current": 423.0,
+          "delta": 206.0
+        },
+        "ims_registrar_scscf:sar_avg_response_time": {
+          "baseline": 108.0,
+          "current": 141.0,
+          "delta": 33.0
+        },
+        "cdp:replies_received": {
+          "baseline": 4.0,
+          "current": 6.0,
+          "delta": 2.0
+        }
+      },
+      "pcscf": {
+        "sl:4xx_replies": {
+          "baseline": 0.0,
+          "current": 3.0,
+          "delta": 3.0
+        },
+        "httpclient:connfail": {
+          "baseline": 51.0,
+          "current": 82.0,
+          "delta": 31.0
+        },
+        "core:rcv_requests_register": {
+          "baseline": 5.0,
+          "current": 7.0,
+          "delta": 2.0
+        },
+        "core:rcv_requests_options": {
+          "baseline": 50.0,
+          "current": 78.0,
+          "delta": 28.0
+        },
+        "sl:1xx_replies": {
+          "baseline": 5.0,
+          "current": 10.0,
+          "delta": 5.0
+        },
+        "script:register_success": {
+          "baseline": 2.0,
+          "current": 3.0,
+          "delta": 1.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 0.0,
+          "current": 3.0,
+          "delta": 3.0
+        },
+        "script:register_time": {
+          "baseline": 632.0,
+          "current": 1166.0,
+          "delta": 534.0
+        }
+      }
+    },
+    "raw_delta_node_count": 4
+  },
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-01T21:30:35.333085+00:00",
+      "elapsed_seconds": 0.0,
+      "metrics_delta": {
+        "scscf": {
+          "ims_registrar_scscf:accepted_regs": {
+            "baseline": 2.0,
+            "current": 3.0,
+            "delta": 1.0
+          },
+          "core:rcv_requests_register": {
+            "baseline": 4.0,
+            "current": 6.0,
+            "delta": 2.0
+          },
+          "ims_auth:mar_replies_response_time": {
+            "baseline": 202.0,
+            "current": 352.0,
+            "delta": 150.0
+          },
+          "ims_registrar_scscf:sar_replies_received": {
+            "baseline": 2.0,
+            "current": 3.0,
+            "delta": 1.0
+          },
+          "ims_auth:mar_replies_received": {
+            "baseline": 2.0,
+            "current": 3.0,
+            "delta": 1.0
+          },
+          "cdp:average_response_time": {
+            "baseline": 104.0,
+            "current": 129.0,
+            "delta": 25.0
+          },
+          "cdp:replies_response_time": {
+            "baseline": 419.0,
+            "current": 775.0,
+            "delta": 356.0
+          },
+          "ims_registrar_scscf:sar_replies_response_time": {
+            "baseline": 217.0,
+            "current": 423.0,
+            "delta": 206.0
+          },
+          "ims_registrar_scscf:sar_avg_response_time": {
+            "baseline": 108.0,
+            "current": 141.0,
+            "delta": 33.0
+          },
+          "cdp:replies_received": {
+            "baseline": 4.0,
+            "current": 6.0,
+            "delta": 2.0
+          }
+        },
+        "pcscf": {
+          "sl:4xx_replies": {
+            "baseline": 0.0,
+            "current": 3.0,
+            "delta": 3.0
+          },
+          "httpclient:connfail": {
+            "baseline": 51.0,
+            "current": 82.0,
+            "delta": 31.0
+          },
+          "core:rcv_requests_register": {
+            "baseline": 5.0,
+            "current": 7.0,
+            "delta": 2.0
+          },
+          "core:rcv_requests_options": {
+            "baseline": 50.0,
+            "current": 78.0,
+            "delta": 28.0
+          },
+          "sl:1xx_replies": {
+            "baseline": 5.0,
+            "current": 10.0,
+            "delta": 5.0
+          },
+          "script:register_success": {
+            "baseline": 2.0,
+            "current": 3.0,
+            "delta": 1.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 0.0,
+            "current": 3.0,
+            "delta": 3.0
+          },
+          "script:register_time": {
+            "baseline": 632.0,
+            "current": 1166.0,
+            "delta": 534.0
+          }
+        }
+      },
+      "log_samples": {},
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-05-01T21:37:21.047338+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 512122.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 493708.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 28493423.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 35410173.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 12.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 12.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 18.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 18.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 3.0,
+          "core:rcv_requests_options": 159.0,
+          "core:rcv_requests_register": 7.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 163.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 1.0,
+          "script:register_success": 3.0,
+          "script:register_time": 1166.0,
+          "sl:1xx_replies": 10.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 3.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 66.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 75.0,
+          "cdp:replies_response_time": 5008.0,
+          "cdp:timeout": 1.0,
+          "core:rcv_requests_invite": 18.0,
+          "core:rcv_requests_register": 123.0,
+          "ims_icscf:lir_avg_response_time": 70.0,
+          "ims_icscf:lir_replies_received": 18.0,
+          "ims_icscf:lir_replies_response_time": 1269.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 65.0,
+          "ims_icscf:uar_replies_received": 57.0,
+          "ims_icscf:uar_replies_response_time": 3739.0,
+          "ims_icscf:uar_timeouts": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "123 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 129.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 6.0,
+          "cdp:replies_response_time": 775.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 6.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 117.0,
+          "ims_auth:mar_replies_received": 3.0,
+          "ims_auth:mar_replies_response_time": 352.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 3.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 141.0,
+          "ims_registrar_scscf:sar_replies_received": 3.0,
+          "ims_registrar_scscf:sar_replies_response_time": 423.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 17.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 10.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 7.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 503743.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 13404762.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 503743.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 13404762.0,
+          "total_number_of_streams_with_no_relayed_packets": 1.0,
+          "total_number_of_1_way_streams": 2.0,
+          "sum_of_all_mos_values_sampled": 166196.8,
+          "sum_of_all_mos_square_values_sampled": 710115.74,
+          "total_number_of_mos_samples": 39084.0,
+          "average_mos": 4.2,
+          "mos_standard_deviation": 0.02,
+          "sum_of_all_jitter_(reported)_values_sampled": 32889.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 823731.0,
+          "total_number_of_jitter_(reported)_samples": 39113.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 4.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 250617605.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 15760446043937.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 39113.0,
+          "average_end_to_end_round_trip_time": 6407.0,
+          "end_to_end_round_trip_time_standard_deviation": 19023.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 126497611.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 10596434473531.0,
+          "total_number_of_discrete_round_trip_time_samples": 39113.0,
+          "average_discrete_round_trip_time": 3234.0,
+          "discrete_round_trip_time_standard_deviation": 16138.0,
+          "sum_of_all_packet_loss_values_sampled": 101855.0,
+          "sum_of_all_packet_loss_square_values_sampled": 3978065.0,
+          "total_number_of_packet_loss_samples": 39113.0,
+          "average_packet_loss": 2.0,
+          "packet_loss_standard_deviation": 9.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 101855.0,
+          "prom_packetloss_samples_total": 39113.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      }
+    },
+    "recovery_time_seconds": 543.276163,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Kill MongoDB \u2014 the 5G core subscriber data store. UDR loses its backend, new PDU sessions cannot be created, and subscriber queries fail. Existing sessions may survive briefly.",
+    "affected_components": [
+      "mongo"
+    ],
+    "severity": "degraded",
+    "failure_domain": "data_layer",
+    "protocol_impact": "multiple"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v6-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: The MongoDB container, a critical database dependency for multiple core network functions, has exited, causing a cascading failure in the UDR and PCF that has led to a widespread outage of both control plane (IMS) and data plane services.\n- **timeline**:\n    1. The 'mongo' container exits unexpectedly.\n    2. The PCF and UDR network functions lose connectivity to their backend database.\n    3. The UDR can no longer serve subscriber data, causing IMS registration and authentication procedures at the UDM to fail.\n    4. The PCF can no longer serve policy, causing P-CSCF requests on the Rx interface to fail and SMF session management procedures to fail.\n    5. As a result, new IMS registrations and calls fail, and data plane traffic at the UPF collapses.\n- **root_cause**: The 'mongo' container has exited, causing its dependent network functions (including PCF and UDR) to lose database access and fail. (primary_suspect_nf: `mongo`)\n- **affected_components**:\n    - `mongo`: Root Cause\n    - `pcf`: Secondary\n    - `udr`: Secondary\n    - `pcscf`: Symptomatic\n    - `udm`: Symptomatic\n    - `upf`: Symptomatic\n- **recommendation**: The 'mongo' container is confirmed to be in an 'exited' state. The operator should inspect the container's logs to determine the reason for its unexpected termination.\n- **confidence**: medium\n- **verdict_kind**: confirmed\n- **explanation**: The investigation confirmed that the 'mongo' database container, a dependency for several network functions, is the root cause of the outage. Hypotheses pointing to the PCF and UDR as the source were disproven when investigation revealed that their upstream dependency, MongoDB, had failed. An initial direct investigation of MongoDB was inconclusive due to conflicting reports. However, a subsequent, focused re-investigation provided unambiguous evidence that the 'mongo' container was not running. This confirms it as the source of the cascading failures observed in the PCF, UDR, and downstream IMS and data plane components. Confidence is set to medium due to the initial inconclusive finding, which warrants careful verification.",
+    "score": {
+      "root_cause_correct": true,
+      "root_cause_rationale": "The agent correctly identified 'mongo' container exiting as the root cause, which directly matches the simulated failure mode.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent correctly identified 'mongo' as the 'Root Cause' in the affected_components list.",
+      "severity_correct": true,
+      "severity_rationale": "The agent correctly described the impact as a 'widespread outage' and 'data plane traffic at the UPF collapses', which aligns with the simulated complete unreachability and failure of new sessions.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent identified the fault type as the 'mongo' container being 'exited' and 'not running', which accurately describes the observable state of the component (unreachable/down).",
+      "layer_accuracy": true,
+      "layer_accuracy_rationale": "The agent's network analysis correctly attributed the 'mongo container is exited' evidence to the 'infrastructure' layer, which matches the ground truth for MongoDB's ontology layer.",
+      "confidence_calibrated": true,
+      "confidence_rationale": "The agent's confidence is 'medium', which is well-calibrated given its explanation of initial inconclusive findings followed by unambiguous evidence. Acknowledging past uncertainty while reaching a correct conclusion demonstrates good calibration.",
+      "ranking_position": 1,
+      "ranking_rationale": "The agent provided a single, clear root cause in its final diagnosis, which was correct.",
+      "total_score": 1.0,
+      "summary": "The agent provided an excellent diagnosis, correctly identifying the root cause, affected components, severity, and fault type, with accurate layer attribution and calibrated confidence."
+    },
+    "time_to_diagnosis_seconds": 398.5,
+    "token_usage": {
+      "input_tokens": 377105,
+      "output_tokens": 12024,
+      "thinking_tokens": 36671,
+      "total_tokens": 425800,
+      "per_phase": [
+        {
+          "agent": "AnomalyScreener",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EventAggregator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "CorrelationAnalyzer",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 27563,
+          "tool_calls": 3,
+          "llm_calls": 2
+        },
+        {
+          "agent": "Phase 3 NetworkAnalyst__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 47824,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "Phase 3 NetworkAnalyst__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 20816,
+          "tool_calls": 3,
+          "llm_calls": 2
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 26706,
+          "tool_calls": 1,
+          "llm_calls": 2
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 20902,
+          "tool_calls": 3,
+          "llm_calls": 2
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 40842,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h1__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h2",
+          "tokens": 31213,
+          "tool_calls": 2,
+          "llm_calls": 3
+        },
+        {
+          "agent": "InvestigatorAgent_h2",
+          "tokens": 44066,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h2__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h3",
+          "tokens": 43360,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h3",
+          "tokens": 56525,
+          "tool_calls": 4,
+          "llm_calls": 5
+        },
+        {
+          "agent": "InvestigatorAgent_h3__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase5FanOutAudit",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase6.5CandidatePool",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 18413,
+          "tool_calls": 1,
+          "llm_calls": 2
+        },
+        {
+          "agent": "Phase 6.5 Reinvestigation IG__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h_promoted_mongo",
+          "tokens": 38535,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "EvidenceValidator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 9035,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 7 Synthesis__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        }
+      ]
+    },
+    "anomaly_report": "**ANOMALY DETECTED.** Overall anomaly score: 32.22 (per-bucket threshold: 26.31, context bucket (0, 1), trained on 323 healthy snapshots). The current metric pattern is statistically different from the learned healthy baseline. Something in the network has changed.\n\nThe following metrics deviate from their learned-healthy baseline. Treat each as a semantic observation (meaning + numbers), not a number alone \u2014 the KB's interpretation is the authoritative reading.\n\n- **`derived.pcscf_sip_error_ratio`** (P-CSCF SIP error response ratio) \u2014 current **0.25 ratio** vs learned baseline **0.00 ratio** (MEDIUM, spike)\n    - **What it measures:** Proportion of SIP responses that are errors. Zero is the healthy\nbaseline; any sustained non-zero value means P-CSCF or something\ndownstream is rejecting requests.\n    - **Spike means:** Errors flowing back \u2014 downstream CSCFs or HSS rejecting.\n    - **Healthy typical range:** 0\u20130 ratio\n    - **Healthy invariant:** Zero in healthy operation.\n\n- **`normalized.pcscf.core:rcv_requests_invite_per_ue`** (SIP INVITE rate per UE at P-CSCF) \u2014 current **0.02 requests_per_second** vs learned baseline **0.00 requests_per_second** (MEDIUM, spike)\n    - **What it measures:** Call attempt rate from registered UEs. Unlike REGISTER (periodic),\nINVITEs only fire when UEs place calls. Zero is normal during\nquiet periods; nonzero INVITE with zero dialogs is the signature\nof call setup failure.\n    - **Spike means:** Fewer call attempts.\n    - **Healthy typical range:** 0\u20130.2 requests_per_second\n    - **Healthy invariant:** Per-UE rate.\n\n- **`normalized.upf.gtp_indatapktn3upf_per_ue`** (GTP-U uplink rate per UE (N3)) \u2014 current **0.08 packets_per_second** vs learned baseline **1.45 packets_per_second** (MEDIUM, drop)\n    - **What it measures:** Health of the uplink user-plane path gNB \u2192 UPF. Drops to near-zero\nduring RAN or N3 outage; stays nonzero during active calls or data\nsessions. Decoupled from SIP signaling (signals data plane, not\ncontrol plane).\n    - **Drop means:** Data plane dead on uplink \u2014 UPF receiving no packets from gNB.\n    - **Healthy typical range:** 0\u201310 packets_per_second\n    - **Healthy invariant:** Per-UE \u2014 constant regardless of UE pool size. Rises during active VoNR calls (~100 pps for G.711 voice) and data transfer.\n\n- **`normalized.upf.gtp_outdatapktn3upf_per_ue`** (GTP-U downlink rate per UE (N3)) \u2014 current **0.06 packets_per_second** vs learned baseline **1.45 packets_per_second** (LOW, drop)\n    - **What it measures:** Health of the downlink user-plane path UPF \u2192 gNB. Typically mirrors\nuplink rate during calls/data; asymmetry indicates directional\nfaults (e.g., UPF receiving from internet but not forwarding).\n    - **Drop means:** No traffic leaving UPF toward RAN.\n    - **Healthy typical range:** 0\u201310 packets_per_second\n    - **Healthy invariant:** Per-UE \u2014 constant regardless of UE pool size. Roughly symmetric with uplink during healthy calls.\n\n- **`normalized.icscf.cdp_replies_per_ue`** (I-CSCF Diameter reply rate per UE) \u2014 current **0.02 replies_per_second_per_ue** vs learned baseline **0.03 replies_per_second_per_ue** (LOW, drop)\n    - **What it measures:** Liveness of the I-CSCF\u2194HSS Cx path. Drops to 0 when HSS is unreachable OR when no signaling is occurring at the I-CSCF (idle or upstream P-CSCF partitioned).\n    - **Drop means:** No Cx replies in the window. Could be healthy idle OR a Cx-path fault.\n    - **Healthy typical range:** 0\u20131 replies_per_second_per_ue\n\n- **`normalized.icscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at I-CSCF) \u2014 current **0.03 requests_per_second** vs learned baseline **0.06 requests_per_second** (LOW, shift)\n    - **What it measures:** Health of the P-CSCF \u2192 I-CSCF forwarding path (Mw interface). When\nthis drops to zero while P-CSCF REGISTER rate is still non-zero,\nit's the SIGNATURE of an IMS partition between P-CSCF and I-CSCF.\n    - **Shift means:** Forwarding issue on the Mw interface, or P-CSCF stopped forwarding.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate. Should closely track ims.pcscf.rcv_requests_register_per_ue.\n\n- **`normalized.pcscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at P-CSCF) \u2014 current **0.03 requests_per_second** vs learned baseline **0.06 requests_per_second** (LOW, shift)\n    - **What it measures:** How actively UEs are refreshing their IMS registrations with the\nP-CSCF. REGISTERs arrive periodically (re-registration timer) plus\nat attach. Sustained zero means UEs cannot reach P-CSCF OR the\nUE-to-network SIP path is broken.\n    - **Shift means:** Fewer REGISTERs than expected \u2014 UE connectivity or P-CSCF reachability issue.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate \u2014 same value at any deployment scale.\n\n- **`normalized.scscf.cdp_replies_per_ue`** (S-CSCF CDP Diameter replies per UE) \u2014 current **0.03 replies_per_second_per_ue** vs learned baseline **0.06 replies_per_second_per_ue** (LOW, shift)\n    - **What it measures:** Active S-CSCF Diameter traffic with HSS. Near-zero when registrations idle OR HSS partition.\n    - **Shift means:** Diameter peering loss with HSS.\n    - **Healthy typical range:** 0\u20131 replies_per_second_per_ue\n    - **Healthy invariant:** Per-UE rate; varies with registration/auth load.\n\n- **`normalized.scscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at S-CSCF) \u2014 current **0.03 requests_per_second** vs learned baseline **0.06 requests_per_second** (LOW, shift)\n    - **What it measures:** Health of the I-CSCF \u2192 S-CSCF forwarding path. Drop to zero while\nI-CSCF is receiving REGISTERs = S-CSCF-side issue (crashed, or\nI-CSCF \u2192 S-CSCF path broken).\n    - **Shift means:** I-CSCF not forwarding or S-CSCF not receiving.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate. Tracks icscf.register rate.\n\n- **`normalized.smf.bearers_per_ue`** (Active QoS bearers per UE) \u2014 current **2.00 count** vs learned baseline **2.48 count** (LOW, shift)\n    - **What it measures:** Per-UE count of active QoS bearers. Baseline reflects default\nbearers; increments during VoNR calls indicate dedicated voice\nbearers being set up. Drop during an active call = dedicated\nbearer torn down unexpectedly (voice will fail).\n    - **Shift means:** Expected during VoNR calls (1 extra bearer per active call).\n    - **Healthy typical range:** 2\u20133.5 count\n    - **Healthy invariant:** At rest: equals configured default bearers (typically 2 per UE).\nDuring active VoNR call: +1 per caller. The per-UE ratio is the\ninvariant; absolute count scales with UE pool.\n",
+    "network_analysis": "{\n  \"summary\": \"The MongoDB container has exited, causing failures in the PCF and UDR network functions, which has led to a widespread outage affecting both the control (IMS) and data planes.\",\n  \"layer_status\": {\n    \"infrastructure\": {\n      \"rating\": \"red\",\n      \"evidence\": [\n        \"mongo container is exited\"\n      ],\n      \"note\": \"The core database service (MongoDB) for multiple NFs is down.\"\n    },\n    \"ran\": {\n      \"rating\": \"green\",\n      \"evidence\": [],\n      \"note\": \"No direct evidence of a RAN issue. The problems appear to start in the core.\"\n    },\n    \"core\": {\n      \"rating\": \"red\",\n      \"evidence\": [\n        \"normalized.upf.gtp_indatapktn3upf_per_ue drop\",\n        \"normalized.upf.gtp_outdatapktn3upf_per_ue drop\",\n        \"normalized.smf.bearers_per_ue shift\"\n      ],\n      \"note\": \"The data plane is down and session management is failing. This is a direct result of PCF and UDR failures caused by the MongoDB outage.\"\n    },\n    \"ims\": {\n      \"rating\": \"red\",\n      \"evidence\": [\n        \"derived.pcscf_sip_error_ratio spike\",\n        \"normalized.icscf.cdp_replies_per_ue drop\",\n        \"normalized.scscf.cdp_replies_per_ue shift\"\n      ],\n      \"note\": \"IMS signaling is failing for registrations and call invites, with high SIP error rates at the P-CSCF and Diameter failures downstream.\"\n    }\n  },\n  \"hypotheses\": [\n    {\n      \"id\": \"h1\",\n      \"statement\": \"The MongoDB container, a critical backend for multiple network functions, is the source of the anomaly. Its failure is causing dependent NFs including PCF and UDR to lose access to their data, leading to the observed network-wide failure.\",\n      \"primary_suspect_nf\": \"mongo\",\n      \"supporting_events\": [],\n      \"explanatory_fit\": 1.0,\n      \"falsification_probes\": [\n        \"Executing 'docker ps' on the host shows the mongo container is running.\",\n        \"A health check from a component that uses MongoDB (e.g., PCF) to its MongoDB instance succeeds.\"\n      ],\n      \"specificity\": \"specific\"\n    },\n    {\n      \"id\": \"h2\",\n      \"statement\": \"The PCF is the source of the anomalous SIP errors and data plane failure. This is observed in the high SIP error ratio at the P-CSCF and the collapse of GTP traffic at the UPF.\",\n      \"primary_suspect_nf\": \"pcf\",\n      \"supporting_events\": [],\n      \"explanatory_fit\": 0.9,\n      \"falsification_probes\": [\n        \"Live probes of the PCF's Npcf interface from the SMF show successful session management policy responses.\",\n        \"Live probes of the PCF's Rx interface from the P-CSCF show successful policy authorization responses.\"\n      ],\n      \"specificity\": \"specific\"\n    },\n    {\n      \"id\": \"h3\",\n      \"statement\": \"The UDR is the source of the IMS registration and authentication failures. This is observed in the drop in Diameter replies from the HSS/UDM to the I-CSCF and S-CSCF during registration procedures.\",\n      \"primary_suspect_nf\": \"udr\",\n      \"supporting_events\": [],\n      \"explanatory_fit\": 0.8,\n      \"falsification_probes\": [\n        \"Live probes of the UDR's Nudr interface from the UDM show successful subscriber data retrieval.\",\n        \"The UDR's internal logs show successful queries and no errors related to its database connection.\"\n      ],\n      \"specificity\": \"specific\"\n    }\n  ]\n}",
+    "pattern_match": "",
+    "investigation_instruction": "{\n  \"plans\": [\n    {\n      \"hypothesis_id\": \"h1\",\n      \"hypothesis_statement\": \"The MongoDB container, a critical backend for multiple network functions, is the source of the anomaly. Its failure is causing dependent NFs including PCF and UDR to lose access to their data, leading to the observed network-wide failure.\",\n      \"primary_suspect_nf\": \"mongo\",\n      \"probes\": [\n        {\n          \"tool\": \"get_network_status\",\n          \"args_hint\": \"Check the status of the 'mongo' container.\",\n          \"expected_if_hypothesis_holds\": \"The 'mongo' container has an 'exited' status.\",\n          \"falsifying_observation\": \"The 'mongo' container has a 'running' status.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"check_process_listeners\",\n          \"args_hint\": \"container='mongo'\",\n          \"expected_if_hypothesis_holds\": \"The command returns an empty list of listeners, indicating the mongod process is not active.\",\n          \"falsifying_observation\": \"The probe's reading is inconsistent with mongo being the source (e.g. it shows the mongod process listening on its default port).\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"get_diagnostic_metrics\",\n          \"args_hint\": \"Get metrics for PCF, which depends on MongoDB.\",\n          \"expected_if_hypothesis_holds\": \"Metrics from PCF show a high rate of database connection errors or timeouts.\",\n          \"falsifying_observation\": \"The probe's reading is inconsistent with mongo being the source (e.g. PCF metrics show no database-related errors).\",\n          \"conflates_with\": []\n        }\n      ],\n      \"notes\": \"This plan directly checks the state of the MongoDB container and the impact on a dependent network function (PCF).\"\n    },\n    {\n      \"hypothesis_id\": \"h2\",\n      \"hypothesis_statement\": \"The PCF is the source of the anomalous SIP errors and data plane failure. This is observed in the high SIP error ratio at the P-CSCF and the collapse of GTP traffic at the UPF.\",\n      \"primary_suspect_nf\": \"pcf\",\n      \"probes\": [\n        {\n          \"tool\": \"get_network_status\",\n          \"args_hint\": \"Check the status of the 'mongo' container, a critical dependency for PCF.\",\n          \"expected_if_hypothesis_holds\": \"The 'mongo' container has a 'running' status. If it were down, the root cause would not be PCF itself.\",\n          \"falsifying_observation\": \"The 'mongo' container has an 'exited' status, which would strongly suggest the root cause is upstream of PCF, thus falsifying this hypothesis.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"get_diagnostic_metrics\",\n          \"args_hint\": \"Get metrics for 'smf' and 'pcf' to check the Npcf interface.\",\n          \"expected_if_hypothesis_holds\": \"SMF's metrics show failures for requests towards PCF, and PCF's metrics show a high error rate for policy decisions.\",\n          \"falsifying_observation\": \"The probe's reading is inconsistent with pcf being the source (e.g. SMF's metrics show successful policy responses from PCF).\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"get_diagnostic_metrics\",\n          \"args_hint\": \"Get metrics for 'pcscf' and 'pcf' to check the Rx interface.\",\n          \"expected_if_hypothesis_holds\": \"P-CSCF's metrics show a high error rate for Rx requests towards PCF.\",\n          \"falsifying_observation\": \"The probe's reading is inconsistent with pcf being the source (e.g. P-CSCF's metrics show successful Rx interactions with PCF).\",\n          \"conflates_with\": []\n        }\n      ],\n      \"notes\": \"This plan aims to falsify that PCF is the *source* by checking its own dependencies and its interfaces with SMF and P-CSCF.\"\n    },\n    {\n      \"hypothesis_id\": \"h3\",\n      \"hypothesis_statement\": \"The UDR is the source of the IMS registration and authentication failures. This is observed in the drop in Diameter replies from the HSS/UDM to the I-CSCF and S-CSCF during registration procedures.\",\n      \"primary_suspect_nf\": \"udr\",\n      \"probes\": [\n        {\n          \"tool\": \"get_network_status\",\n          \"args_hint\": \"Check the status of the 'mongo' container, a critical dependency for UDR.\",\n          \"expected_if_hypothesis_holds\": \"The 'mongo' container has a 'running' status. If it were down, the root cause would not be UDR itself.\",\n          \"falsifying_observation\": \"The 'mongo' container has an 'exited' status, which would strongly suggest the root cause is upstream of UDR, thus falsifying this hypothesis.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"get_diagnostic_metrics\",\n          \"args_hint\": \"Get metrics for 'udm' and 'udr' to check the Nudr interface.\",\n          \"expected_if_hypothesis_holds\": \"UDM's metrics show failures for requests towards UDR, and UDR's metrics show a high error rate for data retrieval.\",\n          \"falsifying_observation\": \"The probe's reading is inconsistent with udr being the source (e.g. UDM's metrics show successful data retrieval from UDR).\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"query_subscriber\",\n          \"args_hint\": \"imsi='<any known IMSI>'\",\n          \"expected_if_hypothesis_holds\": \"The query fails or times out, indicating a problem in the subscriber data lookup chain (HSS-UDM-UDR).\",\n          \"falsifying_observation\": \"The query successfully returns subscriber data, which would indicate the HSS-UDM-UDR chain is functional.\",\n          \"conflates_with\": [\n            \"A failure could also originate from the HSS (pyhss) or UDM.\"\n          ]\n        }\n      ],\n      \"notes\": \"This plan aims to falsify that UDR is the *source* by checking its own dependencies and its primary interface with UDM. It also includes a subscriber query to test the end-to-end subscriber data path.\"\n    }\n  ]\n}",
+    "investigation": "[\n  {\n    \"hypothesis_id\": \"h1\",\n    \"hypothesis_statement\": \"The MongoDB container, a critical backend for multiple network functions, is the source of the anomaly. Its failure is causing dependent NFs including PCF and UDR to lose access to their data, leading to the observed network-wide failure.\",\n    \"verdict\": \"INCONCLUSIVE\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 DISAGREEMENT. Shot 1 returned DISPROVEN; shot 2 returned NOT_DISPROVEN. Two independent samples of the same Investigator on the same plan reached opposite conclusions. The reconciler forces verdict to INCONCLUSIVE because we cannot trust either shot in isolation when the underlying LLM judgment is unstable.]\\n\\nShot 1 (DISPROVEN): The investigation confirmed that the MongoDB container has exited. However, a probe of PCF's metrics, a key dependent network function, showed no signs of failure. At the time of the anomaly, PCF's counters for policy association requests and successes were equal, which contradicts the hypothesis that MongoDB's failure was causing dependent NFs to lose data access and fail.\\n\\nShot 2 (NOT_DISPROVEN): All three probes were executed. The first two probes confirmed the core assertion of the hypothesis: the MongoDB container has failed. The third probe, intended to check for downstream impact on the PCF, was ambiguous; the available metrics were cumulative counters which do not effectively show an error rate at the time of the anomaly. Since no evidence contradicts the hypothesis and its central claim is proven true, the hypothesis is NOT_DISPROVEN.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check the status of the 'mongo' container.\",\n        \"tool_call\": \"print(default_api.get_network_status())\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"{\\n  \\\\\\\"phase\\\\\\\": \\\\\\\"down\\\\\\\", ... \\\\\\\"down_or_absent\\\\\\\": [\\\\n    \\\\\\\"mongo\\\\\\\"\\\\n  ], ... \\\\\\\"mongo\\\\\\\": \\\\\\\"exited\\\\\\\" ...}\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"commentary\": \"The MongoDB container status is 'exited', which is consistent with the hypothesis that it has failed.\"\n      },\n      {\n        \"probe_description\": \"Check if the mongod process is listening for connections.\",\n        \"tool_call\": \"print(default_api.check_process_listeners(container = \\\"mongo\\\"))\",\n        \"observation\": \"[EVIDENCE: check_process_listeners(container=\\\"mongo\\\") -> \\\"Error response from daemon: container 82bf8ab4243865d6a9f478b57b81678b989fdef512c96605f0eab1a0d7c80e80 is not running\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"commentary\": \"The tool failed because the container is not running, which confirms the mongod process is not active and cannot be listening. This is consistent with the hypothesis.\"\n      },\n      {\n        \"probe_description\": \"Get diagnostic metrics for PCF to check for database connection issues.\",\n        \"tool_call\": \"print(default_api.get_diagnostic_metrics(at_time_ts = 1777670994.4465818, nfs = [\\\"pcf\\\"]))\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=[\\\"pcf\\\"]) -> \\\"fivegs_pcffunction_pa_policyamassoreq = 12 [counter]...fivegs_pcffunction_pa_policyamassosucc = 12 [counter]\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"commentary\": \"The metrics show that the number of successful AM policy associations equals the number of requests. This indicates PCF is not experiencing database access failures, which directly contradicts the hypothesis's claimed impact on dependent NFs.\"\n      }\n    ],\n    \"alternative_suspects\": []\n  },\n  {\n    \"hypothesis_id\": \"h2\",\n    \"hypothesis_statement\": \"The PCF is the source of the anomalous SIP errors and data plane failure. This is observed in the high SIP error ratio at the P-CSCF and the collapse of GTP traffic at the UPF.\",\n    \"verdict\": \"DISPROVEN\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 both shots returned DISPROVEN.]\\n\\nShot 1: The investigation revealed that the 'mongo' container, a critical dependency for the PCF, had an 'exited' status at the time of the anomaly. This directly contradicts the hypothesis that the PCF is the *source* of the failure. The observed SIP errors at the P-CSCF are symptoms of PCF's failure, but the root cause is the unavailability of its database, MongoDB. The PCF is affected, but it is not the origin of the fault.\\n\\nShot 2: The investigation revealed that the 'mongo' container, a critical dependency for the PCF, had an 'exited' status during the anomaly. This indicates the root cause of the failure is upstream of the PCF, falsifying that PCF is the source. Further, metrics from the PCF's interface with the SMF showed no errors, contradicting the expectation of a PCF-originated failure.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check the status of the 'mongo' container, a critical dependency for PCF.\",\n        \"tool_call\": \"default_api.get_network_status()\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"'containers': {'mongo': 'exited'}\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"commentary\": \"The falsifying observation was met. The 'mongo' container, which the PCF relies on, was not running. This indicates the root cause is upstream of the PCF, falsifying the hypothesis that PCF is the source.\"\n      },\n      {\n        \"probe_description\": \"Get metrics for 'smf' and 'pcf' to check the Npcf interface.\",\n        \"tool_call\": \"default_api.get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['smf', 'pcf'])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['smf', 'pcf']) -> \\\"pcf: fivegs_pcffunction_pa_policyamassosucc = 12 [counter] smf: fivegs_smffunction_sm_sessionnbr = 4 [counter]\\\"]\",\n        \"compared_to_expected\": \"AMBIGUOUS\",\n        \"commentary\": \"The metrics for SMF and PCF were inconclusive. They did not show explicit errors on the Npcf interface, but the traffic volume was low. This neither strongly supports nor contradicts the hypothesis, but the evidence from other probes is much clearer.\"\n      },\n      {\n        \"probe_description\": \"Get metrics for 'pcscf' and 'pcf' to check the Rx interface.\",\n        \"tool_call\": \"default_api.get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['pcscf', 'pcf'])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['pcscf', 'pcf']) -> \\\"pcscf: httpclient:connfail = 74 [counter], httpclient:connok = 0 [counter]\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"commentary\": \"P-CSCF metrics show a high number of HTTP client connection failures and zero successful connections. This is consistent with PCF being unavailable, as the Rx interface is HTTP-based. However, combined with the knowledge that 'mongo' is down, this is seen as a symptom, not a source failure at PCF.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"mongo\"\n    ]\n  },\n  {\n    \"hypothesis_id\": \"h3\",\n    \"hypothesis_statement\": \"The UDR is the source of the IMS registration and authentication failures. This is observed in the drop in Diameter replies from the HSS/UDM to the I-CSCF and S-CSCF during registration procedures.\",\n    \"verdict\": \"DISPROVEN\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 both shots returned DISPROVEN.]\\n\\nShot 1: The investigation revealed that the 'mongo' container, a critical dependency for the UDR, had an \\\"exited\\\" status. This was confirmed by a `get_network_status` call. A subsequent subscriber query failed with a message indicating that the subscriber could not be found in the MongoDB, directly implicating the database, not the UDR, as the failure point. Therefore, the UDR is not the *source* of the failures; it is a victim of the database outage.\\n\\nShot 2: The evidence strongly indicates that the root cause of the failure is not the UDR itself, but its database dependency, MongoDB. The 'mongo' container was found to be in an 'exited' state, which would cause any dependent service like the UDR to fail. This is further supported by the `query_subscriber` tool, which failed to retrieve 5G core data stored in MongoDB, while successfully retrieving IMS data from a separate, functional database (PyHSS/MySQL).\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check the status of the 'mongo' container, a critical dependency for UDR.\",\n        \"tool_call\": \"print(default_api.get_network_status())\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"{'containers': {'mongo': 'exited'}}\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"commentary\": \"The 'mongo' container has an 'exited' status. The hypothesis expects it to be running, as a failure of this dependency would mean UDR is not the root cause. This observation directly falsifies the hypothesis.\"\n      },\n      {\n        \"probe_description\": \"Get metrics for 'udm' and 'udr' to check the Nudr interface.\",\n        \"tool_call\": \"print(default_api.get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['udm', 'udr']))\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['udm', 'udr']) -> 'DIAGNOSTIC METRICS (anchored at ts=1777670994)...']\",\n        \"compared_to_expected\": \"AMBIGUOUS\",\n        \"commentary\": \"The tool returned no specific metrics for UDM and UDR. This is likely because the components were unable to report metrics due to the underlying database failure. While not directly contradicting, it does not support the hypothesis and is consistent with the 'mongo' failure.\"\n      },\n      {\n        \"probe_description\": \"Query subscriber data for a known IMSI.\",\n        \"tool_call\": \"print(default_api.query_subscriber(imsi='001011234567891'))\",\n        \"observation\": \"[EVIDENCE: query_subscriber(imsi='001011234567891') -> '{\\\"core_5g\\\": null, \\\"core_5g_note\\\": \\\"Subscriber 001011234567891 NOT FOUND in Open5GS MongoDB...\\\"}']\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"commentary\": \"The query for 5G core subscriber data failed, but the error explicitly states the subscriber was not found in 'Open5GS MongoDB'. This indicates the problem is with the database backend (mongo), not the UDR service itself, thus falsifying the hypothesis that UDR is the source.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"mongo\"\n    ]\n  },\n  {\n    \"hypothesis_id\": \"h_promoted_mongo\",\n    \"hypothesis_statement\": \"mongo is the source of the anomaly named in the alternative_suspects of the original verdict tree.\",\n    \"verdict\": \"NOT_DISPROVEN\",\n    \"reasoning\": \"All three probes executed were either consistent with or did not contradict the hypothesis. The first probe confirmed that the 'mongo' container was in an 'exited' state, which directly supports the hypothesis that it is the source of the anomaly. The second probe, which failed because the container was not running, is also consistent with this finding. The final probe for metrics from dependent network functions (UDM, UDR, AUSF) returned no data, which is ambiguous but does not falsify the hypothesis, as a non-functional database would likely lead to failures in these components, potentially affecting their metric reporting.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check status of the 'mongo' container.\",\n        \"tool_call\": \"default_api.get_network_status()\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"'containers': {'mongo': 'exited'}\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"commentary\": \"The mongo container is not running. This is direct evidence supporting the hypothesis that it is the source of a problem.\"\n      },\n      {\n        \"probe_description\": \"Check for listening ports on the 'mongo' container.\",\n        \"tool_call\": \"default_api.check_process_listeners(container='mongo')\",\n        \"observation\": \"[EVIDENCE: check_process_listeners(\\\"mongo\\\") -> \\\"Error response from daemon: container 82bf8ab4243865d6a9f478b57b81678b989fdef512c96605f0eab1a0d7c80e80 is not running\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"commentary\": \"The tool failed because the container is not running. This is an expected consequence of the container being in an 'exited' state and is consistent with the hypothesis.\"\n      },\n      {\n        \"probe_description\": \"Check for database-related errors in the metrics of core network functions that depend on a database, such as UDM, UDR, and AUSF.\",\n        \"tool_call\": \"default_api.get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['udm', 'udr', 'ausf'])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1777670994.4465818, nfs=['udm', 'udr', 'ausf']) -> \\\"DIAGNOSTIC METRICS (anchored at ts=1777670994)...\\\"]\",\n        \"compared_to_expected\": \"AMBIGUOUS\",\n        \"commentary\": \"The tool returned no metrics for the specified network functions. While this doesn't directly confirm database errors, it does not contradict the hypothesis. A failure of the mongo database would likely cause service disruptions in UDM, UDR, and AUSF, which could result in a lack of metric data.\"\n      }\n    ],\n    \"alternative_suspects\": []\n  }\n]",
+    "evidence_validation": "{\n  \"overall_verdict\": \"clean\",\n  \"overall_confidence\": \"high\",\n  \"per_agent\": [\n    {\n      \"agent_name\": \"InvestigatorAgent_h1\",\n      \"tool_calls_made\": 6,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h2\",\n      \"tool_calls_made\": 5,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h3\",\n      \"tool_calls_made\": 7,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h_promoted_mongo\",\n      \"tool_calls_made\": 3,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    }\n  ],\n  \"summary\": \"Evidence validation across 4 sub-Investigator(s): overall verdict=clean, confidence=high.\\n  - InvestigatorAgent_h1: 6 tool calls, 3/3 citations verified (clean, high)\\n  - InvestigatorAgent_h2: 5 tool calls, 3/3 citations verified (clean, high)\\n  - InvestigatorAgent_h3: 7 tool calls, 3/3 citations verified (clean, high)\\n  - InvestigatorAgent_h_promoted_mongo: 3 tool calls, 3/3 citations verified (clean, high)\"\n}",
+    "fired_events": "No events fired during this episode. Either no metric KB triggers matched, or the episode encountered no meaningful state transitions.",
+    "correlation_analysis": "No events fired \u2014 correlation engine had nothing to work with."
+  }
+}

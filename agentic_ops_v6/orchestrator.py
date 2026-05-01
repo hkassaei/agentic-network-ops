@@ -599,10 +599,22 @@ async def _run_parallel_investigators(
 
         # Mechanical guardrail: force INCONCLUSIVE if below minimum
         # tool calls. Lives in `guardrails/investigator_minimum.py`.
-        inv_trace = next(
-            (t for t in traces if t.agent_name == agent_name), None,
+        #
+        # `traces` may contain MULTIPLE PhaseTrace entries with the same
+        # agent_name when the empty-output retry kicked in (one per
+        # attempt). We aggregate tool counts across all matching traces
+        # so a retry-then-succeed path correctly counts the successful
+        # attempt's probes — pre-PR-9.5 the `next(...)` form returned
+        # the FIRST matching trace (always the failed-empty attempt
+        # when a retry happened), forcing INCONCLUSIVE despite the
+        # retry's successful probes (run_20260501_042127_call_quality_degradation
+        # h1 made 0 calls on attempt 1 + 3 calls on attempt 2 → was
+        # incorrectly forced INCONCLUSIVE).
+        tool_call_count = sum(
+            len(t.tool_calls)
+            for t in traces
+            if t.agent_name == agent_name
         )
-        tool_call_count = len(inv_trace.tool_calls) if inv_trace else 0
         verdict = apply_min_tool_call_guardrail(
             verdict,
             agent_name=agent_name,
@@ -825,11 +837,14 @@ async def _run_bounded_reinvestigation(
             reasoning=f"Failed to parse Investigator output: {e}",
         )
 
-    # Min-tool-call guardrail (same as Phase 5 fan-out).
-    inv_trace = next(
-        (t for t in inv_traces if t.agent_name == agent_name), None,
+    # Min-tool-call guardrail (same as Phase 5 fan-out). Aggregate
+    # tool counts across all matching traces — see the comment in
+    # `run_one` above for the retry-aggregation rationale (PR 9.5 fix).
+    tool_call_count = sum(
+        len(t.tool_calls)
+        for t in inv_traces
+        if t.agent_name == agent_name
     )
-    tool_call_count = len(inv_trace.tool_calls) if inv_trace else 0
     verdict = apply_min_tool_call_guardrail(
         verdict,
         agent_name=agent_name,

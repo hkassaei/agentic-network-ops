@@ -72,11 +72,24 @@ _DEMOTION_KEYWORDS: tuple[str, ...] = (
 
 
 # Threshold for "primary or co-primary hypothesis". Below this, the
-# linter considers the NF demoted-without-reasoning. Tuned against
-# observed runs: well-ranked primaries land at 0.85-0.90; the
-# `run_20260501_032822_call_quality_degradation` mis-rank had
-# rtpengine at 0.60.
-_PRIMARY_FIT_THRESHOLD: float = 0.7
+# linter considers the NF demoted-without-reasoning.
+#
+# Tuned against observed runs:
+#   - Well-ranked primaries land at 0.85-0.90.
+#   - `run_20260501_032822_call_quality_degradation` mis-rank had
+#     rtpengine at 0.60 (clearly demoted, linter caught it).
+#   - `run_20260501_042127_call_quality_degradation` (post-PR-9 first
+#     re-run) had rtpengine at exactly 0.70 with invented demotion
+#     reasoning in `summary` — the linter passed it on path (a) AND
+#     path (b), but the demotion reasoning was factually wrong.
+#
+# Raising from 0.70 to 0.80 closes the "barely above threshold + game
+# the linter via demotion" path: NA now has to either rank rtpengine
+# at 0.80+ (genuine primary positioning) or write demotion reasoning
+# (which a human reviewer can audit). 0.85 would be even tighter but
+# leaves no room for legitimate co-primary cases where two NFs share
+# similar evidence.
+_PRIMARY_FIT_THRESHOLD: float = 0.8
 
 
 @dataclass

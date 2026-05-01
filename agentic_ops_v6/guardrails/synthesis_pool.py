@@ -215,16 +215,37 @@ def _nf_from_verdict(
 ) -> str:
     """Resolve the primary_suspect_nf for a verdict.
 
-    The verdict object doesn't carry primary_suspect_nf directly — it's
-    on the parent Hypothesis. Look up by hypothesis_id when hypotheses
-    are supplied; fall back to a placeholder if not (caller can still
-    use the pool for ranking purposes).
+    Three resolution paths:
+      1. **Re-investigation verdicts** (hypothesis_id starts with
+         `h_promoted_<nf>`): the synthetic Hypothesis is NOT in the
+         caller-supplied `original_hypotheses` list (it's built fresh
+         in `_run_bounded_reinvestigation`). Extract the NF from the
+         id suffix. This is the path Decision E's re-investigation
+         flow takes after PR 5.
+      2. **Original hypotheses** (id matches a parent hypothesis):
+         look up `primary_suspect_nf` on the parent.
+      3. **Fallback** — id doesn't match any known shape: return a
+         `<unknown:...>` placeholder. This degrades gracefully (the
+         pool still composes for ranking purposes) but flags the
+         resolution failure visibly.
+
+    Pre-PR-9.5 bug: re-investigation verdicts fell through to the
+    placeholder branch because the caller passes only the original
+    hypothesis list, not the synthetic one. The pool then carried
+    `<unknown:h_promoted_upf>` as a survivor NF instead of `upf`,
+    which broke the pool-membership guardrail downstream.
     """
+    # Path 1: re-investigation verdict (synthetic id pattern).
+    if v.hypothesis_id.startswith("h_promoted_"):
+        return v.hypothesis_id[len("h_promoted_"):]
+
+    # Path 2: original hypothesis lookup.
     if hypotheses:
         for h in hypotheses:
             if h.id == v.hypothesis_id:
                 return h.primary_suspect_nf
-    # Fallback — degraded but non-crashing.
+
+    # Path 3: fallback.
     return f"<unknown:{v.hypothesis_id}>"
 
 

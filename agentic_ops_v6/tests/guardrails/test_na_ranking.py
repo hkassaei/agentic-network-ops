@@ -189,8 +189,8 @@ def test_pass_when_demoted_with_reasoning_in_summary():
 
 def test_reject_when_direct_flag_nf_demoted_below_threshold():
     """The call_quality_degradation pattern: rtpengine has direct
-    flag, NA ranked rtpengine at h2 fit=0.6 (below 0.7), no demotion
-    reasoning in summary → REJECT."""
+    flag, NA ranked rtpengine at h2 fit=0.6 (below the 0.80 threshold),
+    no demotion reasoning in summary → REJECT."""
     report = _report(
         summary="The data plane is broken at upf and the upf is overloaded.",
         hyps=[
@@ -211,6 +211,48 @@ def test_reject_when_direct_flag_nf_demoted_below_threshold():
     assert notes["findings_count"] == 1
     assert notes["per_finding"][0]["nf"] == "rtpengine"
     assert notes["per_finding"][0]["metric"] == "derived.rtpengine_loss_ratio"
+
+
+def test_reject_at_fit_exactly_0_70_post_pr9_tightening():
+    """`run_20260501_042127_call_quality_degradation` had rtpengine at
+    exactly fit=0.70 with invented demotion reasoning in summary.
+    Pre-tightening (threshold=0.70), path (a) passed at the boundary.
+    Post-tightening (threshold=0.80), fit=0.70 falls below threshold.
+
+    NOTE: this test exercises path (a) only. It uses a summary that
+    DOES NOT include demotion keywords so path (b) cannot rescue.
+    """
+    report = _report(
+        summary="The data plane is broken at upf.",
+        hyps=[
+            _hyp(hid="h1", nf="upf", fit=0.9),
+            _hyp(hid="h2", nf="rtpengine", fit=0.70),  # exactly at old boundary
+        ],
+    )
+    flags = [
+        _flag(metric="derived.rtpengine_loss_ratio", component="rtpengine"),
+    ]
+    result = lint_na_ranking_coverage(report, flags, None, KNOWN_NFS)
+    assert result.verdict is GuardrailVerdict.REJECT
+    assert "0.70" in result.reason
+    # The threshold is rendered as 0.80 in the rejection text.
+    assert "0.80" in result.reason
+
+
+def test_pass_at_fit_0_80_post_pr9_tightening():
+    """fit=0.80 exactly meets the new threshold (>=) and passes."""
+    report = _report(
+        summary="upf is the source.",
+        hyps=[
+            _hyp(hid="h1", nf="upf", fit=0.9),
+            _hyp(hid="h2", nf="rtpengine", fit=0.80),
+        ],
+    )
+    flags = [
+        _flag(metric="derived.rtpengine_loss_ratio", component="rtpengine"),
+    ]
+    result = lint_na_ranking_coverage(report, flags, None, KNOWN_NFS)
+    assert result.verdict is GuardrailVerdict.PASS
 
 
 def test_reject_when_direct_flag_nf_completely_missing():

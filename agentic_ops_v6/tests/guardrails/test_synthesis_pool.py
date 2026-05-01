@@ -338,6 +338,44 @@ def test_replay_run_20260501_012613_promotes_upf():
     assert pool.top_promoted.cite_count == 2
 
 
+# ---------------------------------------------------------------------------
+# Bug fix (PR 9.5) — re-investigation verdicts resolve their NF correctly
+# ---------------------------------------------------------------------------
+
+
+def test_reinvestigation_verdict_resolves_nf_from_synthetic_id():
+    """When the re-investigation Investigator returns NOT_DISPROVEN on
+    a synthetic hypothesis (id=`h_promoted_upf`), the synthetic
+    hypothesis is NOT in the caller-supplied `hypotheses` list. The
+    aggregator must still resolve the NF correctly (to `upf`) rather
+    than falling back to a `<unknown:...>` placeholder. Caught by
+    run_20260501_042127_call_quality_degradation analysis."""
+    hyps = [_hypothesis(hid="h1", nf="rtpengine")]
+    verdicts = [
+        _verdict(hid="h1", verdict="DISPROVEN",
+                 alt_suspects=["upf"], reasoning="upf is dropping."),
+        # The re-investigation verdict — synthetic id, NOT in hyps list.
+        _verdict(hid="h_promoted_upf", verdict="NOT_DISPROVEN"),
+    ]
+    pool = compute_candidate_pool(verdicts, hyps)
+    # The re-investigation verdict should produce a SURVIVOR member
+    # named `upf`, not `<unknown:h_promoted_upf>`.
+    assert pool.has_survivor
+    survivor_nfs = [m.nf for m in pool.survivors]
+    assert "upf" in survivor_nfs
+    assert not any(nf.startswith("<unknown") for nf in survivor_nfs)
+
+
+def test_reinvestigation_verdict_with_multi_word_nf_id():
+    """Defensive: NF names like `nr_gnb` contain underscores. Make
+    sure the suffix extraction grabs the FULL NF name."""
+    verdicts = [
+        _verdict(hid="h_promoted_nr_gnb", verdict="NOT_DISPROVEN"),
+    ]
+    pool = compute_candidate_pool(verdicts, [])
+    assert pool.survivors[0].nf == "nr_gnb"
+
+
 # ===========================================================================
 # PR 5.5b — lint_synthesis_pool_membership
 # ===========================================================================

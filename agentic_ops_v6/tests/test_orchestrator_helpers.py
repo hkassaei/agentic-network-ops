@@ -530,6 +530,115 @@ async def test_sub_investigator_state_includes_anomaly_timestamps(monkeypatch):
 
 
 # ============================================================================
+# Bug fix (PR 9.5) — min-tool-call guardrail aggregates across retries
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_min_tool_call_aggregates_across_retry_attempts(monkeypatch):
+    """Pre-PR-9.5 bug: when an Investigator's first attempt produced
+    empty output (0 tool calls) and the retry succeeded with ≥2 tool
+    calls, the min-tool-call guardrail used `next(...)` over the trace
+    list and grabbed the FIRST matching trace (the failed-empty
+    attempt). It then forced INCONCLUSIVE despite the retry's
+    successful probes.
+
+    This test simulates that exact scenario: stub `_run_phase` to
+    return an empty-output trace on attempt 1 and a 3-tool-call trace
+    on attempt 2. Verify the guardrail does NOT force INCONCLUSIVE.
+
+    Caught by run_20260501_042127_call_quality_degradation: h1's
+    Investigator made 0 calls on attempt 1 + 3 on attempt 2 but was
+    incorrectly forced INCONCLUSIVE.
+    """
+    from agentic_ops_common.models import PhaseTrace, ToolCallTrace
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = [0]
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count[0] += 1
+        agent_name = "InvestigatorAgent_h1"
+        if call_count[0] == 1:
+            # Attempt 1: empty-output silent-bail. _run_phase returns
+            # successfully but doesn't write the output_key. The retry
+            # helper should detect this and try again.
+            trace = PhaseTrace(
+                agent_name=agent_name,
+                started_at=0.0,
+                finished_at=0.0,
+                duration_ms=0,
+                tool_calls=[],  # 0 tool calls
+            )
+            # Don't write investigator_verdict — the empty-output
+            # detector will see a missing key and trigger retry.
+            return (state, [trace])
+        # Attempt 2: real verdict + 3 tool calls
+        verdict = {
+            "hypothesis_id": state["hypothesis_id"],
+            "hypothesis_statement": state["hypothesis_statement"],
+            "verdict": "NOT_DISPROVEN",
+            "reasoning": "stub retry success",
+        }
+        trace = PhaseTrace(
+            agent_name=agent_name,
+            started_at=1.0,
+            finished_at=2.0,
+            duration_ms=1000,
+            tool_calls=[
+                ToolCallTrace(name=f"probe_{i}", args="{}", timestamp=1.0)
+                for i in range(3)
+            ],
+        )
+        new_state = {**state, "investigator_verdict": json.dumps(verdict)}
+        return (new_state, [trace])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(
+        orch, "create_investigator_agent",
+        lambda name=None: object(),
+    )
+
+    h = Hypothesis(
+        id="h1",
+        statement="UPF transient drop",
+        primary_suspect_nf="upf",
+        explanatory_fit=0.9,
+        specificity="specific",
+        supporting_events=[],
+        falsification_probes=["check N3 vs N6"],
+    )
+    probe = {
+        "tool": "get_dp_quality_gauges",
+        "args_hint": "window_seconds=60",
+        "expected_if_hypothesis_holds": "x",
+        "falsifying_observation": "y",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1",
+        hypothesis_statement="UPF transient drop",
+        primary_suspect_nf="upf",
+        probes=[probe, probe],
+        notes="",
+    )
+
+    verdicts = await orch._run_parallel_investigators(
+        hypotheses=[h],
+        plans=[plan],
+        network_analysis_text="na",
+        session_service=None,
+        all_phases=[],
+    )
+
+    # The retry succeeded with 3 tool calls. Aggregated count is
+    # 0 + 3 = 3, which is >= MIN_TOOL_CALLS_PER_INVESTIGATOR (2).
+    # The guardrail should NOT force INCONCLUSIVE.
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict == "NOT_DISPROVEN"
+    assert "Mechanical guardrail" not in verdicts[0].reasoning
+
+
+# ============================================================================
 # PR 5.5b — Diagnosis report parsing + markdown rendering
 # ============================================================================
 

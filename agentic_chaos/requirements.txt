@@ -4,3 +4,7 @@ pydantic>=2.0
 neo4j>=5.0,<6
 river>=0.21
 pyod>=2.0
+# Required transitively via agentic_ops_common.metric_kb.event_dsl, which the
+# challenger imports when invoking v6. Missing it here surfaces as an
+# "agent not available" silent skip — see challenger._rca_agent_available.
+simpleeval>=0.9

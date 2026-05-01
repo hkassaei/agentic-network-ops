@@ -72,11 +72,13 @@ from .guardrails.investigator_minimum import (
 )
 from .guardrails.na_linter import lint_na_hypotheses
 from .guardrails.runner import GUARDRAIL_REASON_KEY, run_phase_with_guardrail
+from .guardrails.confidence_cap import cap_synthesis_confidence
 from .guardrails.synthesis_pool import (
     CandidatePool,
     compute_candidate_pool,
     lint_synthesis_pool_membership,
 )
+from .guardrails.base import GuardrailVerdict
 from .models import (
     CorrelationAnalysis,
     DiagnosisReport,
@@ -1161,16 +1163,32 @@ async def investigate(
     all_phases.append(ev_trace)
 
     # -------- Phase 7: Synthesis --------
-    # Two layered guards on Synthesis output:
+    # Three layered guards on Synthesis output:
     #   (a) Empty-output retry — same silent-bail ADK pattern as NA / IG.
     #   (b) Pool-membership guardrail (Decision E, PR 5.5b) — Synthesis
     #       emits a structured `DiagnosisReport` (output_schema) and the
     #       guardrail rejects any `primary_suspect_nf` that isn't in the
-    #       Phase-6.5 candidate pool. On REJECT the runner resamples once
-    #       with the rejection reason injected via
-    #       `{guardrail_rejection_reason}`. Accept-with-warning on second
-    #       REJECT — a pool-violating diagnosis is worse than a clean
-    #       one but better than no diagnosis at all.
+    #       Phase-6.5 candidate pool. REJECT path with one resample.
+    #   (c) Confidence cap (Decision F, PR 3) — after pool membership
+    #       passes, compute the supporting verdict's evidence-strength
+    #       (CONSISTENT / CONTRADICTS / AMBIGUOUS counts) and cap
+    #       `root_cause_confidence` accordingly. REPAIR path — silent
+    #       rewrite + cap note appended to `explanation`. The
+    #       diagnosed NF stands; only the confidence claim gets
+    #       corrected.
+    # The composed guardrail closure runs (b) first; on PASS it runs
+    # (c); on REJECT it returns the membership rejection.
+    def _synthesis_combined_guardrail(report):
+        membership = lint_synthesis_pool_membership(report, pool)
+        if membership.verdict is not GuardrailVerdict.PASS:
+            return membership
+        return cap_synthesis_confidence(
+            report,
+            verdicts=verdicts,
+            hypotheses=hypotheses,
+            pool=pool,
+        )
+
     state, syn_traces, syn_success, diagnosis_report = await run_phase_with_guardrail(
         agent_factory=create_synthesis_agent,
         state=state,
@@ -1182,9 +1200,10 @@ async def investigate(
         run_phase=_run_phase,
         parser=_parse_diagnosis_report,
         # Closure binds the (possibly re-investigation-augmented) pool
-        # so the guardrail can validate `primary_suspect_nf` membership
-        # without us having to thread the pool through `run_phase_with_guardrail`'s signature.
-        guardrail=lambda report: lint_synthesis_pool_membership(report, pool),
+        # AND the verdicts list so both pool-membership and the
+        # confidence cap can run without threading parameters through
+        # `run_phase_with_guardrail`'s single-arg guardrail signature.
+        guardrail=_synthesis_combined_guardrail,
         max_resamples=1,
         on_guardrail_exhausted="accept",
     )

@@ -82,3 +82,14 @@ Return a structured `DiagnosisReport`. Required fields:
 - **explanation** (string, 3-5 sentences): WHY this happened, citing the surviving / disproven hypothesis/-es and the events that drove the conclusion. If the Evidence Validator raised warnings, include the caveat text here.
 
 **Pool membership is mechanically enforced.** A post-emit guardrail rejects any `primary_suspect_nf` that isn't in the candidate pool above (when the pool is non-empty) and resamples your output once with the rejection reason injected. Pick from the pool — do not invent.
+
+**Confidence is mechanically capped.** A second post-emit guardrail (Decision F) recomputes evidence-strength from the supporting verdict's structured probe-result counts (CONSISTENT / CONTRADICTS / AMBIGUOUS) and caps `root_cause_confidence` if your emitted value exceeds what the evidence supports:
+
+| Strongest verdict's evidence-strength | Max permitted `root_cause_confidence` |
+|---|---|
+| STRONG (≥2 CONSISTENT, 0 CONTRADICTS, 0 AMBIGUOUS) | high |
+| MODERATE (≥2 CONSISTENT, 0 CONTRADICTS, ≥1 AMBIGUOUS) | medium |
+| WEAK (any CONTRADICTS, OR <2 CONSISTENT) | low |
+| NONE (>50% AMBIGUOUS, OR no probes) | low (verdict effectively inconclusive) |
+
+The cap is silent (REPAIR, not REJECT — your diagnosis NF stands; only the confidence rating gets corrected if needed). It still pays to emit calibrated confidence yourself so downstream consumers see a coherent diagnosis. If you genuinely think the evidence is weak, say so via `medium` or `low` confidence rather than claiming `high` and getting capped.

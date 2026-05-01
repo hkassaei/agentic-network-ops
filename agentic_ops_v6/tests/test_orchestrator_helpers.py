@@ -527,3 +527,135 @@ async def test_sub_investigator_state_includes_anomaly_timestamps(monkeypatch):
     assert state["anomaly_window_start_ts"] == 1777505000.0
     assert state["anomaly_window_end_ts"] == 1777505030.0
     assert state["anomaly_screener_snapshot_ts"] == 1777505020.0
+
+
+# ============================================================================
+# PR 5.5b — Diagnosis report parsing + markdown rendering
+# ============================================================================
+
+
+def test_parse_diagnosis_report_from_dict():
+    from agentic_ops_v6.orchestrator import _parse_diagnosis_report
+
+    raw = {
+        "summary": "test",
+        "root_cause": "UPF is the source",
+        "root_cause_confidence": "high",
+        "primary_suspect_nf": "upf",
+        "verdict_kind": "confirmed",
+        "affected_components": [{"name": "upf", "role": "Root Cause"}],
+        "timeline": ["event 1", "event 2"],
+        "recommendation": "verify",
+        "explanation": "because",
+    }
+    report = _parse_diagnosis_report(raw)
+    assert report.primary_suspect_nf == "upf"
+    assert report.verdict_kind == "confirmed"
+
+
+def test_parse_diagnosis_report_from_json_string():
+    from agentic_ops_v6.orchestrator import _parse_diagnosis_report
+
+    raw = (
+        '{"summary":"s","root_cause":"r","root_cause_confidence":"low",'
+        '"primary_suspect_nf":null,"verdict_kind":"inconclusive",'
+        '"affected_components":[],"timeline":[],"recommendation":"r",'
+        '"explanation":"e"}'
+    )
+    report = _parse_diagnosis_report(raw)
+    assert report.primary_suspect_nf is None
+    assert report.verdict_kind == "inconclusive"
+
+
+def test_parse_diagnosis_report_handles_none():
+    from agentic_ops_v6.orchestrator import _parse_diagnosis_report
+
+    report = _parse_diagnosis_report(None)
+    # Sentinel: inconclusive + None — the only valid empty-pool combo.
+    assert report.verdict_kind == "inconclusive"
+    assert report.primary_suspect_nf is None
+
+
+def test_parse_diagnosis_report_handles_garbage():
+    from agentic_ops_v6.orchestrator import _parse_diagnosis_report
+
+    report = _parse_diagnosis_report("not json {{{")
+    assert report.verdict_kind == "inconclusive"
+
+
+def test_parse_diagnosis_report_handles_schema_violation():
+    """Unknown NF on `primary_suspect_nf` → ValidationError → sentinel."""
+    from agentic_ops_v6.orchestrator import _parse_diagnosis_report
+
+    raw = {
+        "summary": "s",
+        "root_cause": "r",
+        "root_cause_confidence": "high",
+        "primary_suspect_nf": "not_a_real_nf",
+        "verdict_kind": "confirmed",
+        "recommendation": "r",
+        "explanation": "e",
+    }
+    report = _parse_diagnosis_report(raw)
+    assert report.verdict_kind == "inconclusive"  # fell back to sentinel
+
+
+def test_render_diagnosis_report_to_markdown_full_report():
+    from agentic_ops_v6.models import DiagnosisReport
+    from agentic_ops_v6.orchestrator import _render_diagnosis_report_to_markdown
+
+    report = DiagnosisReport(
+        summary="Severe data plane failure at UPF.",
+        root_cause="UPF is dropping packets.",
+        root_cause_confidence="high",
+        primary_suspect_nf="upf",
+        verdict_kind="confirmed",
+        affected_components=[
+            {"name": "upf", "role": "Root Cause"},
+            {"name": "rtpengine", "role": "Symptomatic"},
+        ],
+        timeline=["UPF activity collapsed", "RTPEngine reports loss"],
+        recommendation="Check UPF interfaces.",
+        explanation="The h1 Investigator found packet drop at UPF.",
+    )
+    md = _render_diagnosis_report_to_markdown(report)
+    # Required sections present
+    assert "### causes" in md
+    assert "**summary**" in md
+    assert "**timeline**" in md
+    assert "**root_cause**" in md
+    assert "**affected_components**" in md
+    assert "**recommendation**" in md
+    assert "**confidence**" in md
+    assert "**verdict_kind**" in md
+    assert "**explanation**" in md
+    # Content propagated correctly
+    assert "Severe data plane failure" in md
+    assert "primary_suspect_nf: `upf`" in md
+    assert "1. UPF activity collapsed" in md
+    assert "2. RTPEngine reports loss" in md
+    assert "`upf`: Root Cause" in md
+    assert "`rtpengine`: Symptomatic" in md
+
+
+def test_render_diagnosis_report_to_markdown_inconclusive():
+    from agentic_ops_v6.models import DiagnosisReport
+    from agentic_ops_v6.orchestrator import _render_diagnosis_report_to_markdown
+
+    report = DiagnosisReport(
+        summary="Insufficient evidence.",
+        root_cause="Inconclusive",
+        root_cause_confidence="low",
+        primary_suspect_nf=None,
+        verdict_kind="inconclusive",
+        affected_components=[],
+        timeline=[],
+        recommendation="Manual investigation.",
+        explanation="All hypotheses disproven.",
+    )
+    md = _render_diagnosis_report_to_markdown(report)
+    assert "**timeline**: []" in md
+    assert "**affected_components**: []" in md
+    # No primary_suspect_nf line when the field is None
+    assert "primary_suspect_nf:" not in md
+    assert "verdict_kind**: inconclusive" in md

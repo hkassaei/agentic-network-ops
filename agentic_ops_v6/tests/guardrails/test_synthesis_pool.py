@@ -1,16 +1,24 @@
-"""Unit tests for guardrails/synthesis_pool.compute_candidate_pool — Decision E, PR 5.
+"""Unit tests for guardrails/synthesis_pool — Decision E (PR 5) and the
+pool-membership guardrail (PR 5.5b).
 
-The aggregator is pure Python over Pydantic-typed verdict / hypothesis
-objects. No ADK runtime, no Gemini calls.
+All tests are pure Python over Pydantic-typed verdict / hypothesis /
+diagnosis objects. No ADK runtime, no Gemini calls.
 """
 
 from __future__ import annotations
 
+from agentic_ops_v6.guardrails.base import GuardrailVerdict
 from agentic_ops_v6.guardrails.synthesis_pool import (
     CandidatePool,
+    CandidatePoolMember,
     compute_candidate_pool,
+    lint_synthesis_pool_membership,
 )
-from agentic_ops_v6.models import Hypothesis, InvestigatorVerdict
+from agentic_ops_v6.models import (
+    DiagnosisReport,
+    Hypothesis,
+    InvestigatorVerdict,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -328,3 +336,133 @@ def test_replay_run_20260501_012613_promotes_upf():
     assert pool.top_promoted is not None
     assert pool.top_promoted.nf == "upf"
     assert pool.top_promoted.cite_count == 2
+
+
+# ===========================================================================
+# PR 5.5b — lint_synthesis_pool_membership
+# ===========================================================================
+
+
+def _diagnosis(
+    *,
+    nf: str | None,
+    verdict_kind: str = "confirmed",
+) -> DiagnosisReport:
+    return DiagnosisReport(
+        summary="test",
+        root_cause="test",
+        root_cause_confidence="high",
+        primary_suspect_nf=nf,
+        verdict_kind=verdict_kind,
+        affected_components=[],
+        timeline=[],
+        recommendation="test",
+        explanation="test",
+    )
+
+
+def _pool_with(*nfs_with_kind: tuple[str, str]) -> CandidatePool:
+    """Build a CandidatePool from (nf, kind) pairs."""
+    return CandidatePool(members=[
+        CandidatePoolMember(
+            nf=nf, kind=kind,
+            survivor_hypothesis_id="h1" if kind == "survivor" else "",
+            cite_count=2 if kind == "promoted" else 0,
+        )
+        for nf, kind in nfs_with_kind
+    ])
+
+
+def test_membership_passes_when_nf_is_in_pool():
+    pool = _pool_with(("upf", "survivor"), ("rtpengine", "promoted"))
+    diag = _diagnosis(nf="upf", verdict_kind="confirmed")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.PASS
+
+
+def test_membership_passes_when_promoted_nf_picked():
+    pool = _pool_with(("upf", "survivor"), ("rtpengine", "promoted"))
+    diag = _diagnosis(nf="rtpengine", verdict_kind="promoted")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.PASS
+
+
+def test_membership_rejects_out_of_pool_nf():
+    pool = _pool_with(("upf", "survivor"))
+    diag = _diagnosis(nf="rtpengine", verdict_kind="confirmed")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.REJECT
+    assert "rtpengine" in result.reason
+    assert "upf" in result.reason  # pool members listed
+    assert result.notes["submitted_nf"] == "rtpengine"
+    assert result.notes["pool_nfs"] == ["upf"]
+
+
+def test_membership_passes_inconclusive_with_nonempty_pool():
+    """Synthesis can choose to commit nothing despite a non-empty pool."""
+    pool = _pool_with(("upf", "survivor"))
+    diag = _diagnosis(nf=None, verdict_kind="inconclusive")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.PASS
+
+
+def test_membership_rejects_confirmed_with_empty_pool():
+    """Empty pool ⇒ only valid output is inconclusive+null."""
+    pool = CandidatePool(members=[])
+    diag = _diagnosis(nf="upf", verdict_kind="confirmed")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.REJECT
+    assert "empty" in result.reason.lower()
+    assert "inconclusive" in result.reason.lower()
+
+
+def test_membership_passes_inconclusive_with_empty_pool():
+    pool = CandidatePool(members=[])
+    diag = _diagnosis(nf=None, verdict_kind="inconclusive")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.PASS
+
+
+def test_membership_rejects_promoted_kind_with_out_of_pool_nf():
+    pool = _pool_with(("upf", "promoted"))
+    diag = _diagnosis(nf="rtpengine", verdict_kind="promoted")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.REJECT
+    assert result.notes["submitted_verdict_kind"] == "promoted"
+
+
+def test_membership_rejects_empty_pool_promoted_with_any_nf():
+    """Even verdict_kind='promoted' is invalid when pool is empty."""
+    pool = CandidatePool(members=[])
+    diag = _diagnosis(nf="upf", verdict_kind="promoted")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.REJECT
+
+
+# ===========================================================================
+# Replay run_20260501_032822 — Synthesis would have been blocked
+# ===========================================================================
+
+
+def test_replay_run_20260501_032822_synthesis_picking_upf_when_pool_promotes_rtpengine():
+    """In the actual call_quality_degradation run, the pool was
+    [upf SURVIVOR, rtpengine PROMOTED]. Synthesis picked upf — which
+    IS in the pool, so the membership guardrail PASSES. This test
+    documents the residual: pool membership is necessary but not
+    sufficient. Decision F (confidence cap) and Decision H (NA
+    direct-vs-derived ranking) are the structural fixes for picking
+    the wrong pool member."""
+    pool = _pool_with(("upf", "survivor"), ("rtpengine", "promoted"))
+    diag = _diagnosis(nf="upf", verdict_kind="confirmed")
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.PASS  # still passes
+
+
+def test_membership_blocks_invented_nf_not_in_either_pool_member():
+    """Synthesis hallucinates an NF that wasn't anywhere in the pool —
+    THIS is the failure mode 5.5b prevents."""
+    pool = _pool_with(("upf", "survivor"), ("rtpengine", "promoted"))
+    diag = _diagnosis(nf="amf", verdict_kind="confirmed")  # invented
+    result = lint_synthesis_pool_membership(diag, pool)
+    assert result.verdict is GuardrailVerdict.REJECT
+    assert "amf" in result.reason

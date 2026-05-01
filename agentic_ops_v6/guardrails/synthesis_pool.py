@@ -47,7 +47,8 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
-from ..models import Hypothesis, InvestigatorVerdict
+from ..models import DiagnosisReport, Hypothesis, InvestigatorVerdict
+from .base import GuardrailResult, GuardrailVerdict
 
 
 @dataclass
@@ -225,3 +226,97 @@ def _nf_from_verdict(
                 return h.primary_suspect_nf
     # Fallback — degraded but non-crashing.
     return f"<unknown:{v.hypothesis_id}>"
+
+
+# ============================================================================
+# PR 5.5b — Synthesis pool-membership guardrail
+# ============================================================================
+
+
+def lint_synthesis_pool_membership(
+    report: DiagnosisReport,
+    pool: CandidatePool,
+) -> GuardrailResult[DiagnosisReport]:
+    """Validate that Synthesis's `primary_suspect_nf` is in the candidate pool.
+
+    Three branches:
+      * Empty pool → Synthesis must emit `verdict_kind == "inconclusive"`
+        and `primary_suspect_nf is None`. Anything else is REJECT.
+      * Non-empty pool, `verdict_kind in ("confirmed", "promoted")` →
+        `primary_suspect_nf` MUST be a pool member's `nf`. REJECT
+        otherwise.
+      * Non-empty pool, `verdict_kind == "inconclusive"` → permitted
+        (Synthesis can choose to commit nothing despite a non-empty
+        pool when evidence is too weak). Pass.
+
+    The rejection reason lists the pool members and the offending NF so
+    Synthesis's resample can pick correctly. Returns PASS / REJECT only;
+    no REPAIR path (the value Synthesis emits is the LLM's judgment —
+    the runner asks for a fresh judgment rather than us silently
+    rewriting).
+    """
+    pool_nfs = [m.nf for m in pool.members]
+    pool_nfs_set = set(pool_nfs)
+
+    # Empty pool branch
+    if not pool_nfs_set:
+        if report.verdict_kind != "inconclusive":
+            return GuardrailResult(
+                verdict=GuardrailVerdict.REJECT,
+                output=report,
+                reason=(
+                    "The candidate pool is empty (no NOT_DISPROVEN survivors "
+                    "and no NF crossed the alt-suspect corroboration "
+                    "threshold). With an empty pool, the only valid output "
+                    f"is `verdict_kind=\"inconclusive\"` with "
+                    f"`primary_suspect_nf=null`. You emitted "
+                    f"`verdict_kind=\"{report.verdict_kind}\"` "
+                    f"with `primary_suspect_nf={report.primary_suspect_nf!r}` "
+                    "— that is not a permissible diagnosis given the "
+                    "evidence. Re-emit with `verdict_kind=\"inconclusive\"` "
+                    "and `primary_suspect_nf=null`; aggregate the "
+                    "DISPROVEN Investigators' alternative_suspects in the "
+                    "explanation as next leads for the human operator."
+                ),
+                notes={
+                    "pool_size": 0,
+                    "submitted_nf": report.primary_suspect_nf,
+                    "submitted_verdict_kind": report.verdict_kind,
+                },
+            )
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
+    # Non-empty pool, inconclusive — permitted (rare but legitimate).
+    if report.verdict_kind == "inconclusive":
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
+    # Non-empty pool, confirmed/promoted — primary_suspect_nf must be in pool.
+    submitted = report.primary_suspect_nf
+    if submitted in pool_nfs_set:
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
+    return GuardrailResult(
+        verdict=GuardrailVerdict.REJECT,
+        output=report,
+        reason=(
+            f"You emitted `primary_suspect_nf={submitted!r}` with "
+            f"`verdict_kind=\"{report.verdict_kind}\"`, but {submitted!r} "
+            "is NOT in the candidate pool computed deterministically by "
+            "the Decision E aggregator (Phase 6.5). The pool is the "
+            "verified set of NFs you are allowed to diagnose:\n\n"
+            f"{pool.render_for_prompt()}\n\n"
+            "Pick a pool member as `primary_suspect_nf`. If you genuinely "
+            "believe none of the pool members is the right answer, set "
+            "`verdict_kind=\"inconclusive\"` and `primary_suspect_nf=null` "
+            "rather than naming an NF outside the pool — the orchestrator "
+            "ran a bounded re-investigation already if this was an "
+            "all-DISPROVEN tree, so the pool reflects the strongest "
+            "structural answer the pipeline can derive."
+        ),
+        notes={
+            "pool_size": len(pool_nfs),
+            "pool_nfs": pool_nfs,
+            "submitted_nf": submitted,
+            "submitted_verdict_kind": report.verdict_kind,
+        },
+    )

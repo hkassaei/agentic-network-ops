@@ -1,14 +1,19 @@
-"""v6 orchestrator — 8-phase pipeline with parallel per-hypothesis Investigators.
+"""v6 orchestrator — 9-phase pipeline with parallel per-hypothesis Investigators.
 
 Pipeline:
-  Phase 0  AnomalyScreener           (ML, no LLM)
-  Phase 1  EventAggregator           (reads fired events from store)
-  Phase 2  CorrelationAnalyzer       (runs correlation engine, feeds NA)
-  Phase 3  NetworkAnalyst            (ranked hypotheses over KB + events + correlation)
-  Phase 4  InstructionGenerator      (one falsification plan per hypothesis)
-  Phase 5  Investigator × N          (parallel sub-agents, one per hypothesis)
-  Phase 6  EvidenceValidator         (per-sub-investigator citation check)
-  Phase 7  Synthesis                 (aggregates N verdicts into NOC diagnosis)
+  Phase 0    AnomalyScreener           (ML, no LLM)
+  Phase 1    EventAggregator           (reads fired events from store)
+  Phase 2    CorrelationAnalyzer       (runs correlation engine, feeds NA)
+  Phase 3    NetworkAnalyst            (ranked hypotheses over KB + events + correlation)
+  Phase 4    InstructionGenerator      (one falsification plan per hypothesis)
+  Phase 5    Investigator × N          (parallel sub-agents, one per hypothesis)
+  Phase 6.5  CandidatePool + bounded   (Decision E aggregator; re-investigates the top
+             re-investigation            promoted suspect when the verdict tree has zero
+                                         NOT_DISPROVEN survivors)
+  Phase 6.6  EvidenceValidator         (per-sub-investigator citation check; PR 5.5a
+                                         moved this AFTER 6.5 so it covers the
+                                         re-investigation Investigator's trace)
+  Phase 7    Synthesis                 (aggregates N verdicts into NOC diagnosis)
 
 Notes:
   - The agentic_chaos framework is expected to invoke the metric-KB trigger
@@ -70,9 +75,11 @@ from .guardrails.runner import GUARDRAIL_REASON_KEY, run_phase_with_guardrail
 from .guardrails.synthesis_pool import (
     CandidatePool,
     compute_candidate_pool,
+    lint_synthesis_pool_membership,
 )
 from .models import (
     CorrelationAnalysis,
+    DiagnosisReport,
     FalsificationPlan,
     FalsificationPlanSet,
     Hypothesis,
@@ -1074,27 +1081,6 @@ async def investigate(
         [v.model_dump() for v in verdicts], indent=2,
     )
 
-    # -------- Phase 6: Evidence Validator --------
-    phase_start = time.time()
-    phase_trace_dicts = [t.model_dump(mode="json") for t in all_phases]
-    investigator_outputs = [
-        {**v.model_dump(), "agent_name": f"InvestigatorAgent_{v.hypothesis_id}"}
-        for v in verdicts
-    ]
-    ev_result = validate_evidence(phase_trace_dicts, investigator_outputs)
-    state["evidence_validation"] = json.dumps(ev_result.to_dict(), indent=2)
-    ev_trace = PhaseTrace(
-        agent_name="EvidenceValidator",
-        started_at=phase_start,
-        finished_at=time.time(),
-        duration_ms=int((time.time() - phase_start) * 1000),
-        output_summary=(
-            f"overall={ev_result.overall_verdict}, "
-            f"confidence={ev_result.overall_confidence}"
-        ),
-    )
-    all_phases.append(ev_trace)
-
     # -------- Phase 6.5: Candidate-pool aggregator + bounded re-investigation --------
     # Decision E (PR 5). Walk the verdict tree, build a ranked
     # candidate pool from NOT_DISPROVEN survivors plus alt_suspects
@@ -1146,11 +1132,46 @@ async def investigate(
 
     state["candidate_pool"] = pool.render_for_prompt()
 
+    # -------- Phase 6.6: Evidence Validator --------
+    # Moved here from its original Phase-6 slot in PR 5.5a so that EV
+    # also covers the re-investigation Investigator's tool-call trace.
+    # Previously EV ran before Phase 6.5, which meant a re-investigation
+    # verdict could carry fabricated citations through Synthesis without
+    # being challenged. `investigator_outputs` is rebuilt from the
+    # (possibly-augmented) `verdicts` list so the re-investigation
+    # verdict is included.
+    phase_start = time.time()
+    phase_trace_dicts = [t.model_dump(mode="json") for t in all_phases]
+    investigator_outputs = [
+        {**v.model_dump(), "agent_name": f"InvestigatorAgent_{v.hypothesis_id}"}
+        for v in verdicts
+    ]
+    ev_result = validate_evidence(phase_trace_dicts, investigator_outputs)
+    state["evidence_validation"] = json.dumps(ev_result.to_dict(), indent=2)
+    ev_trace = PhaseTrace(
+        agent_name="EvidenceValidator",
+        started_at=phase_start,
+        finished_at=time.time(),
+        duration_ms=int((time.time() - phase_start) * 1000),
+        output_summary=(
+            f"overall={ev_result.overall_verdict}, "
+            f"confidence={ev_result.overall_confidence}"
+        ),
+    )
+    all_phases.append(ev_trace)
+
     # -------- Phase 7: Synthesis --------
-    # Same empty-output retry guard as NA / IG. Synthesis is the
-    # final user-visible diagnosis; an empty output here would render
-    # as a blank "Diagnosis" section in the recorded report.
-    state, syn_traces, syn_success = await _run_phase_with_empty_output_retry(
+    # Two layered guards on Synthesis output:
+    #   (a) Empty-output retry — same silent-bail ADK pattern as NA / IG.
+    #   (b) Pool-membership guardrail (Decision E, PR 5.5b) — Synthesis
+    #       emits a structured `DiagnosisReport` (output_schema) and the
+    #       guardrail rejects any `primary_suspect_nf` that isn't in the
+    #       Phase-6.5 candidate pool. On REJECT the runner resamples once
+    #       with the rejection reason injected via
+    #       `{guardrail_rejection_reason}`. Accept-with-warning on second
+    #       REJECT — a pool-violating diagnosis is worse than a clean
+    #       one but better than no diagnosis at all.
+    state, syn_traces, syn_success, diagnosis_report = await run_phase_with_guardrail(
         agent_factory=create_synthesis_agent,
         state=state,
         question=question,
@@ -1158,17 +1179,39 @@ async def investigate(
         on_event=on_event,
         output_key=_SYNTHESIS_OUTPUT_KEY,
         phase_label="Phase 7 Synthesis",
+        run_phase=_run_phase,
+        parser=_parse_diagnosis_report,
+        # Closure binds the (possibly re-investigation-augmented) pool
+        # so the guardrail can validate `primary_suspect_nf` membership
+        # without us having to thread the pool through `run_phase_with_guardrail`'s signature.
+        guardrail=lambda report: lint_synthesis_pool_membership(report, pool),
+        max_resamples=1,
+        on_guardrail_exhausted="accept",
     )
     all_phases.extend(syn_traces)
     _accumulate_phase_traces(state, syn_traces)
-    if not syn_success:
-        state[_SYNTHESIS_OUTPUT_KEY] = (
+
+    if not syn_success or diagnosis_report is None:
+        # Empty-output retry exhausted both attempts (or parser fell
+        # through). Render a sentinel so the recorder shows the failure
+        # cleanly instead of a blank diagnosis section.
+        diagnosis_report = _empty_diagnosis_report(
             "Synthesis produced empty output on two consecutive attempts. "
-            "ADK's silent-bail on empty Gemini final-response prevented the "
-            "diagnosis from being written. Inspect the per-Investigator "
+            "ADK's silent-bail on empty Gemini final-response prevented "
+            "the diagnosis from being written. Inspect the per-Investigator "
             "verdicts and EvidenceValidator output above to derive the "
             "diagnosis manually."
         )
+
+    # Replace state["diagnosis"] with the markdown rendering. The chaos
+    # `EpisodeRecorder` and `score_diagnosis` both read this as plain
+    # text, so we render the structured report back to markdown. The
+    # structured form is preserved separately for any downstream tooling
+    # that wants typed access.
+    state[_SYNTHESIS_OUTPUT_KEY] = _render_diagnosis_report_to_markdown(
+        diagnosis_report,
+    )
+    state["diagnosis_structured"] = diagnosis_report.model_dump(mode="json")
 
     return _build_result(state, all_phases, run_start)
 
@@ -1247,6 +1290,84 @@ def _parse_plan_set(raw: Any) -> FalsificationPlanSet:
     except Exception as e:
         log.warning("Could not parse IG output: %s", e)
         return _empty_plan_set()
+
+
+def _empty_diagnosis_report(reason: str) -> DiagnosisReport:
+    """Sentinel DiagnosisReport for empty-output / parse-failure paths.
+
+    `verdict_kind` is forced to `inconclusive` and `primary_suspect_nf`
+    to None so the pool-membership guardrail passes (empty pool +
+    inconclusive is the only valid combination on the no-pool branch).
+    `model_construct` bypasses the typed `_KnownNF` constraint on
+    `primary_suspect_nf` since None is already a valid value but we
+    want to skip Pydantic's full validation pipeline on the sentinel.
+    """
+    return DiagnosisReport.model_construct(
+        summary=reason,
+        root_cause="Synthesis sentinel — see summary",
+        root_cause_confidence="low",
+        primary_suspect_nf=None,
+        verdict_kind="inconclusive",
+        affected_components=[],
+        timeline=[],
+        recommendation="Manual investigation required.",
+        explanation=reason,
+    )
+
+
+def _parse_diagnosis_report(raw: Any) -> DiagnosisReport:
+    """Parse Synthesis's structured output into a DiagnosisReport.
+
+    Returns the empty sentinel on missing/unparseable input — the pool
+    guardrail then sees `verdict_kind=inconclusive` and passes (empty
+    pool branch).
+    """
+    if raw is None:
+        return _empty_diagnosis_report("Synthesis produced no output")
+    try:
+        if isinstance(raw, str):
+            data = json.loads(raw)
+        else:
+            data = raw
+        return DiagnosisReport(**data)
+    except Exception as e:
+        log.warning("Could not parse Synthesis output: %s", e)
+        return _empty_diagnosis_report(f"Synthesis output unparseable: {e}")
+
+
+def _render_diagnosis_report_to_markdown(report: DiagnosisReport) -> str:
+    """Render the structured DiagnosisReport back to the markdown shape
+    the chaos `EpisodeRecorder` and `score_diagnosis` expect.
+
+    Format mirrors the previous plain-markdown Synthesis output so
+    downstream consumers (recorder template, LLM-judge scorer) keep
+    receiving the prose form they were built against.
+    """
+    lines: list[str] = ["### causes"]
+    lines.append(f"- **summary**: {report.summary}")
+    if report.timeline:
+        lines.append("- **timeline**:")
+        for i, t in enumerate(report.timeline, 1):
+            lines.append(f"    {i}. {t}")
+    else:
+        lines.append("- **timeline**: []")
+    rc_line = f"- **root_cause**: {report.root_cause}"
+    if report.primary_suspect_nf:
+        rc_line += f" (primary_suspect_nf: `{report.primary_suspect_nf}`)"
+    lines.append(rc_line)
+    if report.affected_components:
+        lines.append("- **affected_components**:")
+        for c in report.affected_components:
+            name = c.get("name", "?") if isinstance(c, dict) else str(c)
+            role = c.get("role", "?") if isinstance(c, dict) else "?"
+            lines.append(f"    - `{name}`: {role}")
+    else:
+        lines.append("- **affected_components**: []")
+    lines.append(f"- **recommendation**: {report.recommendation}")
+    lines.append(f"- **confidence**: {report.root_cause_confidence}")
+    lines.append(f"- **verdict_kind**: {report.verdict_kind}")
+    lines.append(f"- **explanation**: {report.explanation}")
+    return "\n".join(lines)
 
 
 def _rank_and_cap_hypotheses(hypotheses: list[Hypothesis]) -> list[Hypothesis]:

@@ -281,10 +281,48 @@ class InvestigatorVerdict(BaseModel):
 # ============================================================================
 
 class DiagnosisReport(BaseModel):
-    """Final NOC-ready diagnosis produced by Synthesis."""
+    """Final NOC-ready diagnosis produced by Synthesis.
+
+    PR 5.5b converted Synthesis from plain-markdown to structured output
+    so the candidate-pool membership constraint (Decision E) can be
+    enforced mechanically. The orchestrator passes the populated
+    DiagnosisReport through `lint_synthesis_pool_membership` and renders
+    it back to markdown for the recorder/scorer via
+    `_render_diagnosis_report_to_markdown`.
+
+    `primary_suspect_nf` carries the typed root-cause NF. None iff
+    `verdict_kind == "inconclusive"`. The pool-membership guardrail
+    reads this field to validate Synthesis picked from the candidate
+    pool computed in Phase 6.5.
+
+    `verdict_kind` distinguishes the three branches Synthesis can land
+    on:
+      * `confirmed` — sole NOT_DISPROVEN survivor (Synthesis Case A) OR
+        Decision E re-investigation produced NOT_DISPROVEN.
+      * `promoted` — diagnosis derived from `alternative_suspects`
+        cross-corroboration in an all-DISPROVEN tree (Synthesis Case D).
+      * `inconclusive` — empty pool, or evidence too weak to commit.
+    """
     summary: str
     root_cause: str
     root_cause_confidence: Literal["high", "medium", "low"]
+    primary_suspect_nf: _KnownNF | None = Field(
+        default=None,
+        description=(
+            "The NF Synthesis names as the root cause. MUST appear in "
+            "the candidate pool (Decision E) when verdict_kind is "
+            "'confirmed' or 'promoted'. None when verdict_kind is "
+            "'inconclusive'."
+        ),
+    )
+    verdict_kind: Literal["confirmed", "promoted", "inconclusive"] = Field(
+        default="inconclusive",
+        description=(
+            "Which Synthesis branch the diagnosis came from. Drives "
+            "downstream confidence calibration (Decision F) and pool "
+            "membership validation (PR 5.5b)."
+        ),
+    )
     affected_components: list[dict] = Field(default_factory=list)
     timeline: list[str] = Field(default_factory=list)
     recommendation: str

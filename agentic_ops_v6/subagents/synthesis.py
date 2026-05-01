@@ -6,6 +6,7 @@ from pathlib import Path
 
 from google.adk.agents import LlmAgent
 
+from ..models import DiagnosisReport
 from ..retry_config import make_retry_model
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "synthesis.md"
@@ -14,8 +15,13 @@ _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "synthesis.md"
 def create_synthesis_agent() -> LlmAgent:
     """Create the v6 Synthesis agent.
 
-    Output is plain markdown (not structured), because the ChallengeAgent's
-    scorer reads the raw diagnosis text. Matches v5 contract.
+    Output is a structured `DiagnosisReport` (PR 5.5b). Switching from
+    plain markdown to structured output enables the candidate-pool
+    membership constraint (Decision E) to be enforced mechanically by
+    the post-emit guardrail. The orchestrator renders the structured
+    report back to markdown via `_render_diagnosis_report_to_markdown`
+    so the chaos `EpisodeRecorder` and `score_diagnosis` continue to
+    receive the prose form they expect.
     """
     return LlmAgent(
         name="SynthesisAgent",
@@ -28,5 +34,6 @@ def create_synthesis_agent() -> LlmAgent:
             "diagnosis with root cause, confidence, and verification advice."
         ),
         output_key="diagnosis",
+        output_schema=DiagnosisReport,
         tools=[],  # pure synthesis
     )

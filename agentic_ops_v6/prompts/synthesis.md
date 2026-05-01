@@ -66,17 +66,19 @@ Your `recommendation` field describes what an operator should VERIFY or INVESTIG
 
 ## Output format
 
-Produce **plain markdown** (not JSON, not wrapped in code blocks):
+Return a structured `DiagnosisReport`. Required fields:
 
-### causes
-- **summary**: one sentence.
-- **timeline**:
-    1. First observed event and when
-    2. Second event
-    3. ...
-- **root_cause**: the confirmed or best-candidate cause, with the `primary_suspect_nf`.
-- **affected_components**:
-    - `component_name`: role (Root Cause / Secondary / Symptomatic)
-- **recommendation**: what the operator should VERIFY next. Do NOT include remediation.
-- **confidence**: high / medium / low — MUST match the verdict aggregation rule.
-- **explanation**: 3-5 sentences for a NOC engineer. Explain WHY this happened, citing the surviving / disproven hypothesis/-es and the events that drove the conclusion. If the Evidence Validator raised warnings, include the caveat text in the explanation.
+- **summary** (string, one sentence): the headline finding.
+- **root_cause** (string): the confirmed or best-candidate cause, naming the responsible component.
+- **root_cause_confidence** (`"high" | "medium" | "low"`): MUST match the verdict aggregation rule above.
+- **primary_suspect_nf** (one of the known NF names: `amf`, `smf`, `upf`, `pcf`, `ausf`, `udm`, `udr`, `nrf`, `pcscf`, `icscf`, `scscf`, `pyhss`, `rtpengine`, `mongo`, `mysql`, `dns`, `nr_gnb`, OR `null`): the typed NF that owns the root cause. **Set to a member of the candidate pool above** (the Decision E aggregator already verified pool membership). Set to `null` ONLY when `verdict_kind == "inconclusive"`.
+- **verdict_kind** (`"confirmed" | "promoted" | "inconclusive"`):
+    - `confirmed` — sole NOT_DISPROVEN survivor in the verdict tree (Case A) OR a re-investigation NOT_DISPROVEN.
+    - `promoted` — diagnosis derived from `alternative_suspects` cross-corroboration (Case D).
+    - `inconclusive` — empty pool, or evidence too weak to commit (Case D with empty pool, or Case E).
+- **affected_components** (list of `{name, role}` dicts): role values: `"Root Cause"`, `"Secondary"`, `"Symptomatic"`.
+- **timeline** (list of strings): ordered list of observed events.
+- **recommendation** (string): what the operator should VERIFY next. Do NOT include remediation commands.
+- **explanation** (string, 3-5 sentences): WHY this happened, citing the surviving / disproven hypothesis/-es and the events that drove the conclusion. If the Evidence Validator raised warnings, include the caveat text here.
+
+**Pool membership is mechanically enforced.** A post-emit guardrail rejects any `primary_suspect_nf` that isn't in the candidate pool above (when the pool is non-empty) and resamples your output once with the rejection reason injected. Pick from the pool — do not invent.

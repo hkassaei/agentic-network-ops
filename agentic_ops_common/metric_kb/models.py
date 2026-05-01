@@ -7,7 +7,7 @@ Loaders produce typed objects; validation runs at load time.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -278,6 +278,33 @@ class MetricEntry(BaseModel):
     # vary), tag the metric with `tags: [scale_dependent]` and the
     # render layer will wrap the value with the appropriate hint.
     agent_exposed: bool = False
+
+    # --- Direct-vs-derived classification (Decision H, PR 9) ---
+    # Drives the post-NA ranking-coverage check. The classifier
+    # partitions Phase-0 anomaly flags into:
+    #   * "direct"     — metric measures the named NF's own state
+    #                    directly (e.g. `rtpengine_loss_ratio` is
+    #                    RTPEngine's own RTCP receiver-loss measurement).
+    #                    A direct flag means the named NF must appear as
+    #                    a top-ranked hypothesis (fit ≥ 0.7) OR NA must
+    #                    explicitly demote it in `summary`.
+    #   * "derived"    — derived from a single NF's raw counters but
+    #                    composes with other state (e.g. per-UE rates
+    #                    that depend on UE-pool size). Carries weaker
+    #                    direct-source weight than `direct`.
+    #   * "cross_layer" — composite signal whose source could be any of
+    #                     several NFs along a path / dependency chain
+    #                     (e.g. `upf_activity_during_calls` correlates
+    #                     UPF traffic with IMS dialog count — RTPEngine
+    #                     loss can collapse it as easily as UPF loss).
+    #                     Cross-layer flags are NOT used to enforce
+    #                     ranking on any single NF.
+    #
+    # Default None — the linter falls back to a naming-pattern heuristic
+    # (see `agentic_ops_v6/guardrails/na_ranking.py:classify_flag_kind`).
+    # Authoring this field on a metric overrides the heuristic and is
+    # the preferred path long-term; the heuristic is a bootstrap.
+    flag_kind: Optional[Literal["direct", "derived", "cross_layer"]] = None
 
 
 class NFBlock(BaseModel):

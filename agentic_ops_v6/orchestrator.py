@@ -71,6 +71,10 @@ from .guardrails.investigator_minimum import (
     apply_min_tool_call_guardrail,
 )
 from .guardrails.na_linter import lint_na_hypotheses
+from .guardrails.na_ranking import (
+    get_known_nfs,
+    lint_na_ranking_coverage,
+)
 from .guardrails.runner import GUARDRAIL_REASON_KEY, run_phase_with_guardrail
 from .guardrails.confidence_cap import cap_synthesis_confidence
 from .guardrails.synthesis_pool import (
@@ -939,12 +943,48 @@ async def investigate(
     #       overload", "not forwarding", etc.). On REJECT the runner
     #       resamples NA once with a per-hypothesis bad/good example
     #       correction injected via `{guardrail_rejection_reason}`.
-    #       Policy on second still-rejected output is "accept" (not
-    #       "fail") — a slightly mechanism-scoped statement is worse
-    #       than a clean one but better than no NA report. The runner
-    #       writes a structured warning to `state["guardrail_warnings"]`
-    #       and a synthetic PhaseTrace so the recorder surfaces the
-    #       outcome in the episode log.
+    #
+    #   (c) Ranking-coverage linter (Decision H — PR 9). For every
+    #       Phase-0 anomaly flag classified as `direct` (the metric
+    #       measures the named NF's own state), the named NF must
+    #       appear as `primary_suspect_nf` of a hypothesis with
+    #       fit ≥ 0.7 OR be named in `summary` with explicit demotion
+    #       reasoning. Closes the wrong-NF-ranking failure exposed by
+    #       `run_20260501_032822_call_quality_degradation`.
+    #
+    #   Policy on second still-rejected output is "accept" (not
+    #   "fail") — a slightly mis-ranked NA report is worse than a
+    #   clean one but better than no NA report. The runner writes a
+    #   structured warning to `state["guardrail_warnings"]` and a
+    #   synthetic PhaseTrace so the recorder surfaces the outcome.
+    #
+    # The two NA-side guardrails are composed: D runs first; H runs
+    # only on D's PASS path.
+    _known_nfs = get_known_nfs()
+    # KB is loaded best-effort here so Decision H can read
+    # `MetricEntry.flag_kind` overrides; on KB load failure the
+    # classifier falls back to its naming-pattern heuristic.
+    try:
+        _ranking_kb = load_kb()
+    except Exception as _e:
+        log.warning(
+            "Decision H — KB load failed (%s); ranking linter will "
+            "fall back to naming-pattern heuristic only.",
+            _e,
+        )
+        _ranking_kb = None
+
+    def _na_combined_guardrail(report):
+        d_result = lint_na_hypotheses(report)
+        if d_result.verdict is not GuardrailVerdict.PASS:
+            return d_result
+        return lint_na_ranking_coverage(
+            report=report,
+            anomaly_flags=state.get("anomaly_flags") or [],
+            kb=_ranking_kb,
+            known_nfs=_known_nfs,
+        )
+
     state, na_traces, na_success, na_report = await run_phase_with_guardrail(
         agent_factory=create_network_analyst,
         state=state,
@@ -955,7 +995,7 @@ async def investigate(
         phase_label="Phase 3 NetworkAnalyst",
         run_phase=_run_phase,
         parser=_parse_network_analysis,
-        guardrail=lint_na_hypotheses,
+        guardrail=_na_combined_guardrail,
         max_resamples=1,
         on_guardrail_exhausted="accept",
     )

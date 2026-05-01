@@ -21,7 +21,12 @@ You reason over FOUR inputs:
 ### Resample feedback (only present on resample)
 {guardrail_rejection_reason}
 
-If the section above is non-empty, your previous attempt was REJECTED by the post-NA linter. Read the per-hypothesis feedback carefully — it names the offending phrase(s), shows the required statement shape, and gives a concrete bad/good example correction grounded in your own output. Address the feedback before re-emitting; the rest of your workflow is unchanged.
+If the section above is non-empty, your previous attempt was REJECTED by one of two post-NA linters:
+
+- **Decision D — hypothesis-statement linter.** Rejects mechanism-scoping language in `Hypothesis.statement` (e.g. `"internal fault"`, `"due to overload"`, `"not forwarding"`). The feedback names the offending phrase(s), shows the required `<NF> is the source of <observable>` shape, and gives a per-hypothesis bad/good example correction.
+- **Decision H — ranking-coverage linter.** Direct-measurement anomaly flags (metrics that measure a single NF's own state directly — e.g. `rtpengine_loss_ratio` is RTPEngine's own RTCP-receiver-loss measurement) carry stronger evidential weight than derived/cross-layer flags. For every direct flag, the named NF MUST either (a) be the `primary_suspect_nf` of a ranked hypothesis with `explanatory_fit ≥ 0.7`, OR (b) be named in your `summary` field with explicit demotion reasoning (words like `demoted`, `downstream`, `observer`, `reporter`, `secondary`, `consequence`, `symptom`). If you genuinely believe a direct flag's NF is a downstream reporter rather than a source, write that reasoning into `summary` — do NOT silently demote it without explanation.
+
+Read the feedback carefully and address all flagged issues before re-emitting. The rest of your workflow is unchanged.
 
 If the section above is empty, this is your first attempt — proceed normally.
 

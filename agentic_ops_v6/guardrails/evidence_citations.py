@@ -1,9 +1,16 @@
-"""EvidenceValidator — v6 version, per-sub-Investigator citation checking.
+"""Evidence-citation guardrail — per-sub-Investigator citation checking.
 
 v6 spawns N sub-Investigators in parallel. Each has its own tool-call
-trace and citation set. This validator checks every sub-Investigator's
+trace and citation set. This guardrail checks every sub-Investigator's
 citations against its own trace, produces per-agent verdicts, then
-aggregates into an overall verdict for Synthesis.
+aggregates into an overall verdict for Synthesis. The "EvidenceValidator"
+agent_name is preserved on the synthesized PhaseTrace so the recorder's
+v6 layout (and any prior episode JSON) keeps the same agent_name string.
+
+This module was previously located at
+`agentic_ops_v6/subagents/evidence_validator.py`. Moved here as part of
+the structural-guardrails consolidation; the `subagents/` package is
+now exclusively LLM-backed agents.
 """
 
 from __future__ import annotations
@@ -13,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-log = logging.getLogger("v6.evidence_validator")
+log = logging.getLogger("v6.guardrails.evidence_citations")
 
 # Regex matches [EVIDENCE: tool_name(...) -> "..."]
 _EVIDENCE_RE = re.compile(

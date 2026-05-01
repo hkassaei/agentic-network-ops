@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agentic_ops_v6.subagents.evidence_validator import validate_evidence
+from agentic_ops_v6.guardrails.evidence_citations import validate_evidence
 
 
 def _trace(agent_name: str, tool_calls: list[str]) -> dict:

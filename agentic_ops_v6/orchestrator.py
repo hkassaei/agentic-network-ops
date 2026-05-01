@@ -49,6 +49,24 @@ from agentic_ops_common.models import (
     ToolCallTrace,
 )
 
+from .guardrails.empty_output import (
+    IG_OUTPUT_KEY as _IG_OUTPUT_KEY,
+    INVESTIGATOR_OUTPUT_KEY as _INVESTIGATOR_OUTPUT_KEY,
+    NA_OUTPUT_KEY as _NA_OUTPUT_KEY,
+    SYNTHESIS_OUTPUT_KEY as _SYNTHESIS_OUTPUT_KEY,
+    ig_output_present as _ig_output_present,
+    output_present as _output_present,
+    run_ig_with_retry as _ig_retry_impl,
+    run_phase_with_empty_output_retry as _empty_output_retry_impl,
+)
+from .guardrails.evidence_citations import validate_evidence
+from .guardrails.ig_validator import audit_fanout
+from .guardrails.investigator_minimum import (
+    MIN_TOOL_CALLS_PER_INVESTIGATOR,
+    apply_min_tool_call_guardrail,
+)
+from .guardrails.na_linter import lint_na_hypotheses
+from .guardrails.runner import GUARDRAIL_REASON_KEY, run_phase_with_guardrail
 from .models import (
     CorrelationAnalysis,
     FalsificationPlan,
@@ -58,7 +76,6 @@ from .models import (
     NetworkAnalystReport,
 )
 from .subagents.correlation_analyzer import analyze_correlations
-from .subagents.evidence_validator import validate_evidence
 from .subagents.event_aggregator import aggregate_episode_events
 from .subagents.instruction_generator import create_instruction_generator
 from .subagents.investigator import create_investigator_agent
@@ -69,7 +86,6 @@ log = logging.getLogger("v6.orchestrator")
 
 
 MAX_PARALLEL_INVESTIGATORS = 3
-MIN_TOOL_CALLS_PER_INVESTIGATOR = 2
 
 
 # ============================================================================
@@ -179,47 +195,11 @@ def _accumulate_phase_traces(state: dict, new_traces: list) -> None:
     state["phase_traces_so_far"] = current
 
 
-# Output keys each LlmAgent phase writes to via its `output_key`.
-# Constants kept here so the generic retry helper and the main
-# orchestrator agree on the exact key names. If a subagent's
-# output_key changes, update the matching constant in the same commit.
-_NA_OUTPUT_KEY = "network_analysis"
-_IG_OUTPUT_KEY = "falsification_plan_set"
-_INVESTIGATOR_OUTPUT_KEY = "investigator_verdict"
-_SYNTHESIS_OUTPUT_KEY = "diagnosis"
-
-
-def _output_present(state: dict, key: str) -> bool:
-    """Did the named LlmAgent phase write a non-empty output to state?
-
-    ADK's `LlmAgent.__maybe_save_output_to_state` silently bails (no
-    state write, no exception raised) when Gemini emits a final
-    response whose text content is empty or whitespace-only — see
-    `agents/llm_agent.py` `if not result.strip(): return`. The
-    `_run_phase` wrapper catches genuine exceptions but cannot detect
-    that silent-bail path. We detect it here by checking the state
-    key directly.
-
-    Treat "missing", "None", and "empty/whitespace string" as failure.
-    A non-empty value is taken at face value here; downstream parsing
-    in each phase does its own schema validation.
-
-    The IG-specific `_ig_output_present` below is a thin wrapper kept
-    for the test suite; callers in this file use the generic form
-    directly.
-    """
-    raw = state.get(key)
-    if raw is None:
-        return False
-    if isinstance(raw, str):
-        return bool(raw.strip())
-    return True
-
-
-def _ig_output_present(state: dict) -> bool:
-    """Backward-compat wrapper for the IG-specific tests. Prefer
-    `_output_present(state, _IG_OUTPUT_KEY)` in new code."""
-    return _output_present(state, _IG_OUTPUT_KEY)
+# The output-key constants and the empty-output retry helpers were
+# extracted to `guardrails/empty_output.py` (see import block above).
+# Thin pass-through wrappers below preserve the orchestrator's
+# pre-extraction call signatures so test_ig_retry_guard.py and other
+# call sites continue to work without modification.
 
 
 async def _run_phase_with_empty_output_retry(
@@ -231,77 +211,21 @@ async def _run_phase_with_empty_output_retry(
     output_key: str,
     phase_label: str,
 ) -> tuple[dict[str, Any], list[PhaseTrace], bool]:
-    """Run an LlmAgent phase with one retry on empty-output silent-bail.
+    """Pass-through to `guardrails.empty_output.run_phase_with_empty_output_retry`.
 
-    Two failure modes are handled:
-      1. `_run_phase` raises an exception (genuine ADK / Gemini error).
-      2. `_run_phase` returns successfully but `state[output_key]` is
-         unset / empty — the silent-bail path described in
-         `_output_present`. This is the failure shape originally
-         observed in run_20260429_031341 (IG, Phase 4) and again in
-         run_20260430_020337 (NA, Phase 3). Both runs were
-         indistinguishable from success at the orchestrator level
-         until this guard was generalized.
-
-    Either failure triggers ONE retry. If both attempts fail, the
-    function returns `success=False` and the caller is responsible
-    for writing a phase-appropriate sentinel into `state[output_key]`
-    so the recorder can surface the failure instead of silently
-    flowing forward with an empty value.
-
-    Why each retry creates a fresh agent via `agent_factory` rather
-    than reusing the same instance: the IG retry experience showed
-    that re-instantiation is consistently safer than re-running the
-    same agent object (avoids any session-state side effects from
-    the failed attempt).
-
-    Returns:
-      (state, combined_traces, success).
-
-    `combined_traces` aggregates the traces from BOTH attempts so the
-    recorder shows the retry attempt explicitly. Caller must extend
-    its `all_phases` list and call `_accumulate_phase_traces` once
-    (the helper does NOT, to keep coupling to the outer trace
-    plumbing minimal).
+    Injects this module's `_run_phase` so the guardrail module stays
+    free of orchestrator imports.
     """
-    combined_traces: list[PhaseTrace] = []
-
-    # Attempt 1
-    try:
-        state, traces = await _run_phase(
-            agent_factory(), state, question, session_service, on_event,
-        )
-        combined_traces.extend(traces)
-    except Exception as e:
-        log.error("%s attempt 1 failed: %s", phase_label, e, exc_info=True)
-        state.pop(output_key, None)
-
-    if _output_present(state, output_key):
-        return state, combined_traces, True
-
-    # Attempt 2 — same call, same prompt. The bug is non-deterministic
-    # (Gemini sometimes emits a thinking-only final chunk that ADK
-    # strips). A second roll usually succeeds.
-    log.warning(
-        "%s produced no output on attempt 1 — retrying once. "
-        "ADK silently bails when Gemini emits an empty final-response "
-        "chunk; see agents/llm_agent.py `if not result.strip(): return`.",
-        phase_label,
+    return await _empty_output_retry_impl(
+        agent_factory=agent_factory,
+        state=state,
+        question=question,
+        session_service=session_service,
+        on_event=on_event,
+        output_key=output_key,
+        phase_label=phase_label,
+        run_phase=_run_phase,
     )
-    try:
-        state, traces = await _run_phase(
-            agent_factory(), state, question, session_service, on_event,
-        )
-        combined_traces.extend(traces)
-    except Exception as e:
-        log.error("%s attempt 2 failed: %s", phase_label, e, exc_info=True)
-        state.pop(output_key, None)
-
-    if _output_present(state, output_key):
-        return state, combined_traces, True
-
-    log.error("%s produced no output on both attempts.", phase_label)
-    return state, combined_traces, False
 
 
 async def _run_ig_with_retry(
@@ -311,40 +235,24 @@ async def _run_ig_with_retry(
     on_event,
     all_phases: list[PhaseTrace],
 ) -> tuple[dict[str, Any], FalsificationPlanSet]:
-    """IG-specific wrapper around `_run_phase_with_empty_output_retry`.
+    """Pass-through to `guardrails.empty_output.run_ig_with_retry`.
 
-    On both-attempts-failed, writes the IG-specific sentinel into
-    `state[_IG_OUTPUT_KEY]` so the recorder shows the failure verbatim
-    in Phase 4 of the report and downstream parsing treats it as an
-    empty plan_set. Phase 5 then runs with no plan rather than with a
-    silently-missing key that produces fabricated-citations verdicts.
+    Injects the orchestrator-side dependencies (`_run_phase`, the
+    trace accumulator, the IG factory, the plan-set parser, and the
+    empty-plan sentinel) so the guardrail module stays decoupled.
     """
-    state, traces, success = await _run_phase_with_empty_output_retry(
-        agent_factory=create_instruction_generator,
+    return await _ig_retry_impl(
         state=state,
         question=question,
         session_service=session_service,
         on_event=on_event,
-        output_key=_IG_OUTPUT_KEY,
-        phase_label="Phase 4 InstructionGenerator",
+        all_phases=all_phases,
+        run_phase=_run_phase,
+        accumulate_traces=_accumulate_phase_traces,
+        create_instruction_generator=create_instruction_generator,
+        parse_plan_set=_parse_plan_set,
+        empty_plan_set=_empty_plan_set,
     )
-    all_phases.extend(traces)
-    _accumulate_phase_traces(state, traces)
-
-    if success:
-        return state, _parse_plan_set(state.get(_IG_OUTPUT_KEY))
-
-    state[_IG_OUTPUT_KEY] = json.dumps({
-        "plans": [],
-        "_orchestrator_note": (
-            "InstructionGenerator produced empty output on two consecutive "
-            "attempts. ADK's silent-bail on empty Gemini final-response "
-            "(agents/llm_agent.py:__maybe_save_output_to_state) prevented "
-            "the schema-validation error from surfacing. No falsification "
-            "plan was generated; Phase 5 ran with no probes."
-        ),
-    })
-    return state, _empty_plan_set()
 
 
 # ============================================================================
@@ -573,64 +481,34 @@ async def _run_parallel_investigators(
     selected_hypotheses = hypotheses[:MAX_PARALLEL_INVESTIGATORS]
     plans_by_id = {p.hypothesis_id: p for p in plans}
 
-    # ------------------------------------------------------------------
-    # Fan-out audit — surface silent plan-drops and hypothesis/plan
-    # NF mismatches that would otherwise pass unnoticed.
-    #
-    # Original failure: run_20260430_013055_gnb_radio_link_failure had
-    # NA produce 1 hypothesis (h1 nr_gnb) and IG produce 3 plans (h1,
-    # h2, h3 — re-anchored on the correlation engine's H1/H2/H3
-    # hypotheses, all targeting amf instead of nr_gnb). The orchestrator
-    # ran 1 investigator paired with a cross-NF-mismatched plan, and
-    # silently dropped the other 2 IG plans because no hypothesis
-    # matched their ids. None of this was logged. The dropped plans
-    # represented LLM work that was paid for and discarded; the NF
-    # mismatch produced an investigator verdict that probed the wrong
-    # NF for the wrong hypothesis.
-    #
-    # Audit prints (warning level so they show up in run logs but
-    # don't fail the pipeline) cover three cases:
-    #   1. Hypotheses without a matching plan — already handled inside
-    #      run_one(); summarized here for visibility.
-    #   2. Plans without a matching hypothesis — silent drops. Each
-    #      represents wasted IG output and possibly a sign that IG
-    #      mis-read its inputs.
-    #   3. NF mismatch between a hypothesis and its plan — the plan
-    #      probes a different component than the hypothesis names.
-    # ------------------------------------------------------------------
-    hypothesis_ids = {h.id for h in selected_hypotheses}
-    plan_ids = set(plans_by_id.keys())
-
-    hyps_without_plan = [
-        h for h in selected_hypotheses if h.id not in plan_ids
-    ]
-    plans_without_hyp = [pid for pid in plan_ids if pid not in hypothesis_ids]
-    nf_mismatches: list[tuple[str, str, str]] = []
-    for h in selected_hypotheses:
-        plan = plans_by_id.get(h.id)
-        if plan is not None and plan.primary_suspect_nf != h.primary_suspect_nf:
-            nf_mismatches.append((h.id, h.primary_suspect_nf, plan.primary_suspect_nf))
+    # Fan-out audit — surfaces silent plan-drops and hypothesis/plan NF
+    # mismatches. The structural check lives in
+    # `guardrails/ig_validator.py`; the orchestrator surfaces the
+    # findings via log warnings (preserved verbatim for backward
+    # compat with run-log consumers) and a synthetic PhaseTrace below.
+    audit = audit_fanout(selected_hypotheses, plans)
 
     log.info(
         "Phase 5 fan-out audit — %d NA hypothesis(es), %d IG plan(s); "
         "running %d sub-Investigator(s).",
         len(selected_hypotheses), len(plans), len(selected_hypotheses),
     )
-    if hyps_without_plan:
+    if audit.hyps_without_plan:
         log.warning(
             "Phase 5 fan-out: %d hypothesis(es) have no matching plan and "
             "will return INCONCLUSIVE: %s",
-            len(hyps_without_plan), [h.id for h in hyps_without_plan],
+            len(audit.hyps_without_plan),
+            [h.id for h in audit.hyps_without_plan],
         )
-    if plans_without_hyp:
+    if audit.plans_without_hyp:
         log.warning(
             "Phase 5 fan-out: %d IG plan(s) have no matching NA hypothesis "
             "and were SILENTLY DROPPED: %s. This usually means IG produced "
             "plans for hypothesis ids that NA did not emit (e.g., copied "
             "ids from the correlation engine's output instead of NA's).",
-            len(plans_without_hyp), plans_without_hyp,
+            len(audit.plans_without_hyp), audit.plans_without_hyp,
         )
-    for hid, hyp_nf, plan_nf in nf_mismatches:
+    for hid, hyp_nf, plan_nf in audit.nf_mismatches:
         log.warning(
             "Phase 5 fan-out: hypothesis %s names primary_suspect_nf=%s but "
             "the matching plan targets primary_suspect_nf=%s. The plan's "
@@ -702,28 +580,19 @@ async def _run_parallel_investigators(
                 reasoning=f"Failed to parse Investigator output: {e}",
             )
 
-        # Mechanical guardrail: force INCONCLUSIVE if below minimum tool calls
+        # Mechanical guardrail: force INCONCLUSIVE if below minimum
+        # tool calls. Lives in `guardrails/investigator_minimum.py`.
         inv_trace = next(
             (t for t in traces if t.agent_name == agent_name), None,
         )
         tool_call_count = len(inv_trace.tool_calls) if inv_trace else 0
-        if tool_call_count < MIN_TOOL_CALLS_PER_INVESTIGATOR:
-            log.warning(
-                "Sub-Investigator %s made %d tool calls (<%d) — "
-                "forcing verdict to INCONCLUSIVE",
-                agent_name, tool_call_count, MIN_TOOL_CALLS_PER_INVESTIGATOR,
-            )
-            verdict = InvestigatorVerdict(
-                hypothesis_id=h.id,
-                hypothesis_statement=h.statement,
-                verdict="INCONCLUSIVE",
-                reasoning=(
-                    f"Mechanical guardrail: {agent_name} made only "
-                    f"{tool_call_count} tool call(s); minimum is "
-                    f"{MIN_TOOL_CALLS_PER_INVESTIGATOR}. "
-                    "Self-reported output was discarded."
-                ),
-            )
+        verdict = apply_min_tool_call_guardrail(
+            verdict,
+            agent_name=agent_name,
+            tool_call_count=tool_call_count,
+            hypothesis_id=h.id,
+            hypothesis_statement=h.statement,
+        )
 
         return verdict, traces
 
@@ -754,38 +623,12 @@ async def _run_parallel_investigators(
     # other phase entries the recorder iterates over. Empty/clean
     # audits are still recorded (output_summary="all matched") so the
     # absence of a warning in a report is meaningful.
-    audit_lines: list[str] = []
-    audit_lines.append(
-        f"NA hypotheses: {len(selected_hypotheses)} | "
-        f"IG plans: {len(plans)} | "
-        f"sub-Investigators run: {len(verdicts)}"
-    )
-    if plans_without_hyp:
-        audit_lines.append(
-            f"DROPPED PLANS (no matching NA hypothesis id): "
-            f"{plans_without_hyp}"
-        )
-    if hyps_without_plan:
-        audit_lines.append(
-            f"HYPOTHESES WITHOUT PLAN (forced INCONCLUSIVE): "
-            f"{[h.id for h in hyps_without_plan]}"
-        )
-    for hid, hyp_nf, plan_nf in nf_mismatches:
-        audit_lines.append(
-            f"NF MISMATCH on {hid}: hypothesis names {hyp_nf}, "
-            f"plan probes {plan_nf}"
-        )
-    audit_summary = (
-        "all matched" if (
-            not plans_without_hyp and not hyps_without_plan and not nf_mismatches
-        ) else "; ".join(audit_lines[1:])
-    )
     audit_trace = PhaseTrace(
         agent_name="Phase5FanOutAudit",
         started_at=time.time(),
         finished_at=time.time(),
         duration_ms=0,
-        output_summary=audit_summary,
+        output_summary=audit.render_summary(),
     )
     all_phases.append(audit_trace)
 
@@ -845,6 +688,12 @@ async def investigate(
         "anomaly_window_start_ts": 0.0,
         "anomaly_window_end_ts": 0.0,
         "anomaly_screener_snapshot_ts": 0.0,
+        # Guardrail rejection reason — empty on first attempt of every
+        # phase, populated by `run_phase_with_guardrail` on resample.
+        # Initialized here so ADK template substitution (notably NA's
+        # `{guardrail_rejection_reason}` reference per Decision D) always
+        # resolves to a string instead of failing on a missing key.
+        GUARDRAIL_REASON_KEY: "",
     }
 
     all_phases: list[PhaseTrace] = []
@@ -862,16 +711,30 @@ async def investigate(
     state["correlation_analysis"] = correlation.hypotheses_text
 
     # -------- Phase 3: NetworkAnalyst --------
-    # Same empty-output silent-bail observed for IG can hit NA. Run
-    # 20260430_020337_call_quality_degradation scored 15% because NA
-    # made 7 tool calls and 7 LLM calls but emitted nothing — ADK
-    # silently bailed on the empty final response and the orchestrator
-    # ran Phase 4 with no `network_analysis` to read. Wrap with the
-    # same retry guard as IG. On both-attempts failure, write a
-    # phase-appropriate sentinel that downstream parsing handles
-    # cleanly (empty `hypotheses` list → "no testable hypotheses"
-    # diagnosis).
-    state, na_traces, na_success = await _run_phase_with_empty_output_retry(
+    # Two layered guards run on NA's output:
+    #
+    #   (a) Empty-output retry (existing). Run 20260430_020337
+    #       scored 15% because NA made 7 tool calls and 7 LLM calls but
+    #       emitted nothing — ADK silently bailed on the empty final
+    #       response and Phase 4 ran with no `network_analysis` to
+    #       read. The retry helper detects this and resamples once.
+    #       On both-attempts-empty, we write a phase-appropriate
+    #       sentinel that downstream parsing handles cleanly (empty
+    #       `hypotheses` list → "no testable hypotheses" diagnosis).
+    #
+    #   (b) Hypothesis-statement linter (Decision D — PR 2). Rejects
+    #       NA reports whose hypothesis statements contain
+    #       mechanism-scoping language ("internal fault", "due to
+    #       overload", "not forwarding", etc.). On REJECT the runner
+    #       resamples NA once with a per-hypothesis bad/good example
+    #       correction injected via `{guardrail_rejection_reason}`.
+    #       Policy on second still-rejected output is "accept" (not
+    #       "fail") — a slightly mechanism-scoped statement is worse
+    #       than a clean one but better than no NA report. The runner
+    #       writes a structured warning to `state["guardrail_warnings"]`
+    #       and a synthetic PhaseTrace so the recorder surfaces the
+    #       outcome in the episode log.
+    state, na_traces, na_success, na_report = await run_phase_with_guardrail(
         agent_factory=create_network_analyst,
         state=state,
         question=question,
@@ -879,6 +742,11 @@ async def investigate(
         on_event=on_event,
         output_key=_NA_OUTPUT_KEY,
         phase_label="Phase 3 NetworkAnalyst",
+        run_phase=_run_phase,
+        parser=_parse_network_analysis,
+        guardrail=lint_na_hypotheses,
+        max_resamples=1,
+        on_guardrail_exhausted="accept",
     )
     all_phases.extend(na_traces)
     _accumulate_phase_traces(state, na_traces)
@@ -894,9 +762,14 @@ async def investigate(
             "layer_status": {},
             "hypotheses": [],
         })
-
-    # Parse NA output into typed model
-    na_report = _parse_network_analysis(state.get("network_analysis"))
+        # Re-parse the sentinel we just wrote so the rest of the phase
+        # sees the same shape it did before this PR.
+        na_report = _parse_network_analysis(state.get(_NA_OUTPUT_KEY))
+    elif na_report is None:
+        # Parser returned None for some reason (shouldn't happen since we
+        # wired `parser=_parse_network_analysis`, but defensive). Fall
+        # back to direct parse so downstream code is unchanged.
+        na_report = _parse_network_analysis(state.get(_NA_OUTPUT_KEY))
     hypotheses = _rank_and_cap_hypotheses(na_report.hypotheses)
     log.info("NA produced %d hypotheses; investigating top %d",
              len(na_report.hypotheses), len(hypotheses))
@@ -1191,6 +1064,11 @@ def _build_result(
         "investigation": investigator_verdicts,           # Phase 5
         "evidence_validation": evidence_validation,       # Phase 6
         # Synthesis output (Phase 7) = `diagnosis` above.
+        # Structured warnings raised by guardrails whose resample budget
+        # was exhausted but whose policy is "accept" (e.g. the NA
+        # hypothesis-statement linter — Decision D / PR 2). Empty list
+        # when every guardrail PASSED on first or second attempt.
+        "guardrail_warnings": list(state.get("guardrail_warnings", [])),
     }
 
 

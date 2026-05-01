@@ -18,6 +18,13 @@ You reason over FOUR inputs:
 ### Correlation Analysis
 {correlation_analysis}
 
+### Resample feedback (only present on resample)
+{guardrail_rejection_reason}
+
+If the section above is non-empty, your previous attempt was REJECTED by the post-NA linter. Read the per-hypothesis feedback carefully — it names the offending phrase(s), shows the required statement shape, and gives a concrete bad/good example correction grounded in your own output. Address the feedback before re-emitting; the rest of your workflow is unchanged.
+
+If the section above is empty, this is your first attempt — proceed normally.
+
 ---
 
 ## Mandatory workflow (DO NOT SKIP)

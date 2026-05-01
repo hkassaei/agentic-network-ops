@@ -67,6 +67,10 @@ from .guardrails.investigator_minimum import (
 )
 from .guardrails.na_linter import lint_na_hypotheses
 from .guardrails.runner import GUARDRAIL_REASON_KEY, run_phase_with_guardrail
+from .guardrails.synthesis_pool import (
+    CandidatePool,
+    compute_candidate_pool,
+)
 from .models import (
     CorrelationAnalysis,
     FalsificationPlan,
@@ -636,6 +640,199 @@ async def _run_parallel_investigators(
 
 
 # ============================================================================
+# Phase 6.5 — Bounded re-investigation (Decision E, PR 5)
+# ============================================================================
+
+# Hard cap on per-scenario re-investigation cycles. The ADR requires this
+# to be bounded so the candidate-pool path cannot loop indefinitely on a
+# scenario whose alt_suspect chain keeps re-promoting new NFs.
+MAX_REINVESTIGATION_CYCLES = 1
+
+
+async def _run_bounded_reinvestigation(
+    promoted_nf: str,
+    original_hypotheses: list[Hypothesis],
+    state: dict[str, Any],
+    question: str,
+    session_service: InMemorySessionService,
+    on_event,
+    all_phases: list[PhaseTrace],
+) -> InvestigatorVerdict:
+    """Run one extra IG → Investigator cycle on a promoted-suspect NF.
+
+    Triggered by Decision E's candidate-pool aggregator when the
+    verdict tree has zero NOT_DISPROVEN survivors but ≥1 alt_suspect
+    crossed the corroboration threshold. Goal: produce a structurally-
+    clean NOT_DISPROVEN (or DISPROVEN) verdict on the promoted NF so
+    Synthesis can ratify it with calibrated confidence rather than
+    inferring it from `alternative_suspects` prose.
+
+    The re-investigation reuses every existing safeguard:
+      * Decision A's lint_ig_plan via run_phase_with_guardrail
+      * Empty-output retry on both IG and Investigator
+      * Minimum-tool-call check on the Investigator
+
+    Bounded by MAX_REINVESTIGATION_CYCLES at the call site.
+
+    The synthetic Hypothesis built here uses the clean
+    `<NF> is the source of <observable>` shape — same shape Decision D
+    teaches NA via shape hint. Bypasses Pydantic validation
+    (model_construct) only because the schema requires
+    falsification_probes >=1 and we hand a generic seed; the IG agent
+    re-derives concrete probes from the hypothesis text.
+    """
+    log.info(
+        "Decision E — running bounded re-investigation on promoted "
+        "suspect '%s' (no NOT_DISPROVEN survivors in original verdict tree)",
+        promoted_nf,
+    )
+
+    # Construct a synthetic Hypothesis. The statement follows the
+    # Decision-D-clean shape so downstream agents inherit the same
+    # interpretation discipline.
+    synthetic_id = f"h_promoted_{promoted_nf}"
+    synthetic_statement = (
+        f"{promoted_nf} is the source of the anomaly named in the "
+        f"alternative_suspects of the original verdict tree."
+    )
+    # Use model_construct to bypass falsification_probes min_length=1.
+    # IG will generate the actual probes from the statement.
+    promoted_hypothesis = Hypothesis.model_construct(
+        id=synthetic_id,
+        statement=synthetic_statement,
+        primary_suspect_nf=promoted_nf,
+        supporting_events=[],
+        explanatory_fit=0.85,
+        falsification_probes=["<promoted suspect — IG to design probes>"],
+        specificity="specific",
+    )
+
+    # Build a minimal NetworkAnalystReport for IG to read.
+    synthetic_na = NetworkAnalystReport.model_construct(
+        summary=(
+            f"Re-investigation on promoted alt-suspect '{promoted_nf}'. "
+            "Original verdict tree had zero NOT_DISPROVEN survivors but "
+            "this NF was named in DISPROVEN verdicts' alternative_suspects "
+            "with sufficient corroboration to warrant direct investigation."
+        ),
+        layer_status={},
+        hypotheses=[promoted_hypothesis],
+    )
+    rendered_na = _pretty_print_na_report(synthetic_na, [promoted_hypothesis])
+
+    # Build a fresh state for the IG sub-call. We carry forward the
+    # correlation/events context so IG can still walk the KB if needed,
+    # but replace network_analysis with the single-hypothesis rendering.
+    ig_state = dict(state)
+    ig_state["network_analysis"] = rendered_na
+    # Reset the rejection-reason on each new phase entry so the
+    # template substitution starts clean.
+    ig_state[GUARDRAIL_REASON_KEY] = ""
+    # Drop the previous IG output_key so empty-output detection works
+    # cleanly on this fresh attempt.
+    ig_state.pop(_IG_OUTPUT_KEY, None)
+
+    ig_state, ig_traces, ig_success, plan_set = await run_phase_with_guardrail(
+        agent_factory=create_instruction_generator,
+        state=ig_state,
+        question=question,
+        session_service=session_service,
+        on_event=on_event,
+        output_key=_IG_OUTPUT_KEY,
+        phase_label="Phase 6.5 Reinvestigation IG",
+        run_phase=_run_phase,
+        parser=_parse_plan_set,
+        guardrail=lint_ig_plan,
+        max_resamples=1,
+        on_guardrail_exhausted="accept",
+    )
+    all_phases.extend(ig_traces)
+
+    if not ig_success or not plan_set or not plan_set.plans:
+        log.warning(
+            "Decision E — IG could not produce a plan for promoted suspect "
+            "'%s'; returning INCONCLUSIVE re-investigation verdict.",
+            promoted_nf,
+        )
+        return InvestigatorVerdict(
+            hypothesis_id=synthetic_id,
+            hypothesis_statement=synthetic_statement,
+            verdict="INCONCLUSIVE",
+            reasoning=(
+                f"Re-investigation on promoted suspect '{promoted_nf}' "
+                "failed at the InstructionGenerator step (empty output or "
+                "unparseable plan). No probes were run."
+            ),
+        )
+
+    plan = plan_set.plans[0]
+    agent_name = f"InvestigatorAgent_{synthetic_id}"
+
+    # Build the Investigator sub-state using the same pattern as the
+    # Phase 5 fan-out helper.
+    sub_state: dict[str, Any] = {
+        "hypothesis_id": synthetic_id,
+        "hypothesis_statement": synthetic_statement,
+        "primary_suspect_nf": promoted_nf,
+        "falsification_plan": json.dumps(plan.model_dump(), indent=2),
+        "network_analysis": rendered_na,
+        "anomaly_window_start_ts": float(state.get("anomaly_window_start_ts", 0.0) or 0.0),
+        "anomaly_window_end_ts": float(state.get("anomaly_window_end_ts", 0.0) or 0.0),
+        "anomaly_screener_snapshot_ts": float(state.get("anomaly_screener_snapshot_ts", 0.0) or 0.0),
+    }
+
+    sub_state, inv_traces, _ = await _run_phase_with_empty_output_retry(
+        agent_factory=lambda: create_investigator_agent(name=agent_name),
+        state=sub_state,
+        question=f"Falsify hypothesis {synthetic_id}: {synthetic_statement}",
+        session_service=session_service,
+        on_event=on_event,
+        output_key=_INVESTIGATOR_OUTPUT_KEY,
+        phase_label=f"Phase 6.5 {agent_name}",
+    )
+    all_phases.extend(inv_traces)
+
+    # Parse verdict (mirrors run_one in _run_parallel_investigators).
+    verdict_raw = sub_state.get(_INVESTIGATOR_OUTPUT_KEY)
+    try:
+        if isinstance(verdict_raw, str):
+            verdict_dict = json.loads(verdict_raw)
+        else:
+            verdict_dict = verdict_raw or {}
+        verdict = InvestigatorVerdict(**verdict_dict)
+    except Exception as e:
+        log.warning(
+            "Decision E — failed to parse re-investigation verdict from %s: %s",
+            agent_name, e,
+        )
+        verdict = InvestigatorVerdict(
+            hypothesis_id=synthetic_id,
+            hypothesis_statement=synthetic_statement,
+            verdict="INCONCLUSIVE",
+            reasoning=f"Failed to parse Investigator output: {e}",
+        )
+
+    # Min-tool-call guardrail (same as Phase 5 fan-out).
+    inv_trace = next(
+        (t for t in inv_traces if t.agent_name == agent_name), None,
+    )
+    tool_call_count = len(inv_trace.tool_calls) if inv_trace else 0
+    verdict = apply_min_tool_call_guardrail(
+        verdict,
+        agent_name=agent_name,
+        tool_call_count=tool_call_count,
+        hypothesis_id=synthetic_id,
+        hypothesis_statement=synthetic_statement,
+    )
+
+    log.info(
+        "Decision E — re-investigation on '%s' returned verdict=%s",
+        promoted_nf, verdict.verdict,
+    )
+    return verdict
+
+
+# ============================================================================
 # Public API
 # ============================================================================
 
@@ -694,6 +891,11 @@ async def investigate(
         # `{guardrail_rejection_reason}` reference per Decision D) always
         # resolves to a string instead of failing on a missing key.
         GUARDRAIL_REASON_KEY: "",
+        # Candidate pool (Decision E, PR 5) — empty on first run, populated
+        # by Phase 6.5 between EvidenceValidator and Synthesis. Initialized
+        # here so the Synthesis prompt's `{candidate_pool}` template
+        # always resolves.
+        "candidate_pool": "",
     }
 
     all_phases: list[PhaseTrace] = []
@@ -892,6 +1094,57 @@ async def investigate(
         ),
     )
     all_phases.append(ev_trace)
+
+    # -------- Phase 6.5: Candidate-pool aggregator + bounded re-investigation --------
+    # Decision E (PR 5). Walk the verdict tree, build a ranked
+    # candidate pool from NOT_DISPROVEN survivors plus alt_suspects
+    # that crossed the corroboration threshold. If the pool has zero
+    # NOT_DISPROVEN survivors but ≥1 promoted suspect, run one bounded
+    # re-investigation cycle (IG + Investigator) on the top-ranked
+    # promoted NF. The new verdict joins the verdict list and Synthesis
+    # ratifies it normally instead of inferring from `alternative_suspects`
+    # prose. The full pool is also rendered into state["candidate_pool"]
+    # so the Synthesis prompt's `{candidate_pool}` template substitutes.
+    pool = compute_candidate_pool(verdicts, hypotheses)
+    pool_trace = PhaseTrace(
+        agent_name="Phase6.5CandidatePool",
+        started_at=time.time(),
+        finished_at=time.time(),
+        duration_ms=0,
+        output_summary=(
+            f"survivors={len(pool.survivors)}, "
+            f"promoted={len(pool.promoted)}, "
+            f"needs_reinvestigation={pool.needs_reinvestigation}"
+        ),
+    )
+    all_phases.append(pool_trace)
+
+    if pool.needs_reinvestigation and pool.top_promoted is not None:
+        log.info(
+            "Decision E — verdict tree has zero NOT_DISPROVEN; "
+            "bounded re-investigation on '%s' (top-ranked promoted suspect).",
+            pool.top_promoted.nf,
+        )
+        new_verdict = await _run_bounded_reinvestigation(
+            promoted_nf=pool.top_promoted.nf,
+            original_hypotheses=hypotheses,
+            state=state,
+            question=question,
+            session_service=session_service,
+            on_event=on_event,
+            all_phases=all_phases,
+        )
+        verdicts.append(new_verdict)
+        # Re-render the verdict list into state so Synthesis sees the
+        # augmented evidence.
+        state["investigator_verdicts"] = json.dumps(
+            [v.model_dump() for v in verdicts], indent=2,
+        )
+        # Re-compute the pool so the prompt rendering reflects the
+        # new survivor (or new DISPROVEN) the re-investigation produced.
+        pool = compute_candidate_pool(verdicts, hypotheses)
+
+    state["candidate_pool"] = pool.render_for_prompt()
 
     # -------- Phase 7: Synthesis --------
     # Same empty-output retry guard as NA / IG. Synthesis is the

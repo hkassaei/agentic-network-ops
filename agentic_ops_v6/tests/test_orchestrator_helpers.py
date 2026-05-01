@@ -768,3 +768,263 @@ def test_render_diagnosis_report_to_markdown_inconclusive():
     # No primary_suspect_nf line when the field is None
     assert "primary_suspect_nf:" not in md
     assert "verdict_kind**: inconclusive" in md
+
+
+# ============================================================================
+# PR 6 — Multi-shot Investigator consensus integration
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_multi_shot_two_agreeing_shots_produces_consensus(monkeypatch):
+    """Stub _run_phase to return the SAME verdict on both calls; verify
+    the reconciled output is the consensus verdict with merged
+    reasoning ('Multi-shot consensus' marker)."""
+    from agentic_ops_common.models import PhaseTrace, ToolCallTrace
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = [0]
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count[0] += 1
+        agent_name = "InvestigatorAgent_h1"
+        verdict = {
+            "hypothesis_id": "h1",
+            "hypothesis_statement": "UPF transient drop",
+            "verdict": "NOT_DISPROVEN",
+            "reasoning": f"shot {call_count[0]}: UPF dropping packets",
+            "alternative_suspects": [],
+        }
+        trace = PhaseTrace(
+            agent_name=agent_name,
+            started_at=float(call_count[0]),
+            finished_at=float(call_count[0]) + 1.0,
+            duration_ms=1000,
+            tool_calls=[
+                ToolCallTrace(name="get_dp_quality_gauges", args="{}", timestamp=1.0),
+                ToolCallTrace(name="measure_rtt", args="{}", timestamp=1.0),
+            ],
+        )
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [trace])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(
+        orch, "create_investigator_agent",
+        lambda name=None: object(),
+    )
+
+    h = Hypothesis(
+        id="h1", statement="UPF transient drop", primary_suspect_nf="upf",
+        explanatory_fit=0.9, specificity="specific",
+        supporting_events=[], falsification_probes=["check N3 vs N6"],
+    )
+    probe = {
+        "tool": "get_dp_quality_gauges", "args_hint": "window_seconds=60",
+        "expected_if_hypothesis_holds": "x", "falsifying_observation": "y",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1", hypothesis_statement="UPF transient drop",
+        primary_suspect_nf="upf", probes=[probe, probe], notes="",
+    )
+
+    verdicts = await orch._run_parallel_investigators(
+        hypotheses=[h], plans=[plan], network_analysis_text="na",
+        session_service=None, all_phases=[],
+    )
+
+    # Two LLM calls happened (multi-shot fired).
+    assert call_count[0] == 2
+    assert len(verdicts) == 1
+    v = verdicts[0]
+    assert v.verdict == "NOT_DISPROVEN"
+    # Merged reasoning marker present
+    assert "Multi-shot consensus" in v.reasoning
+    assert "shot 1:" in v.reasoning.lower()
+    assert "shot 2:" in v.reasoning.lower()
+
+
+@pytest.mark.asyncio
+async def test_multi_shot_disagreement_forces_inconclusive(monkeypatch):
+    """Stub returns DISPROVEN on shot 1 and NOT_DISPROVEN on shot 2.
+    Reconciler must force INCONCLUSIVE."""
+    from agentic_ops_common.models import PhaseTrace, ToolCallTrace
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = [0]
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count[0] += 1
+        agent_name = "InvestigatorAgent_h1"
+        if call_count[0] == 1:
+            verdict_text = "DISPROVEN"
+            reasoning = "shot 1 says probes contradict"
+            alt_suspects = ["upf"]
+        else:
+            verdict_text = "NOT_DISPROVEN"
+            reasoning = "shot 2 says probes are consistent"
+            alt_suspects = []
+        verdict = {
+            "hypothesis_id": "h1",
+            "hypothesis_statement": "test",
+            "verdict": verdict_text,
+            "reasoning": reasoning,
+            "alternative_suspects": alt_suspects,
+        }
+        trace = PhaseTrace(
+            agent_name=agent_name,
+            started_at=float(call_count[0]),
+            finished_at=float(call_count[0]) + 1.0,
+            duration_ms=1000,
+            tool_calls=[
+                ToolCallTrace(name="get_dp_quality_gauges", args="{}", timestamp=1.0),
+                ToolCallTrace(name="measure_rtt", args="{}", timestamp=1.0),
+            ],
+        )
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [trace])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(
+        orch, "create_investigator_agent",
+        lambda name=None: object(),
+    )
+
+    h = Hypothesis(
+        id="h1", statement="test", primary_suspect_nf="upf",
+        explanatory_fit=0.9, specificity="specific",
+        supporting_events=[], falsification_probes=["p"],
+    )
+    probe = {
+        "tool": "get_dp_quality_gauges", "args_hint": "x",
+        "expected_if_hypothesis_holds": "x", "falsifying_observation": "y",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1", hypothesis_statement="test",
+        primary_suspect_nf="upf", probes=[probe, probe], notes="",
+    )
+
+    verdicts = await orch._run_parallel_investigators(
+        hypotheses=[h], plans=[plan], network_analysis_text="na",
+        session_service=None, all_phases=[],
+    )
+
+    assert call_count[0] == 2
+    assert verdicts[0].verdict == "INCONCLUSIVE"
+    assert "DISAGREEMENT" in verdicts[0].reasoning
+    # Disagreement preserves alt_suspects from BOTH shots
+    assert "upf" in verdicts[0].alternative_suspects
+
+
+@pytest.mark.asyncio
+async def test_multi_shot_short_circuits_on_inconclusive_first_shot(monkeypatch):
+    """If shot 1 returned INCONCLUSIVE, the orchestrator must skip
+    shot 2 to save the LLM call."""
+    from agentic_ops_common.models import PhaseTrace, ToolCallTrace
+    from agentic_ops_v6 import orchestrator as orch
+
+    call_count = [0]
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count[0] += 1
+        agent_name = "InvestigatorAgent_h1"
+        verdict = {
+            "hypothesis_id": "h1",
+            "hypothesis_statement": "test",
+            "verdict": "INCONCLUSIVE",
+            "reasoning": "couldn't run probes",
+        }
+        trace = PhaseTrace(
+            agent_name=agent_name,
+            started_at=1.0, finished_at=2.0, duration_ms=1000,
+            tool_calls=[
+                ToolCallTrace(name="get_dp_quality_gauges", args="{}", timestamp=1.0),
+                ToolCallTrace(name="measure_rtt", args="{}", timestamp=1.0),
+            ],
+        )
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [trace])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(
+        orch, "create_investigator_agent",
+        lambda name=None: object(),
+    )
+
+    h = Hypothesis(
+        id="h1", statement="test", primary_suspect_nf="upf",
+        explanatory_fit=0.9, specificity="specific",
+        supporting_events=[], falsification_probes=["p"],
+    )
+    probe = {
+        "tool": "get_dp_quality_gauges", "args_hint": "x",
+        "expected_if_hypothesis_holds": "x", "falsifying_observation": "y",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1", hypothesis_statement="test",
+        primary_suspect_nf="upf", probes=[probe, probe], notes="",
+    )
+
+    verdicts = await orch._run_parallel_investigators(
+        hypotheses=[h], plans=[plan], network_analysis_text="na",
+        session_service=None, all_phases=[],
+    )
+
+    # Only ONE LLM call (short-circuit fired).
+    assert call_count[0] == 1
+    assert verdicts[0].verdict == "INCONCLUSIVE"
+
+
+@pytest.mark.asyncio
+async def test_multi_shot_disabled_falls_back_to_single_shot(monkeypatch):
+    """Setting MULTI_SHOT_INVESTIGATORS=False reverts to single-shot
+    behavior — useful for cost-bound runs."""
+    from agentic_ops_common.models import PhaseTrace, ToolCallTrace
+    from agentic_ops_v6 import orchestrator as orch
+
+    monkeypatch.setattr(orch, "MULTI_SHOT_INVESTIGATORS", False)
+
+    call_count = [0]
+
+    async def fake_run_phase(agent, state, question, session_service, on_event=None):
+        call_count[0] += 1
+        verdict = {
+            "hypothesis_id": "h1", "hypothesis_statement": "test",
+            "verdict": "NOT_DISPROVEN", "reasoning": "single shot",
+        }
+        trace = PhaseTrace(
+            agent_name="InvestigatorAgent_h1",
+            started_at=1.0, finished_at=2.0, duration_ms=1000,
+            tool_calls=[
+                ToolCallTrace(name="x", args="{}", timestamp=1.0),
+                ToolCallTrace(name="y", args="{}", timestamp=1.0),
+            ],
+        )
+        return ({**state, "investigator_verdict": json.dumps(verdict)}, [trace])
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(
+        orch, "create_investigator_agent", lambda name=None: object(),
+    )
+
+    h = Hypothesis(
+        id="h1", statement="test", primary_suspect_nf="upf",
+        explanatory_fit=0.9, specificity="specific",
+        supporting_events=[], falsification_probes=["p"],
+    )
+    probe = {
+        "tool": "get_dp_quality_gauges", "args_hint": "x",
+        "expected_if_hypothesis_holds": "x", "falsifying_observation": "y",
+    }
+    plan = FalsificationPlan(
+        hypothesis_id="h1", hypothesis_statement="test",
+        primary_suspect_nf="upf", probes=[probe, probe], notes="",
+    )
+
+    verdicts = await orch._run_parallel_investigators(
+        hypotheses=[h], plans=[plan], network_analysis_text="na",
+        session_service=None, all_phases=[],
+    )
+
+    assert call_count[0] == 1
+    assert verdicts[0].verdict == "NOT_DISPROVEN"
+    # Reasoning is the single-shot raw text — no "Multi-shot consensus"
+    # marker because reconciler took the single_shot path.
+    assert "Multi-shot consensus" not in verdicts[0].reasoning

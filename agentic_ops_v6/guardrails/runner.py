@@ -181,26 +181,35 @@ async def run_phase_with_guardrail(
         # Inject the rejection reason into session state so the agent's
         # prompt template can read it on the next attempt.
         state[GUARDRAIL_REASON_KEY] = result.reason
-        # Drop the previous output_key so empty-output retry can detect
-        # an actual emit on the resample.
+        # Drop the previous output_key so the empty-output detector
+        # below sees a fresh emit (or its absence).
         state.pop(output_key, None)
 
-        try:
-            new_state, new_traces = await run_phase(
-                agent_factory(), state, question, session_service, on_event,
-            )
-            state = new_state
-            combined_traces.extend(new_traces)
-        except Exception as e:
-            log.error(
-                "%s resample %d failed: %s",
-                phase_label, resamples_used, e, exc_info=True,
-            )
-            return state, combined_traces, False, parsed
+        # Run the resample with the SAME silent-bail-on-empty retry
+        # behavior as the initial phase call. Pre-fix the resample
+        # called `run_phase` directly (one attempt) — when Gemini
+        # silent-bailed on the resample (run_20260501_135059_call_quality_degradation
+        # had this happen on the IG resample), the whole phase failed
+        # with `success=False` and downstream got an empty-plan
+        # sentinel. Symmetry with the initial call is the right
+        # contract: each attempt at producing output gets the same
+        # silent-bail tolerance.
+        state, retry_traces, retry_success = await run_phase_with_empty_output_retry(
+            agent_factory=agent_factory,
+            state=state,
+            question=question,
+            session_service=session_service,
+            on_event=on_event,
+            output_key=output_key,
+            phase_label=f"{phase_label} (resample)",
+            run_phase=run_phase,
+        )
+        combined_traces.extend(retry_traces)
 
-        if not output_present(state, output_key):
+        if not retry_success:
             log.error(
-                "%s resample %d produced empty output; surfacing as failure.",
+                "%s resample %d produced empty output on both retry "
+                "attempts; surfacing as failure.",
                 phase_label, resamples_used,
             )
             return state, combined_traces, False, parsed

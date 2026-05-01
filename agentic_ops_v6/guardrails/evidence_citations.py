@@ -86,22 +86,33 @@ def validate_evidence(
     """
     per_agent: list[PerAgentValidation] = []
 
-    # Index phase traces by agent name for quick lookup
-    traces_by_agent: dict[str, dict] = {}
+    # Index phase traces by agent name. Multiple traces can share the
+    # same name when:
+    #   * The empty-output retry kicked in (one trace per attempt).
+    #   * Decision C / PR 6 multi-shot ran the Investigator twice.
+    # We aggregate tool_calls across all matching traces so:
+    #   * Citations from EITHER attempt/shot count as supported.
+    #   * The tool_call_count reflects the agent's TOTAL effort, not
+    #     just the first attempt's. (Pre-PR-6 the lookup used
+    #     `setdefault`, which kept only the first matching trace and
+    #     hid the retry/multi-shot's tool calls.)
+    traces_by_agent: dict[str, list[dict]] = {}
     for t in phase_traces:
         name = t.get("agent_name", "")
         if name:
-            traces_by_agent.setdefault(name, t)
+            traces_by_agent.setdefault(name, []).append(t)
 
     for inv in investigator_outputs:
         agent_name = inv.get("agent_name", "UnknownInvestigator")
-        trace = traces_by_agent.get(agent_name, {})
-        tools_called = {
-            tc.get("name", "")
-            for tc in trace.get("tool_calls", [])
-            if tc.get("name")
-        }
-        tool_call_count = len(trace.get("tool_calls", []))
+        matching_traces = traces_by_agent.get(agent_name, [])
+        tools_called: set[str] = set()
+        tool_call_count = 0
+        for trace in matching_traces:
+            for tc in trace.get("tool_calls", []):
+                name = tc.get("name", "")
+                if name:
+                    tools_called.add(name)
+                    tool_call_count += 1
 
         # Extract citations from investigator's rendered text
         text = _render_investigator_text(inv)

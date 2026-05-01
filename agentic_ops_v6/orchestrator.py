@@ -77,6 +77,10 @@ from .guardrails.na_ranking import (
 )
 from .guardrails.runner import GUARDRAIL_REASON_KEY, run_phase_with_guardrail
 from .guardrails.confidence_cap import cap_synthesis_confidence
+from .guardrails.investigator_consensus import (
+    ReconciliationResult,
+    reconcile_verdicts,
+)
 from .guardrails.synthesis_pool import (
     CandidatePool,
     compute_candidate_pool,
@@ -103,6 +107,19 @@ log = logging.getLogger("v6.orchestrator")
 
 
 MAX_PARALLEL_INVESTIGATORS = 3
+
+# Decision C / PR 6 — multi-shot Investigator consensus. When True, each
+# sub-Investigator runs twice on the same plan and the two verdicts are
+# reconciled via `reconcile_verdicts`. Disagreement forces INCONCLUSIVE.
+# Cost: roughly 2x Phase 5 LLM tokens. Variance reduction; bias unchanged.
+# Set to False to disable (single-shot fallback) — useful for cost-bound
+# runs or for isolating other guardrails' effects in regression analysis.
+MULTI_SHOT_INVESTIGATORS = True
+
+# Short-circuit: if shot 1 returned INCONCLUSIVE, skip shot 2. The
+# verdict can't get any more decisive on a second roll given that the
+# first roll already conceded uncertainty, and we save the LLM call.
+MULTI_SHOT_SKIP_ON_INCONCLUSIVE_FIRST_SHOT = True
 
 
 # ============================================================================
@@ -533,43 +550,20 @@ async def _run_parallel_investigators(
             hid, hyp_nf, plan_nf, plan_nf, hyp_nf,
         )
 
-    async def run_one(h: Hypothesis) -> tuple[InvestigatorVerdict, list[PhaseTrace]]:
-        plan = plans_by_id.get(h.id)
-        if plan is None:
-            log.warning("No plan for hypothesis %s — skipping", h.id)
-            return (
-                InvestigatorVerdict(
-                    hypothesis_id=h.id,
-                    hypothesis_statement=h.statement,
-                    verdict="INCONCLUSIVE",
-                    reasoning="No falsification plan was generated for this hypothesis.",
-                ),
-                [],
-            )
+    async def _run_one_shot(
+        h: Hypothesis,
+        plan: FalsificationPlan,
+        agent_name: str,
+        sub_state: dict,
+    ) -> tuple[InvestigatorVerdict, list[PhaseTrace]]:
+        """Run a single Investigator shot.
 
-        agent_name = f"InvestigatorAgent_{h.id}"
-
-        # Build prompt state
-        plan_dict = plan.model_dump()
-        sub_state: dict[str, Any] = {
-            "hypothesis_id": h.id,
-            "hypothesis_statement": h.statement,
-            "primary_suspect_nf": h.primary_suspect_nf,
-            "falsification_plan": json.dumps(plan_dict, indent=2),
-            "network_analysis": network_analysis_text,
-            "anomaly_window_start_ts": anomaly_window_start_ts,
-            "anomaly_window_end_ts": anomaly_window_end_ts,
-            "anomaly_screener_snapshot_ts": anomaly_screener_snapshot_ts,
-        }
-
+        Wraps `_run_phase_with_empty_output_retry`, parses the verdict,
+        and applies the per-shot min-tool-call guardrail. Returns the
+        verdict + traces produced by this shot (caller aggregates
+        across shots when multi-shot is enabled).
+        """
         question = f"Falsify hypothesis {h.id}: {h.statement}"
-
-        # Same empty-output silent-bail can hit a sub-Investigator. The
-        # existing parse-error path below would catch it as a JSON
-        # parse failure and force INCONCLUSIVE — but only after
-        # consuming the run with no retry. With the generic retry
-        # guard, we get a second chance to produce a verdict before
-        # falling through.
         state_after, traces, _success = await _run_phase_with_empty_output_retry(
             agent_factory=lambda: create_investigator_agent(name=agent_name),
             state=sub_state,
@@ -580,7 +574,6 @@ async def _run_parallel_investigators(
             phase_label=f"Phase 5 {agent_name}",
         )
 
-        # Parse the verdict
         verdict_raw = state_after.get(_INVESTIGATOR_OUTPUT_KEY)
         try:
             if isinstance(verdict_raw, str):
@@ -597,19 +590,9 @@ async def _run_parallel_investigators(
                 reasoning=f"Failed to parse Investigator output: {e}",
             )
 
-        # Mechanical guardrail: force INCONCLUSIVE if below minimum
-        # tool calls. Lives in `guardrails/investigator_minimum.py`.
-        #
-        # `traces` may contain MULTIPLE PhaseTrace entries with the same
-        # agent_name when the empty-output retry kicked in (one per
-        # attempt). We aggregate tool counts across all matching traces
-        # so a retry-then-succeed path correctly counts the successful
-        # attempt's probes — pre-PR-9.5 the `next(...)` form returned
-        # the FIRST matching trace (always the failed-empty attempt
-        # when a retry happened), forcing INCONCLUSIVE despite the
-        # retry's successful probes (run_20260501_042127_call_quality_degradation
-        # h1 made 0 calls on attempt 1 + 3 calls on attempt 2 → was
-        # incorrectly forced INCONCLUSIVE).
+        # Per-shot min-tool-call guardrail. Aggregates across all
+        # traces with the matching agent_name (covers the empty-output
+        # retry case where attempt 1 had 0 calls and attempt 2 had ≥2).
         tool_call_count = sum(
             len(t.tool_calls)
             for t in traces
@@ -622,8 +605,83 @@ async def _run_parallel_investigators(
             hypothesis_id=h.id,
             hypothesis_statement=h.statement,
         )
-
         return verdict, traces
+
+    async def run_one(h: Hypothesis) -> tuple[InvestigatorVerdict, list[PhaseTrace]]:
+        plan = plans_by_id.get(h.id)
+        if plan is None:
+            log.warning("No plan for hypothesis %s — skipping", h.id)
+            return (
+                InvestigatorVerdict(
+                    hypothesis_id=h.id,
+                    hypothesis_statement=h.statement,
+                    verdict="INCONCLUSIVE",
+                    reasoning="No falsification plan was generated for this hypothesis.",
+                ),
+                [],
+            )
+
+        agent_name = f"InvestigatorAgent_{h.id}"
+
+        # Build prompt state. Both shots see identical starting state;
+        # ADK creates a fresh session per `_run_phase` call so shot 1
+        # does not bleed into shot 2.
+        plan_dict = plan.model_dump()
+        sub_state: dict[str, Any] = {
+            "hypothesis_id": h.id,
+            "hypothesis_statement": h.statement,
+            "primary_suspect_nf": h.primary_suspect_nf,
+            "falsification_plan": json.dumps(plan_dict, indent=2),
+            "network_analysis": network_analysis_text,
+            "anomaly_window_start_ts": anomaly_window_start_ts,
+            "anomaly_window_end_ts": anomaly_window_end_ts,
+            "anomaly_screener_snapshot_ts": anomaly_screener_snapshot_ts,
+        }
+
+        # Shot 1.
+        shot1_verdict, shot1_traces = await _run_one_shot(
+            h, plan, agent_name, sub_state,
+        )
+
+        # Single-shot mode (multi-shot disabled or short-circuit on
+        # shot-1 INCONCLUSIVE). Reconciler returns the verdict
+        # unchanged with kind="single_shot" or "inconclusive_pass_through".
+        short_circuit = (
+            MULTI_SHOT_SKIP_ON_INCONCLUSIVE_FIRST_SHOT
+            and shot1_verdict.verdict == "INCONCLUSIVE"
+        )
+        if not MULTI_SHOT_INVESTIGATORS or short_circuit:
+            reconciliation = reconcile_verdicts(
+                [shot1_verdict],
+                short_circuited=short_circuit,
+            )
+            traces = list(shot1_traces)
+            traces.append(_make_reconciliation_trace(h, reconciliation))
+            return reconciliation.verdict, traces
+
+        # Shot 2 (multi-shot consensus path).
+        shot2_verdict, shot2_traces = await _run_one_shot(
+            h, plan, agent_name, sub_state,
+        )
+
+        # Reconcile the two shots. The reconciler handles every
+        # combination: agreement, disagreement, and INCONCLUSIVE-
+        # touching pairs.
+        reconciliation = reconcile_verdicts([shot1_verdict, shot2_verdict])
+
+        log.info(
+            "Phase 5 multi-shot reconciliation for %s: kind=%s, "
+            "shot1=%s, shot2=%s, reconciled=%s",
+            h.id,
+            reconciliation.kind,
+            shot1_verdict.verdict,
+            shot2_verdict.verdict,
+            reconciliation.verdict.verdict,
+        )
+
+        traces = list(shot1_traces) + list(shot2_traces)
+        traces.append(_make_reconciliation_trace(h, reconciliation))
+        return reconciliation.verdict, traces
 
     # Fan out in parallel
     results = await asyncio.gather(
@@ -992,13 +1050,31 @@ async def investigate(
     def _na_combined_guardrail(report):
         d_result = lint_na_hypotheses(report)
         if d_result.verdict is not GuardrailVerdict.PASS:
+            log.info("Decision D linter REJECT: %s", d_result.reason[:200])
             return d_result
-        return lint_na_ranking_coverage(
+        flags = state.get("anomaly_flags") or []
+        log.info(
+            "Decision H linter — invoking with %d anomaly flags "
+            "(metrics: %s); kb=%s",
+            len(flags),
+            [f.get("metric", "?") for f in flags[:5]] + (
+                ["..."] if len(flags) > 5 else []
+            ),
+            "loaded" if _ranking_kb is not None else "none",
+        )
+        h_result = lint_na_ranking_coverage(
             report=report,
-            anomaly_flags=state.get("anomaly_flags") or [],
+            anomaly_flags=flags,
             kb=_ranking_kb,
             known_nfs=_known_nfs,
         )
+        log.info(
+            "Decision H linter result: verdict=%s, findings=%d",
+            h_result.verdict.value,
+            (h_result.notes or {}).get("findings_count", 0)
+            if h_result.notes else 0,
+        )
+        return h_result
 
     state, na_traces, na_success, na_report = await run_phase_with_guardrail(
         agent_factory=create_network_analyst,
@@ -1293,6 +1369,35 @@ async def investigate(
 # ============================================================================
 # Helpers
 # ============================================================================
+
+
+def _make_reconciliation_trace(
+    h: Hypothesis,
+    reconciliation: ReconciliationResult,
+) -> PhaseTrace:
+    """Synthesize a PhaseTrace marking the multi-shot reconciliation
+    outcome per hypothesis.
+
+    The recorder iterates over `investigation_trace.phases` and
+    surfaces these traces alongside the per-shot Investigator traces.
+    A `kind` value of `disagreement` is the load-bearing signal — it
+    indicates that two independent samples reached opposite
+    conclusions and Synthesis should treat the verdict as truly
+    inconclusive rather than a thin NOT_DISPROVEN survivor.
+    """
+    summary_parts: list[str] = [f"kind={reconciliation.kind}"]
+    summary_parts.append(f"shots={reconciliation.shot_count}")
+    summary_parts.append(f"verdict={reconciliation.verdict.verdict}")
+    if reconciliation.short_circuited:
+        summary_parts.append("short_circuited=True")
+    return PhaseTrace(
+        agent_name=f"InvestigatorAgent_{h.id}__reconciliation",
+        started_at=time.time(),
+        finished_at=time.time(),
+        duration_ms=0,
+        output_summary=", ".join(summary_parts),
+    )
+
 
 def _empty_na_report(reason: str) -> NetworkAnalystReport:
     """Sentinel "NA produced nothing usable" value the orchestrator can

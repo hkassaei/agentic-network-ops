@@ -1,8 +1,8 @@
 # ADR: Structural Guardrails for the LLM Pipeline
 
 **Date:** 2026-04-30
-**Last revised:** 2026-05-01 — implementation underway. PRs 1 and 2 shipped (refactor + Decision D). Build sequence reordered post-PR-2 based on real-run evidence; Decision A expanded to include an IG-statement linter sub-check.
-**Status:** Build in progress. Captures six structural moves motivated by the observations in [`../critical-observations/challenge_with_stochastic_LLM_behavior.md`](../critical-observations/challenge_with_stochastic_LLM_behavior.md) (Part I, Synthesis-stage failure modes) and [`../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md`](../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md) (Part II, NA / IG / Investigator-stage failure modes).
+**Last revised:** 2026-05-01 — implementation underway. PRs 1, 2, and 4 shipped (refactor + Decision D + Decision A extended). Build sequence reordered post-PR-2 based on real-run evidence; Decision A expanded to include an IG-statement linter sub-check; **Decision G added** (mechanism-claim grounding) after `run_20260501_022351_data_plane_degradation` exposed an NA fabrication failure mode that PRs 2 and 4 do not cover.
+**Status:** Build in progress. Captures seven structural moves motivated by the observations in [`../critical-observations/challenge_with_stochastic_LLM_behavior.md`](../critical-observations/challenge_with_stochastic_LLM_behavior.md) (Part I, Synthesis-stage failure modes) and [`../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md`](../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md) (Part II, NA / IG / Investigator-stage failure modes).
 **Related ADRs:**
 - [`falsifier_investigator_and_rag.md`](falsifier_investigator_and_rag.md) — Investigator + plan architecture this ADR proposes hardening.
 - [`get_diagnostic_metrics_tool.md`](get_diagnostic_metrics_tool.md) — KB-curated tool layer that ADR-2 below (typed probe selection) builds on.
@@ -23,19 +23,21 @@ If a proposed fix can be expressed as "tell the LLM to do X better," it does NOT
 
 - **PR 1 (2026-04-30) — Refactor.** Created `agentic_ops_v6/guardrails/`, extracted the existing inlined safeguards from `orchestrator.py` (silent-bail retry, fan-out audit, minimum-tool-call check, evidence-citation validator), and added `runner.run_phase_with_guardrail` as the composition point for future deterministic guardrails. No behavior change; orchestrator dropped from 1213 → 1054 lines.
 - **PR 2 (2026-04-30) — Decision D.** NA hypothesis-statement linter. Rejects mechanism-scoping language in `Hypothesis.statement` with a per-hypothesis bad/good shape hint; resamples NA once on REJECT; accepts-with-warning on second REJECT (synthetic PhaseTrace + `state["guardrail_warnings"]` for episode log surfacing).
+- **PR 4 (2026-05-01) — Decision A (extended).** Post-IG validator with two sub-checks: A1 (partner-probe / triangulation coverage on compositional probes) and A2 (mechanism-scoping linter on `expected_if_hypothesis_holds` and `falsifying_observation` text). Validated on `run_20260501_022351_data_plane_degradation`: score moved from 90% (misleading low confidence on a correct-via-recovery diagnosis) to 100% (calibrated high confidence on a clean NOT_DISPROVEN). The same run also exposed a NEW failure mode that motivated Decision G — see below.
 
 ### What's next (revised order)
 
-The original ordering (D → F → A → E → C → B) was based on per-PR effort. Real-run evidence from `run_20260501_012613_data_plane_degradation` (post-PR-2) showed that:
+The original ordering (D → F → A → E → C → B) was based on per-PR effort. Real-run evidence has reshuffled it twice:
 
-1. The mechanism-scoping failure mode the ADR targets relocated from NA (where Decision D shut it down) to IG's `expected_if_hypothesis_holds` and `falsifying_observation` text. PR 2's linter passed all three NA statements, and the IG re-introduced the scope downstream — so closing the leak requires lifting Decision D's mechanism into Decision A.
-2. Decision F applied alone over an all-DISPROVEN verdict tree forces `inconclusive` even when the diagnosis recovered correctly via `alternative_suspects`. F's value is conditional on Decision E producing clean NOT_DISPROVEN survivors first.
+1. After PR 2, `run_20260501_012613_data_plane_degradation` showed the mechanism-scoping failure mode relocating from NA (where D shut it down) to IG's probe text. → Decision A bumped to PR 4 with sub-check A2.
+2. After PR 4, `run_20260501_022351_data_plane_degradation` showed a different failure mode — NA *fabricating* a mechanism narrative ("traffic storm overloading the UPF") that the blocklist-based linters cannot catch because the words aren't on any blocklist. The diagnosis still scored 100% on a generous scorer, but the mechanism in the diagnosis text is confabulated. → Decision G added.
+3. Decision F applied alone over an all-DISPROVEN verdict tree forces `inconclusive` even when the diagnosis recovered correctly via `alternative_suspects`. F's value is conditional on Decision E producing clean NOT_DISPROVEN survivors first.
 
 The revised sequence is:
-1. **PR 4 — Decision A (extended)** with the IG-statement linter sub-check. Closes the leak PR 2 left open.
-2. **PR 5 — Decision E.** Candidate-pool aggregator + bounded re-investigation. Creates the clean NOT_DISPROVEN survivors that F's cap operates on.
-3. **PR 3 — Decision F.** Confidence cap. Moved later than its original slot because it needs E's output to be useful.
-4. **PR 6 — Decision C.** Multi-shot Investigator consensus.
+1. **PR 5 — Decision E.** Candidate-pool aggregator + bounded re-investigation. Creates the clean NOT_DISPROVEN survivors that F's cap operates on.
+2. **PR 3 — Decision F.** Confidence cap. Moved later than its original slot because it needs E's output to be useful.
+3. **PR 6 — Decision C.** Multi-shot Investigator consensus.
+4. **PR 8 — Decision G.** Mechanism-claim grounding. Cheaper variant of the KB-anchored pattern Decision B uses; sequenced before B because B subsumes G's machinery and G can ship sooner with a simpler regex+KB-lookup implementation.
 5. **PR 7 — Decision B.** Typed probe selection from KB. Heaviest, last.
 
 The detailed rationale for the reorder lives in the `Implementation ordering` section near the end of this ADR.
@@ -260,17 +262,79 @@ This is the same pattern as Decision D's linter, applied to a different field. T
 
 ---
 
+## Decision G — Mechanism-claim grounding (added 2026-05-01)
+
+**Rule today (prose):** NA principle #10 says don't scope the mechanism in `Hypothesis.statement`. Decisions D and A2 enforce this on a known set of *blocklist* phrases (`internal`, `due to overload`, `not forwarding`, etc.). Neither addresses NA *fabricating* a mechanism narrative whose words aren't on any blocklist.
+
+**Failure mode — the fabrication problem.** NA reads an anomaly metric, leaps to a plausible-sounding mechanism story, and writes it into the hypothesis statement as fact. Downstream agents (IG, Investigator, Synthesis) then propagate the fabricated mechanism without ever testing it. Probes get framed as "is the named NF affected?" — which is true regardless of mechanism — and the unverified mechanism rides through to the final diagnosis.
+
+The canonical example is `run_20260501_022351_data_plane_degradation` (post-PR-4):
+
+- **Actual fault:** tc-netem injecting 30% loss at the kernel layer of the UPF veth. No traffic storm, no overload. The kernel is just dropping 30% of packets, indiscriminately.
+- **Phase 0 flagged:** `normalized.upf.gtp_indatapktn3upf_per_ue` at **11.40 pps** vs learned baseline 1.45 pps (8x). The screener's own `Healthy invariant` comment notes the metric *"Rises during active VoNR calls (~100 pps for G.711 voice)"* — so 11.4 pps during active calls is actually **low**, not a storm.
+- **NA's leap:** *"The UPF is overloaded by a massive GTP-U traffic storm on the N3 interface, causing extreme packet loss."* "Traffic storm" appears nowhere in the metric semantics, the KB's causal chains, or the supporting events — it's an LLM-prior narrative invented to explain the 8x-of-the-wrong-baseline reading.
+- **What the Investigator probed:** RTT from N3 + N4 paths, both showed 33% loss → "UPF is the source." Five CONSISTENT probes for h1, none of which actually tested the storm claim. The probes confirmed *that loss happens at UPF* (true), not *that a storm caused it* (false).
+- **Final diagnosis:** *"A massive GTP-U traffic storm overloaded the User Plane Function (UPF), causing extreme packet loss"* — the storm framing rode all the way through. Score: 100% (the scorer was generous on the mechanism interpretation; UPF was correctly identified).
+
+The structural pattern:
+1. Screener flags an anomaly metric.
+2. NA invents a plausible mechanism story.
+3. IG writes probes that test "is the NF affected?", not "does the mechanism story hold?".
+4. Investigator reads the probes as CONSISTENT (because the NF *is* affected, regardless of mechanism).
+5. Synthesis ratifies the invented mechanism because nothing falsified it.
+6. The generous scorer rewards correct NF identification, masking the confabulation.
+
+This is **right for the wrong reasons**. The diagnosis names the right NF but invents a fake "why."
+
+**Proposed structure:** A two-part guardrail running post-NA, after Decision D's blocklist check passes:
+
+1. **Mechanism-narrative detector** — a small lexicon of *narrative* mechanism words distinct from Decision D's *layer-scoping* words. Initial set:
+   - `traffic storm`, `flood`, `flooded` (volume narratives)
+   - `is overloaded by`, `overloaded`, `overload condition` (load narratives — note: `due to overload` is already on D's list, but the bare-word and `is overloaded by` variants are not)
+   - `congestion`, `congested`, `congestive failure` (congestion narratives)
+   - `partition`, `partitioned`, `network partition` (partitioning narratives)
+   - `cascading`, `cascaded`, `cascade failure` (cascade narratives)
+   - `exhaustion`, `exhausted`, `running out of` (resource narratives)
+   - `meltdown`, `breakdown`, `collapse`, `storm`, `surge`, `spike-induced` (failure-mode narratives)
+
+   When any of these phrases appears in `Hypothesis.statement`, the second part fires.
+
+2. **KB-grounding check** — for any hypothesis flagged in part 1, verify that the claimed mechanism is supported by KB content:
+   - At least one event in `Hypothesis.supporting_events` whose KB metadata (`MetricEntry.deviation_meaning` or the fired-event's interpretive text) names that mechanism, OR
+   - At least one causal-chain branch reachable via `find_chains_by_observable_metric(<metric>)` whose `mechanism` field names that mechanism.
+
+   If neither holds, the hypothesis fails grounding. REJECT the NA report and resample with the rejection reason injected:
+
+   > Hypothesis `h1` claims mechanism `traffic storm` for the deviation in `gtp_indatapktn3upf_per_ue`. The KB does not list this mechanism for this metric. Authored mechanisms for this metric (per `find_chains_by_observable_metric`):
+   >   - `n3_data_plane_degradation` (mechanism: "packet loss on the gNB→UPF transport path")
+   >   - `upf_user_plane_failure` (mechanism: "UPF cannot egress to the data network")
+   > Either pick one of the KB-authored mechanisms (and reflect it in `supporting_events`) or rewrite the statement without naming a mechanism (per principle #10 — "<NF> is the source of <observable>" without scoping the HOW).
+
+The accept-with-warning policy from PR 2 / PR 4 applies on second REJECT.
+
+**Open design questions:**
+
+- *Blocklist vs grounding-check.* The two-part design above uses the narrative-word list only as a *trigger* for the grounding check. A simpler version drops the grounding check and just blocklists the narrative words like Decision D does. The simpler version is cheaper but loses the constructive feedback ("here's what the KB says is plausible") — IG / NA would resample with no guidance about which mechanism *would* be acceptable. The two-part design pays one extra KB lookup per flagged hypothesis but produces the same shape-hint quality as Decisions D and A2.
+- *KB coverage.* Like Decision B, this Decision is only as strong as the KB's mechanism authorship. A metric whose KB entry doesn't name any mechanism would force NA to either drop the mechanism word or resample indefinitely. Mitigation: the accept-with-warning policy is still the backstop; if the KB has nothing to say, the resample fails too and we fall back to today's behavior with a structured warning.
+- *Relationship to Decision B.* Decision B authors candidate probes from KB content. Decision G authors mechanism-claim *guards* from KB content. The two share the same dependency (KB mechanism authorship being curated and current) but operate at different stages. G is cheaper to ship — regex + targeted KB lookup. B is heavier — full probe-candidate generation. Build G first, use it to surface KB gaps that would block B, fix those gaps, then ship B with confidence the KB is ready.
+- *False positive risk.* Some narrative words have legitimate uses: "the diameter cascade" (a 3GPP procedure name), "the cascade of REGISTERs after failover" (legitimate description of a known procedure), "this is a cascading IMS failure scenario" (referring to the chaos scenario name itself). Mitigation: as with Decision A's word-boundary regexes, narrow the patterns and add negative-lookbehind on common legitimate collocations. Track false positives in `state["guardrail_warnings"]` and tighten over time.
+- *Compose with Decision E?* When NA's mechanism claim fails grounding and accept-with-warning fires, the imperfect statement still flows downstream. Decision E's candidate-pool aggregator might still recover the right NF via `alternative_suspects` — but the diagnosis text will still carry the fabricated mechanism. To clean that up, Synthesis would need to read `state["guardrail_warnings"]` and elide the mechanism narrative from its rendered diagnosis. Out of scope for G's first ship; track as follow-up.
+
+**Expected impact:** Directly addresses the fabrication failure mode named above. The `run_20260501_022351_data_plane_degradation` h1 statement *"UPF is overloaded by a massive GTP-U traffic storm"* would be flagged on `traffic storm` and `is overloaded by`. The grounding check would query the KB for `gtp_indatapktn3upf_per_ue`'s authored mechanisms, find that "traffic storm" is not among them, and resample NA with a constructive shape hint listing the KB-authored alternatives. The resample would land on a clean statement like *"UPF is the source of the elevated GTP-U packet loss observed in `core.upf.activity_during_calls_collapsed`"* — naming observable + component without inventing a mechanism. Downstream agents inherit the cleaner framing; the diagnosis text loses its fabrication; the score becomes a *true* 100% rather than a generous-scorer 100%.
+
+---
+
 ## Implementation ordering
 
-The original ordering (D → F → A → E → C → B) was based on per-PR effort. After PRs 1 and 2 shipped on 2026-04-30, the data plane degradation re-run on 2026-05-01 (`run_20260501_012613_data_plane_degradation`) showed two things that forced a reorder:
+The original ordering (D → F → A → E → C → B) was based on per-PR effort. Real-run evidence has reshuffled it twice:
 
-1. **Decision D worked exactly as designed at the NA stage.** All three NA hypothesis statements passed the linter on first attempt with zero LLM cost. The mechanism-scoping failure mode the ADR targets did NOT recur in NA's output.
-2. **The same failure mode showed up at the IG stage instead.** IG re-introduced layer-scoping in `expected_if_hypothesis_holds` and `falsifying_observation` text — h1's RTT probe expected "low RTT" for "UPF is the source", which inverts the test under inclusive interpretation. The Investigator faithfully executed IG's mis-framed plan and marked h1 DISPROVEN. The diagnosis text recovered the right answer via `alternative_suspects`, but the verdict tree read all-DISPROVEN with confidence `low` — a misleading mismatch. (Score: 90% from a generous scorer; pipeline confidence signal: low.)
+1. **After PR 2 (`run_20260501_012613_data_plane_degradation`):** Decision D worked exactly as designed at the NA stage — all three statements passed the linter on first attempt with zero LLM cost. But the same mechanism-scoping failure mode showed up at the IG stage: IG re-introduced layer-scoping in `expected_if_hypothesis_holds` and `falsifying_observation` text, the Investigator marked h1 DISPROVEN on a layer mismatch, and the verdict tree was misleading (3 DISPROVEN with diagnosis still landing on UPF via `alternative_suspects`, score 90% but confidence `low`). → **Decision A bumped to PR 4 with sub-check A2.**
+2. **After PR 4 (`run_20260501_022351_data_plane_degradation`):** PR 4 closed the layer-scoping leak — IG resampled, Investigator returned a clean NOT_DISPROVEN on h1, Synthesis hit calibrated high confidence, score 100%. But the same run exposed a NEW failure mode: NA *fabricated* a mechanism narrative ("traffic storm overloading the UPF") that the blocklist-based linters cannot catch because the words aren't on any blocklist. The 100% score was generous — UPF was correctly identified, but the mechanism in the diagnosis text is confabulated. → **Decision G added.**
 
-Two implications:
+Two implications carrying forward:
 
-- The mechanism-scoping leak isn't fully closed until the Decision D pattern is applied to IG's plan text too. **Sub-check A2 was added to Decision A as a result.**
-- Decision F applied alone over the all-DISPROVEN tree from this run would force the cap to `inconclusive`, weakening a diagnosis that recovered correctly. **F's value is conditional on Decision E producing clean NOT_DISPROVEN survivors first** (via the candidate-pool aggregator's bounded re-investigation path).
+- Each shipped PR closes one residual and exposes the next. Sequencing by per-PR effort is unstable; sequencing by per-PR evidence is what produces continued gains.
+- Decision F applied alone over an all-DISPROVEN tree forces `inconclusive`, weakening a diagnosis that recovered correctly. **F's value is conditional on Decision E producing clean NOT_DISPROVEN survivors first** (via the candidate-pool aggregator's bounded re-investigation path).
 
 ### Revised build order
 
@@ -278,28 +342,30 @@ Two implications:
 |---|---|---|---|
 | ✅ PR 1 | (refactor) | shipped 2026-04-30 | Created `guardrails/`, extracted existing safeguards, added `runner.run_phase_with_guardrail` |
 | ✅ PR 2 | D | shipped 2026-04-30 | NA hypothesis-statement linter |
-| **PR 4** | **A (extended: A1 + A2)** | medium | Highest-priority residual after PR 2. A2 closes the IG-side mechanism-scoping leak that broke `run_20260501_012613`; A1 covers the original triangulation-failure target. Same module, same blocklist as Decision D — small extension with disproportionate impact |
+| ✅ PR 4 | A (extended: A1 + A2) | shipped 2026-05-01 | Closed the IG-side mechanism-scoping leak from `run_20260501_012613`. Validated on `run_20260501_022351`: 90% → 100% score with calibrated confidence. Same run exposed the NA fabrication failure that motivated Decision G |
 | **PR 5** | **E** | medium-high | Candidate-pool aggregator + bounded re-investigation. Creates the clean NOT_DISPROVEN survivors that Synthesis-stage decisions operate on. Closes the verdict-tree-vs-diagnosis mismatch directly |
 | **PR 3** | **F** | low (compute) but conditional | Confidence cap. Deferred from its original second-position slot to here because its inputs (clean NOT_DISPROVEN survivors with structured probe evidence) only exist after E is in place. F over an all-DISPROVEN tree forces `inconclusive` on correct-via-recovery diagnoses — a Pareto-worse outcome |
 | **PR 6** | C | medium | Multi-shot Investigator consensus. Variance-reduction; lower priority while the dominant residuals are systemic-bias rather than variance |
-| **PR 7** | B | large | Typed probe selection from KB. Heaviest design; depends on KB coverage. Ships last after the cheaper structural fixes have set the floor and exposed which KB gaps are blocking |
+| **PR 8** | **G** | medium | Mechanism-claim grounding. Closes the fabrication failure mode exposed by `run_20260501_022351`. Sequenced before B because B subsumes G's KB-anchored pattern but G can ship sooner with regex + targeted KB lookup. Surfaces KB-coverage gaps that would block B; fixing them in advance de-risks PR 7 |
+| **PR 7** | B | large | Typed probe selection from KB. Heaviest design; depends on KB coverage. Ships last after the cheaper structural fixes have set the floor and after G has exposed which KB gaps need filling |
 
-### Sequencing principles surfaced from PR 2's evidence
+### Sequencing principles surfaced from real-run evidence
 
 1. **Close downstream leaks before tightening downstream caps.** A patch that prevents the wrong scope from entering the pipeline is strictly more useful than one that adjusts confidence on a diagnosis derived from already-corrupted plans.
 2. **Caps need clean inputs.** F (confidence cap) over an all-DISPROVEN tree is a downgrade-only instrument and can punish correct recoveries. F + E together is what Part I's failure modes actually need.
 3. **The mechanism-scoping pattern is the same shape at every stage.** Decision D's na_linter, Decision A's sub-check A2, and any future Investigator-side variant all share one regex blocklist and one shape-hint generator. Code reuse is high; cost of adding the next stage's variant is low.
+4. **Blocklists catch named failure modes; KB grounding catches *invented* failure modes.** Decisions D and A2 enforce a known set of mechanism-scoping phrases; they cannot catch creative fabrications like "traffic storm" that bypass the wordlist. Decision G is the first ADR move that requires the LLM's mechanism claim to be supported by external evidence (KB) rather than blocked by a phrase list. Decision B extends the same pattern to the entire probe-design step.
 
 ### Why not do all of them at once
 
-Each PR changes the pipeline's failure-mode distribution. Shipping them serially produces per-fix signal: after PR 4, what residual remains? After PR 5, does the verdict tree become coherent with the final diagnosis? Shipping them in parallel makes the next round of regression analysis substantially harder to attribute. The reorder above was only possible because PRs 1+2 shipped first and produced a single concrete failure example that named the next priority.
+Each PR changes the pipeline's failure-mode distribution. Shipping them serially produces per-fix signal: after PR 4, what residual remains? (Answer surfaced 2026-05-01: NA fabrication.) After PR 5, does the verdict tree become coherent with the final diagnosis? Shipping them in parallel makes the next round of regression analysis substantially harder to attribute. The reorder above was only possible because each PR shipped first and produced a single concrete failure example that named the next priority.
 
 ---
 
 ## Non-goals of this ADR
 
-- **Replacing the LLM agents.** The agents are still doing useful work — generating hypothesis statements, walking causal chains, interpreting probe results, synthesizing diagnoses. The six moves above harden their outputs without removing them.
-- **Eliminating prompt rules.** Some prompt rules will remain — particularly interpretive ones the Investigator uses on probe results, and the NA hypothesis-ranking heuristics. The ADR claims structural fixes scale better than prose for *constraint-shaped* failure modes (the IG must include a partner probe; the NA must not use scope words; Synthesis must not pick a suspect outside the candidate pool; Synthesis must not claim high confidence on weak evidence). It does NOT claim every prompt rule should be replaced.
+- **Replacing the LLM agents.** The agents are still doing useful work — generating hypothesis statements, walking causal chains, interpreting probe results, synthesizing diagnoses. The seven moves above harden their outputs without removing them.
+- **Eliminating prompt rules.** Some prompt rules will remain — particularly interpretive ones the Investigator uses on probe results, and the NA hypothesis-ranking heuristics. The ADR claims structural fixes scale better than prose for *constraint-shaped* failure modes (the IG must include a partner probe; the NA must not use scope words; the NA must not invent mechanisms the KB doesn't authorize; Synthesis must not pick a suspect outside the candidate pool; Synthesis must not claim high confidence on weak evidence). It does NOT claim every prompt rule should be replaced.
 - **Solving NA-stage hypothesis-ranking variance.** Part I documented run-to-run variance at two stages: NA hypothesis-ranking ("flagged NF is the cause" vs "flagged NF is the reporter") and Synthesis confidence calibration. Decisions E and F together address the Synthesis-stage failures (E creates clean NOT_DISPROVEN survivors; F caps confidence on them) — neither in isolation is sufficient. Decision C (multi-shot consensus) addresses Investigator-stage variance. NA-stage hypothesis-ranking variance — the original "P-CSCF was not in the hypothesis list at all" failure — remains unaddressed by this ADR; it likely needs its own structural move (e.g. a deterministic post-NA validator that requires every Phase-0-flagged NF to appear as a primary or secondary hypothesis, with explicit reasoning if NA opted to interpret the flag as a downstream symptom).
 
 ---
@@ -318,7 +384,7 @@ The point of this pattern is that prompt rules tend to introduce drift on adjace
 
 ## Implementation Decision
 
-Superseded — see the **Implementation ordering** section above for the current build sequence. The original sequence pinned in this section was D → F → A → E → C → B, ordered by per-PR effort. Real-run evidence after PRs 1 and 2 shipped (specifically `run_20260501_012613_data_plane_degradation`) forced the reorder to A (extended) → E → F → C → B. The full rationale lives in *Implementation ordering › Revised build order*.
+Superseded — see the **Implementation ordering** section above for the current build sequence. The original sequence pinned in this section was D → F → A → E → C → B, ordered by per-PR effort. Real-run evidence after each shipped PR has reshuffled it twice — first to A (extended) → E → F → C → B after `run_20260501_012613_data_plane_degradation`, then to E → F → C → G → B after `run_20260501_022351_data_plane_degradation` exposed the NA fabrication failure mode (Decision G added). The full rationale lives in *Implementation ordering › Revised build order*.
 
 ---
 

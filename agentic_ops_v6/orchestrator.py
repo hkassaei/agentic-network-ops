@@ -60,7 +60,7 @@ from .guardrails.empty_output import (
     run_phase_with_empty_output_retry as _empty_output_retry_impl,
 )
 from .guardrails.evidence_citations import validate_evidence
-from .guardrails.ig_validator import audit_fanout
+from .guardrails.ig_validator import audit_fanout, lint_ig_plan
 from .guardrails.investigator_minimum import (
     MIN_TOOL_CALLS_PER_INVESTIGATOR,
     apply_min_tool_call_guardrail,
@@ -792,21 +792,67 @@ async def investigate(
     # Render hypotheses back into state as a prompt-friendly structure
     state["network_analysis"] = _pretty_print_na_report(na_report, hypotheses)
 
-    # Wraps `_run_phase(IG)` with detect-and-retry. ADK's `LlmAgent`
-    # silently bails (returns without raising, without writing
-    # `output_key`) when Gemini emits a final response whose text
-    # content is empty or whitespace-only. See ADK
-    # `agents/llm_agent.py:__maybe_save_output_to_state` — the
-    # `if not result.strip(): return` branch. This produced a
-    # tool_calls=0, llm_calls=1 IG run on
-    # 2026-04-29 (run_20260429_031341_call_quality_degradation),
-    # which left `state["falsification_plan_set"]` unset and made
-    # Phase 5 run with no plan → INCONCLUSIVE verdict, ZERO tool
-    # calls, fabricated citations. We retry once and surface the
-    # failure cleanly if both attempts produce no plan.
-    state, plan_set = await _run_ig_with_retry(
-        state, question, session_service, on_event, all_phases,
+    # Two layered guards run on IG's output:
+    #
+    #   (a) Empty-output retry. ADK's `LlmAgent` silently bails on an
+    #       empty Gemini final-response chunk; this produced a
+    #       tool_calls=0, llm_calls=1 IG run on
+    #       run_20260429_031341_call_quality_degradation, leaving
+    #       state[_IG_OUTPUT_KEY] unset and making Phase 5 run with no
+    #       plan. Detect-and-resample once. On both-attempts-empty,
+    #       write the IG-specific sentinel below so Phase 5 sees
+    #       plans=[] cleanly instead of fabricating citations from
+    #       missing state.
+    #
+    #   (b) IG-statement linter (Decision A — PR 4). Sub-check A1
+    #       (partner probe) + A2 (mechanism-scoping linter on
+    #       expected_if_hypothesis_holds and falsifying_observation).
+    #       Closes the leak PR 2 left at the IG stage:
+    #       run_20260501_012613 had clean NA statements but IG h1
+    #       wrote "rather than a UPF-internal fault" which the
+    #       Investigator faithfully treated as a falsifying condition.
+    #       On REJECT, resample IG once with the per-probe rejection
+    #       reason injected via `{guardrail_rejection_reason}`. On
+    #       still-rejected second attempt, accept-with-warning
+    #       (synthetic PhaseTrace + state["guardrail_warnings"] entry)
+    #       — a slightly mis-framed plan is worse than a clean one but
+    #       better than a hard pipeline failure.
+    state, ig_traces, ig_success, plan_set = await run_phase_with_guardrail(
+        agent_factory=create_instruction_generator,
+        state=state,
+        question=question,
+        session_service=session_service,
+        on_event=on_event,
+        output_key=_IG_OUTPUT_KEY,
+        phase_label="Phase 4 InstructionGenerator",
+        run_phase=_run_phase,
+        parser=_parse_plan_set,
+        guardrail=lint_ig_plan,
+        max_resamples=1,
+        on_guardrail_exhausted="accept",
     )
+    all_phases.extend(ig_traces)
+    _accumulate_phase_traces(state, ig_traces)
+    if not ig_success:
+        # Empty-output exhausted both attempts. Write the IG-specific
+        # sentinel so the recorder shows the failure verbatim and Phase
+        # 5 runs with plans=[] rather than fabricating citations.
+        state[_IG_OUTPUT_KEY] = json.dumps({
+            "plans": [],
+            "_orchestrator_note": (
+                "InstructionGenerator produced empty output on two consecutive "
+                "attempts. ADK's silent-bail on empty Gemini final-response "
+                "(agents/llm_agent.py:__maybe_save_output_to_state) prevented "
+                "the schema-validation error from surfacing. No falsification "
+                "plan was generated; Phase 5 ran with no probes."
+            ),
+        })
+        plan_set = _empty_plan_set()
+    elif plan_set is None:
+        # Defensive: parser path should always return a (possibly
+        # empty) FalsificationPlanSet, but if it returned None for
+        # some reason fall back to direct parse.
+        plan_set = _parse_plan_set(state.get(_IG_OUTPUT_KEY))
 
     # -------- Phase 5: Parallel Investigators --------
     # Forward anomaly-window timestamps so each sub-Investigator's

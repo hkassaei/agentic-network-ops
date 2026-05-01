@@ -7,6 +7,13 @@
 ## Fired Events (for context)
 {fired_events}
 
+## Resample feedback (only present on resample)
+{guardrail_rejection_reason}
+
+If the section above is non-empty, your previous FalsificationPlanSet was REJECTED by the post-IG linter (Decision A). Read the per-plan, per-probe feedback carefully — it names the offending sub-check (A1 = missing partner probe, A2 = mechanism-scoping language in expected/falsifying text), quotes the exact phrase that fired, and gives a concrete bad/good example. Address every flagged probe before re-emitting; the rest of your workflow is unchanged.
+
+If the section above is empty, this is your first attempt — proceed normally.
+
 ---
 
 You are the **Instruction Generator**. Your job is to turn the NetworkAnalyst's ranked hypothesis list into a **falsification plan for EACH hypothesis**.

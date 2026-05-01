@@ -38,64 +38,11 @@ Design notes:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from ..models import Hypothesis, NetworkAnalystReport
+from ._mechanism_scope import BASE_PATTERNS, scan
 from .base import GuardrailResult, GuardrailVerdict
-
-
-# Each (label, pattern) pair flags one class of mechanism-scoping
-# phrase. Patterns are compiled with re.IGNORECASE. Word-boundary
-# anchors avoid false positives on substring matches inside
-# unrelated words. Order is rough: most-specific phrases first so
-# the per-hypothesis hit list reads naturally.
-_BLOCKLIST: list[tuple[str, re.Pattern[str]]] = [
-    ("internal fault",
-        re.compile(r"\binternal fault\b", re.IGNORECASE)),
-    ("internal bug",
-        re.compile(r"\binternal bug\b", re.IGNORECASE)),
-    ("due to a bug",
-        re.compile(r"\bdue to (?:a |the )?bug\b", re.IGNORECASE)),
-    ("due to resource exhaustion",
-        re.compile(
-            r"\bdue to (?:a |the )?resource (?:exhaustion|issue|issues)\b",
-            re.IGNORECASE,
-        )),
-    ("resource exhaustion",
-        re.compile(r"\bresource exhaustion\b", re.IGNORECASE)),
-    ("buffer overflow",
-        re.compile(r"\bbuffer overflow\b", re.IGNORECASE)),
-    ("due to overload",
-        re.compile(r"\bdue to (?:overload|the overload|an overload)\b",
-                   re.IGNORECASE)),
-    ("overwhelmed by",
-        re.compile(r"\boverwhelmed by\b", re.IGNORECASE)),
-    ("flooded with",
-        re.compile(r"\bflooded with\b", re.IGNORECASE)),
-    ("due to a crash",
-        re.compile(r"\bdue to (?:a |the )?crash\b", re.IGNORECASE)),
-    ("crashed",
-        re.compile(r"\bcrashed\b", re.IGNORECASE)),
-    ("not running",
-        re.compile(r"\bnot running\b", re.IGNORECASE)),
-    ("not forwarding",
-        re.compile(r"\bnot forwarding\b", re.IGNORECASE)),
-    ("misconfigured",
-        re.compile(r"\bmisconfigured\b", re.IGNORECASE)),
-    ("due to misconfiguration",
-        re.compile(r"\bdue to (?:a |the )?misconfiguration\b",
-                   re.IGNORECASE)),
-    ("due to a configuration error",
-        re.compile(r"\bdue to (?:a |the )?configuration error\b",
-                   re.IGNORECASE)),
-    # `internal` last so the more-specific phrases above match first
-    # in the per-hypothesis hit list. The bare-word match catches the
-    # "experiencing an internal X" pattern that the more-specific
-    # phrases miss when X varies.
-    ("internal",
-        re.compile(r"\binternal(?:ly)?\b", re.IGNORECASE)),
-]
 
 
 @dataclass
@@ -152,7 +99,7 @@ def lint_na_hypotheses(
 def _scan_statement(statement: str) -> list[str]:
     """Return the labels of every blocklist pattern that fires on the
     statement, in stable order. Empty list = clean."""
-    return [label for label, pattern in _BLOCKLIST if pattern.search(statement)]
+    return scan(statement, BASE_PATTERNS)
 
 
 def _build_rejection_reason(flagged: list[_HypothesisHits]) -> str:

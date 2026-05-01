@@ -1,8 +1,8 @@
 # ADR: Structural Guardrails for the LLM Pipeline
 
 **Date:** 2026-04-30
-**Last revised:** 2026-05-01 — implementation underway. PRs 1, 2, 4, and 5 shipped (refactor + Decision D + Decision A extended + Decision E). Build sequence reordered post-PR-2 based on real-run evidence; Decision A expanded to include an IG-statement linter sub-check; **Decision G added** (mechanism-claim grounding) after `run_20260501_022351_data_plane_degradation` exposed an NA fabrication failure mode that PRs 2 and 4 do not cover. PR 5 ships with two conditional follow-ups (PR 5.5a + 5.5b) for Decision E hardening — see Implementation ordering for trigger conditions.
-**Status:** Build in progress. Captures seven structural moves motivated by the observations in [`../critical-observations/challenge_with_stochastic_LLM_behavior.md`](../critical-observations/challenge_with_stochastic_LLM_behavior.md) (Part I, Synthesis-stage failure modes) and [`../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md`](../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md) (Part II, NA / IG / Investigator-stage failure modes).
+**Last revised:** 2026-05-01 — implementation underway. PRs 1, 2, 4, and 5 shipped (refactor + Decision D + Decision A extended + Decision E). Build sequence reordered post-PR-2 based on real-run evidence; Decision A expanded to include an IG-statement linter sub-check; **Decision G added** (mechanism-claim grounding) after `run_20260501_022351_data_plane_degradation` exposed an NA fabrication failure mode; **Decision H added** (NA direct-vs-derived ranking) after `run_20260501_032822_call_quality_degradation` exposed an NA-stage ranking failure that none of D / A / E catches. PR 5 ships with two conditional follow-ups (PR 5.5a + 5.5b) for Decision E hardening — see Implementation ordering for trigger conditions.
+**Status:** Build in progress. Captures eight structural moves motivated by the observations in [`../critical-observations/challenge_with_stochastic_LLM_behavior.md`](../critical-observations/challenge_with_stochastic_LLM_behavior.md) (Part I, Synthesis-stage failure modes) and [`../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md`](../critical-observations/challenge_with_stochastic_LLM_behavior_part_II.md) (Part II, NA / IG / Investigator-stage failure modes).
 **Related ADRs:**
 - [`falsifier_investigator_and_rag.md`](falsifier_investigator_and_rag.md) — Investigator + plan architecture this ADR proposes hardening.
 - [`get_diagnostic_metrics_tool.md`](get_diagnostic_metrics_tool.md) — KB-curated tool layer that ADR-2 below (typed probe selection) builds on.
@@ -37,9 +37,10 @@ The original ordering (D → F → A → E → C → B) was based on per-PR effo
 The remaining sequence (after PR 5 shipped) is:
 1. **PR 5.5 — Decision E hardening (a + b).** Conditional follow-ups on PR 5: move EvidenceValidator after the re-investigation phase (5.5a — small) and convert Synthesis to structured output for strict pool-membership validation (5.5b — medium). Both have trigger conditions documented in the build-order table; ship if/when those conditions fire.
 2. **PR 3 — Decision F.** Confidence cap. Moved later than its original slot because it needs E's output to be useful.
-3. **PR 6 — Decision C.** Multi-shot Investigator consensus.
-4. **PR 8 — Decision G.** Mechanism-claim grounding. Cheaper variant of the KB-anchored pattern Decision B uses; sequenced before B because B subsumes G's machinery and G can ship sooner with a simpler regex+KB-lookup implementation.
-5. **PR 7 — Decision B.** Typed probe selection from KB. Heaviest, last.
+3. **PR 9 — Decision H.** NA direct-vs-derived ranking guardrail. Closes the wrong-NF-ranking failure mode exposed by `run_20260501_032822_call_quality_degradation` (a `direct` flag on the actual culprit lost to a `derived` flag on a downstream-symptom NF, NA mis-ranked, the wrong NF survived investigation, Synthesis ratified with high confidence). Sequenced after F because F's confidence cap is the cheaper-and-broader backstop; H is the deeper structural fix.
+4. **PR 6 — Decision C.** Multi-shot Investigator consensus.
+5. **PR 8 — Decision G.** Mechanism-claim grounding. Cheaper variant of the KB-anchored pattern Decision B uses; sequenced before B because B subsumes G's machinery and G can ship sooner with a simpler regex+KB-lookup implementation.
+6. **PR 7 — Decision B.** Typed probe selection from KB. Heaviest, last.
 
 The detailed rationale for the reorder lives in the `Implementation ordering` section near the end of this ADR.
 
@@ -325,14 +326,65 @@ The accept-with-warning policy from PR 2 / PR 4 applies on second REJECT.
 
 ---
 
+## Decision H — NA direct-vs-derived ranking guardrail (added 2026-05-01)
+
+**Rule today (prose):** None at the structural level. Today's NA prompt has principle #7 (*"Match each flag to at most one hypothesis. Flags clustering on the same NF are a strong signal the NF itself is the fault source"*) and principle #8 (*"the observing NF can be the fault source"*), but neither requires NA to weight a *direct-measurement* flag on NF X above a *derived* flag involving NF X. The relative ranking is left to the LLM's judgment — and the LLM gets it wrong on a meaningful fraction of runs.
+
+**Failure mode — wrong NF survives investigation.** When Phase 0 emits both a direct flag on the actual culprit AND a derived flag on a downstream-symptom NF, NA can mis-rank. The downstream-symptom NF gets the top hypothesis, its Investigator survives investigation (because the symptom is real at that NF), and Synthesis ratifies the wrong NF with high confidence per its Case A rule (*"sole-surviving hypothesis is the root cause with high confidence"*).
+
+The canonical example is `run_20260501_032822_call_quality_degradation` (post-PR-5):
+
+- **Actual fault:** tc-netem injecting 30% loss on RTPEngine's container network.
+- **Phase 0 flagged BOTH:**
+  - **Direct:** `derived.rtpengine_loss_ratio = 23.35` (RTPEngine's own RTCP-receiver-reported loss measurement — a direct observation at RTPEngine).
+  - **Derived:** `derived.upf_activity_during_calls = 0.04` (a cross-layer ratio of UPF traffic against active dialog count — a *consequence* of media-plane breakdown, not a measurement of UPF's own behavior).
+- **The KB even said it.** The metric entry on `rtpengine_loss_ratio` lists the chaos-injected scenario first: *"Could be loss on the rtpengine container's egress (iptables / tc / interface congestion), loss anywhere upstream of the receiver, or — with simultaneous UPF counter degradation — loss on the N3 path."*
+- **NA's mis-ranking:** h1 = UPF (fit=0.90), h2 = RTPEngine (fit=0.60), h3 = UPF-RTPEngine path (fit=0.40). The derived flag drove h1.
+- **Investigator outcome:** h1 (UPF) NOT_DISPROVEN on a misread of `get_dp_quality_gauges` (Investigator interpreted UPF's `in 18.1 / out 14.7 pps` asymmetry as "UPF is dropping internally" when it's actually a measurement artifact). h2 (RTPEngine) DISPROVEN because the Investigator didn't run a triangulation probe. h3 (path) DISPROVEN — but its Investigator coincidentally ran `measure_rtt(pcscf, rtpengine)`, found 33% loss, and put `rtpengine` in `alternative_suspects`. Right answer arrived in the wrong hypothesis's alt-suspects field.
+- **Decision E aggregator:** Pool = `[upf SURVIVOR, rtpengine PROMOTED]`. Survivor present → no re-investigation triggered (per E's contract). Synthesis read Case A and ratified `upf` with high confidence.
+- **Final score: 21%.** Wrong NF, high (mis-calibrated) confidence.
+
+The structural pattern: **direct-measurement flags carry stronger evidential weight than derived/cross-layer flags, but today's NA ranking gives them no priority by default.** This is the residual that the ADR's Non-goals section previously left explicitly unaddressed — Decision H closes it.
+
+**Proposed structure:** A deterministic post-NA validator that runs after Decision D's blocklist check and Decision G's grounding check pass. Two parts:
+
+1. **Direct-vs-derived flag classifier** — partition the Phase-0 anomaly flags into:
+   - `direct` — the metric is a measurement OF the named NF's own state (e.g. `rtpengine_loss_ratio` is RTPEngine's RTCP reports about its own peers; `pcscf_processing_time` is P-CSCF's own internal timing). Authored on the metric's KB entry as `flag_kind: "direct"`.
+   - `derived` — the metric is a cross-layer or composite signal whose source could be any NF in the composing path (e.g. `upf_activity_during_calls` is a ratio of UPF throughput to IMS dialog count — RTPEngine's loss can collapse it, UPF's loss can collapse it, the gNB's loss can collapse it). Authored as `flag_kind: "derived"` or `"cross_layer"`.
+
+   The classifier reads the KB entry per flagged metric and labels the flag accordingly. Metrics whose KB entry doesn't carry the `flag_kind` field default to `derived` — conservative: an unlabeled flag doesn't earn priority weight.
+
+2. **Ranking-coverage check** — for every direct flag, the named NF must:
+   - (a) Be the `primary_suspect_nf` of at least one ranked hypothesis with `explanatory_fit ≥ 0.7`, OR
+   - (b) The NA `summary` field must contain explicit reasoning naming why this NF was demoted (e.g. *"RTPEngine's loss ratio was treated as a downstream report because <evidence X>"*). Detected via substring match on the NF name AND any of {*demoted, downstream, observer, reporter, secondary, ruled out*}.
+
+   If neither (a) nor (b) holds for any direct flag, REJECT the NA report and resample with the rejection reason injected:
+
+   > Direct-measurement flag `rtpengine_loss_ratio` fires on `rtpengine`, but no hypothesis names `rtpengine` as `primary_suspect_nf` with `fit ≥ 0.7`, and the report `summary` does not name `rtpengine` with demotion reasoning. Direct flags carry stronger evidential weight than derived flags — promote `rtpengine` to a primary or co-primary hypothesis, OR include explicit reasoning in `summary` for why this direct flag should be treated as a downstream report.
+
+The accept-with-warning policy from PR 2 / PR 4 / PR 5 applies on second REJECT.
+
+**Open design questions:**
+
+- *KB metadata coverage.* H requires every metric the screener might flag to carry a `flag_kind: "direct" | "derived" | "cross_layer"` field. Some metrics are obviously direct (named after the NF that owns them — `pcscf_processing_time`, `upf_n6_tx_errors`); others are obviously derived (anything in `derived.*` namespace, anything labeled `cross_layer` in its `What it measures` text). A coverage audit is needed before H ships, similar to the audit Decision G needs. The fallback (unlabeled → `derived`) is conservative; H's REJECT will fire less often than ideal until the KB is fully labeled, but it won't false-positive.
+- *Threshold tuning.* `fit ≥ 0.7` is a starting heuristic. Too low (0.5) admits weak rankings; too high (0.9) is unrealistic when NA legitimately distributes weight across cascade hypotheses. The Apr-30 / May-1 runs that scored well had primary fit values of 0.85-0.90, so 0.7 leaves enough room for legitimate variation while still catching the 0.60 mis-rank in the call_quality_degradation run.
+- *Demotion-reasoning detection.* The substring-match approach (NF name + any of {*demoted, downstream, …*}) is approximate. A better long-term form is structured: require NA to emit a typed `demoted_nfs: list[{nf, reason}]` field on the report when it intentionally treats a direct-flagged NF as a downstream observer. Defer to a follow-up.
+- *Composes with Decisions D, E, G.* H is upstream of E (NA runs before Phase 6.5's pool aggregator). When H is in place, E's pool composition changes: NA's hypothesis list more often contains the actual culprit, so E's promoted-suspect path fires less often. D and G remain orthogonal — D blocks mechanism-scoping phrases, G blocks fabricated mechanism narratives, H ranks NFs correctly.
+- *Why post-NA, not pre-NA?* Pre-NA enforcement would require the orchestrator to compute candidate NFs from direct flags and inject them as required hypotheses. Doable, but harder and less LLM-shaped. Post-NA REJECT-and-resample is the consistent pattern with D / A2 / G — let NA produce, validate against deterministic constraint, resample with structured feedback.
+
+**Expected impact:** Directly addresses the wrong-NF-ranking failure exposed by the call_quality_degradation run. The linter would have flagged `rtpengine_loss_ratio` (direct flag on RTPEngine) and rejected the NA report because `rtpengine` was not in any hypothesis with `fit ≥ 0.7`. NA's resample would have either bumped RTPEngine to h1 (fit ≥ 0.7), making the Investigator probe RTPEngine more rigorously, OR included explicit demotion reasoning that downstream agents (and the human reviewer) can audit. Score floor for this scenario rises from 21% to whatever a properly-ranked RTPEngine hypothesis lands at — likely 70-100% depending on Investigator probe quality.
+
+---
+
 ## Implementation ordering
 
-The original ordering (D → F → A → E → C → B) was based on per-PR effort. Real-run evidence has reshuffled it twice:
+The original ordering (D → F → A → E → C → B) was based on per-PR effort. Real-run evidence has reshuffled it three times:
 
 1. **After PR 2 (`run_20260501_012613_data_plane_degradation`):** Decision D worked exactly as designed at the NA stage — all three statements passed the linter on first attempt with zero LLM cost. But the same mechanism-scoping failure mode showed up at the IG stage: IG re-introduced layer-scoping in `expected_if_hypothesis_holds` and `falsifying_observation` text, the Investigator marked h1 DISPROVEN on a layer mismatch, and the verdict tree was misleading (3 DISPROVEN with diagnosis still landing on UPF via `alternative_suspects`, score 90% but confidence `low`). → **Decision A bumped to PR 4 with sub-check A2.**
 2. **After PR 4 (`run_20260501_022351_data_plane_degradation`):** PR 4 closed the layer-scoping leak — IG resampled, Investigator returned a clean NOT_DISPROVEN on h1, Synthesis hit calibrated high confidence, score 100%. But the same run exposed a NEW failure mode: NA *fabricated* a mechanism narrative ("traffic storm overloading the UPF") that the blocklist-based linters cannot catch because the words aren't on any blocklist. The 100% score was generous — UPF was correctly identified, but the mechanism in the diagnosis text is confabulated. → **Decision G added.**
+3. **After PR 5 (`run_20260501_032822_call_quality_degradation`):** PR 5's bounded re-investigation only fires when the verdict tree is all-DISPROVEN. This run had a survivor (h1 UPF NOT_DISPROVEN) — but the WRONG NF survived. NA mis-ranked: a `direct` flag on RTPEngine (`rtpengine_loss_ratio`) lost to a `derived` flag involving UPF (`upf_activity_during_calls`). RTPEngine got h2 (fit=0.60) when it should have been h1 (fit ≥ 0.85). The h1 (UPF) Investigator survived investigation on a misread of `dp_quality_gauges`, the h2 (RTPEngine) Investigator lacked triangulation, and Synthesis ratified UPF with high confidence per Case A. Score 21%, wrong NF entirely. The Decision E candidate pool DID include RTPEngine as a PROMOTED member (via h3's strong-cite), but `pool.has_survivor=True` meant no re-investigation triggered, and Synthesis trusted the survivor. → **Decision H added.**
 
-Two implications carrying forward:
+Implications carrying forward:
 
 - Each shipped PR closes one residual and exposes the next. Sequencing by per-PR effort is unstable; sequencing by per-PR evidence is what produces continued gains.
 - Decision F applied alone over an all-DISPROVEN tree forces `inconclusive`, weakening a diagnosis that recovered correctly. **F's value is conditional on Decision E producing clean NOT_DISPROVEN survivors first** (via the candidate-pool aggregator's bounded re-investigation path).
@@ -347,10 +399,11 @@ Two implications carrying forward:
 | ✅ PR 5 | E | shipped 2026-05-01 | Candidate-pool aggregator + bounded re-investigation. Creates the clean NOT_DISPROVEN survivors that Synthesis-stage decisions operate on. Closes the verdict-tree-vs-diagnosis mismatch directly. Conditional follow-ups (5.5a + 5.5b) below |
 | **PR 5.5a** | E hardening (EV ordering) | small (~15 min) | Move EvidenceValidator to run AFTER Phase 6.5 (re-investigation) instead of before it. Currently EV runs at Phase 6 and never sees the re-investigation Investigator's tool-call trace, so a fabricated-citation re-investigation verdict could ride through unchallenged. **Trigger condition for prioritizing this:** any re-investigation Investigator's verdict cites a tool that wasn't actually called (visible in EV output if EV had run over it) |
 | **PR 5.5b** | E hardening (strict pool validation) | medium (~half day) | Convert Synthesis from plain-markdown to structured `DiagnosisReport` output. Add typed `primary_suspect_nf: _KnownNF` field. Post-emit guardrail rejects values not in `candidate_pool` and resamples once with the rejection reason injected into the Synthesis prompt. Touches: `subagents/synthesis.py` (add `output_schema`), `models.py` (extend `DiagnosisReport`), `_build_result` (markdown rendering for the recorder so existing `.md` reports keep their shape), possibly the chaos scorer if it strictly expects prose. **Trigger condition for prioritizing this:** any Synthesis run names an out-of-pool NF on a non-empty pool. PR 5 ships prompt-side enforcement only; this PR adds structural enforcement |
-| **PR 3** | **F** | low (compute) but conditional | Confidence cap. Deferred from its original second-position slot to here because its inputs (clean NOT_DISPROVEN survivors with structured probe evidence) only exist after E is in place. F over an all-DISPROVEN tree forces `inconclusive` on correct-via-recovery diagnoses — a Pareto-worse outcome |
+| **PR 3** | **F** | low (compute) but conditional | Confidence cap. Deferred from its original second-position slot to here because its inputs (clean NOT_DISPROVEN survivors with structured probe evidence) only exist after E is in place. F over an all-DISPROVEN tree forces `inconclusive` on correct-via-recovery diagnoses — a Pareto-worse outcome. Also the cheap-and-broad backstop for the `run_20260501_032822` failure mode while H is being implemented |
+| **PR 9** | **H** | medium | NA direct-vs-derived ranking guardrail. Closes the wrong-NF-ranking failure exposed by `run_20260501_032822_call_quality_degradation`. Requires KB metadata (`flag_kind: "direct" \| "derived" \| "cross_layer"` on every metric entry the screener can flag) — a coverage audit is needed before H ships, similar to G's. Sequenced after F because F is the cheap-and-broad confidence backstop; H is the deeper structural fix specifically for the direct-vs-derived ranking failure |
 | **PR 6** | C | medium | Multi-shot Investigator consensus. Variance-reduction; lower priority while the dominant residuals are systemic-bias rather than variance |
 | **PR 8** | **G** | medium | Mechanism-claim grounding. Closes the fabrication failure mode exposed by `run_20260501_022351`. Sequenced before B because B subsumes G's KB-anchored pattern but G can ship sooner with regex + targeted KB lookup. Surfaces KB-coverage gaps that would block B; fixing them in advance de-risks PR 7 |
-| **PR 7** | B | large | Typed probe selection from KB. Heaviest design; depends on KB coverage. Ships last after the cheaper structural fixes have set the floor and after G has exposed which KB gaps need filling |
+| **PR 7** | B | large | Typed probe selection from KB. Heaviest design; depends on KB coverage. Ships last after the cheaper structural fixes have set the floor and after G + H have exposed which KB gaps need filling |
 
 ### Sequencing principles surfaced from real-run evidence
 
@@ -369,7 +422,7 @@ Each PR changes the pipeline's failure-mode distribution. Shipping them serially
 
 - **Replacing the LLM agents.** The agents are still doing useful work — generating hypothesis statements, walking causal chains, interpreting probe results, synthesizing diagnoses. The seven moves above harden their outputs without removing them.
 - **Eliminating prompt rules.** Some prompt rules will remain — particularly interpretive ones the Investigator uses on probe results, and the NA hypothesis-ranking heuristics. The ADR claims structural fixes scale better than prose for *constraint-shaped* failure modes (the IG must include a partner probe; the NA must not use scope words; the NA must not invent mechanisms the KB doesn't authorize; Synthesis must not pick a suspect outside the candidate pool; Synthesis must not claim high confidence on weak evidence). It does NOT claim every prompt rule should be replaced.
-- **Solving NA-stage hypothesis-ranking variance.** Part I documented run-to-run variance at two stages: NA hypothesis-ranking ("flagged NF is the cause" vs "flagged NF is the reporter") and Synthesis confidence calibration. Decisions E and F together address the Synthesis-stage failures (E creates clean NOT_DISPROVEN survivors; F caps confidence on them) — neither in isolation is sufficient. Decision C (multi-shot consensus) addresses Investigator-stage variance. NA-stage hypothesis-ranking variance — the original "P-CSCF was not in the hypothesis list at all" failure — remains unaddressed by this ADR; it likely needs its own structural move (e.g. a deterministic post-NA validator that requires every Phase-0-flagged NF to appear as a primary or secondary hypothesis, with explicit reasoning if NA opted to interpret the flag as a downstream symptom).
+- **Solving full NA-stage hypothesis-ranking variance.** Part I documented run-to-run variance at two stages: NA hypothesis-ranking ("flagged NF is the cause" vs "flagged NF is the reporter") and Synthesis confidence calibration. The Synthesis-stage failures are addressed by Decisions E and F together (E creates clean NOT_DISPROVEN survivors; F caps confidence on them) — neither in isolation is sufficient. Decision C (multi-shot consensus) addresses Investigator-stage variance. **The direct-vs-derived flag-ranking variant of NA-stage ranking is now addressed by Decision H** (added 2026-05-01 after `run_20260501_032822_call_quality_degradation`). Other NA-stage ranking variants — e.g. Part I's original "P-CSCF was not in the hypothesis list at all" failure where the right NF is missing entirely from NA's output — remain partially addressed by H (if the missing NF was flagged by Phase 0 as `direct`, H requires it to appear in the hypothesis list) but not fully (NF flagged only via correlation hints, not a direct flag, can still be missed). The general "ensure every plausibly-implicated NF appears somewhere in NA's ranked list" guardrail is still out of scope.
 
 ---
 
@@ -387,7 +440,7 @@ The point of this pattern is that prompt rules tend to introduce drift on adjace
 
 ## Implementation Decision
 
-Superseded — see the **Implementation ordering** section above for the current build sequence. The original sequence pinned in this section was D → F → A → E → C → B, ordered by per-PR effort. Real-run evidence after each shipped PR has reshuffled it twice — first to A (extended) → E → F → C → B after `run_20260501_012613_data_plane_degradation`, then to E → F → C → G → B after `run_20260501_022351_data_plane_degradation` exposed the NA fabrication failure mode (Decision G added). The full rationale lives in *Implementation ordering › Revised build order*.
+Superseded — see the **Implementation ordering** section above for the current build sequence. The original sequence pinned in this section was D → F → A → E → C → B, ordered by per-PR effort. Real-run evidence after each shipped PR has reshuffled it three times — first to A (extended) → E → F → C → B after `run_20260501_012613_data_plane_degradation`, then to E → F → C → G → B after `run_20260501_022351_data_plane_degradation` exposed the NA fabrication failure mode (Decision G added), and most recently to F → H → C → G → B after `run_20260501_032822_call_quality_degradation` exposed the NA direct-vs-derived ranking failure (Decision H added). The full rationale lives in *Implementation ordering › Revised build order*.
 
 ---
 

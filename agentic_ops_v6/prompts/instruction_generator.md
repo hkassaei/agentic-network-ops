@@ -7,6 +7,11 @@
 ## Fired Events (for context)
 {fired_events}
 
+## KB-Curated Probe Candidates (Decision B)
+{probe_candidates}
+
+These candidates come from the KB's `how_to_verify_live` and `disambiguators` graph for each hypothesis's `primary_suspect_nf`. **Prefer probes from this list** — each candidate carries a KB-authored `tool`, `args_hint`, expected reading, and falsifying observation already grounded in the metric semantics. When a candidate matches what your plan needs, use it verbatim or with minimal adjustment. Free-form a probe only when the candidate list is empty for a hypothesis or none of the candidates address the specific discriminator the plan needs (cross-NF triangulation, control-plane state, etc.). When you free-form, document briefly in the plan's `notes` why no candidate sufficed — this surfaces KB-coverage gaps for follow-up authoring.
+
 ## Resample feedback (only present on resample)
 {guardrail_rejection_reason}
 

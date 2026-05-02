@@ -76,6 +76,10 @@ from .guardrails.na_ranking import (
     get_known_nfs,
     lint_na_ranking_coverage,
 )
+from .guardrails.probe_selection import (
+    render_candidates_for_prompt,
+    select_probes,
+)
 from .guardrails.runner import GUARDRAIL_REASON_KEY, run_phase_with_guardrail
 from .guardrails.confidence_cap import cap_synthesis_confidence
 from .guardrails.investigator_consensus import (
@@ -983,6 +987,11 @@ async def investigate(
         # here so the Synthesis prompt's `{candidate_pool}` template
         # always resolves.
         "candidate_pool": "",
+        # Probe candidates (Decision B, PR 7) — empty on first run,
+        # populated immediately before Phase 4 from the KB. Initialized
+        # here so the IG prompt's `{probe_candidates}` template always
+        # resolves.
+        "probe_candidates": "",
     }
 
     all_phases: list[PhaseTrace] = []
@@ -1148,6 +1157,43 @@ async def investigate(
     # -------- Phase 4: InstructionGenerator --------
     # Render hypotheses back into state as a prompt-friendly structure
     state["network_analysis"] = _pretty_print_na_report(na_report, hypotheses)
+
+    # Decision B (PR 7) — typed probe selection from KB. For each
+    # ranked hypothesis, walk the KB's `how_to_verify_live` and
+    # `disambiguators` graph to surface KB-curated probe candidates
+    # and inject them into IG's session state as `{probe_candidates}`.
+    # IG sees a per-hypothesis curated list and is prompt-instructed
+    # to prefer KB-sourced probes over free-form ones.
+    #
+    # Hybrid policy: when the KB has no candidates for a hypothesis's
+    # primary_suspect_nf (current coverage is ~29% for `how_to_verify_live`),
+    # the prompt block tells IG to free-form per the standard rules.
+    # The empty-list signal also serves as the empirical KB-coverage
+    # audit the ADR called for: scenarios that consistently get
+    # "no KB candidates" reveal which NFs need authoring next.
+    candidates_by_hypothesis: dict[str, list] = {}
+    if _ranking_kb is not None:
+        for h in hypotheses:
+            try:
+                candidates_by_hypothesis[h.id] = select_probes(h, _ranking_kb)
+            except Exception as _e:
+                log.warning(
+                    "Decision B — select_probes failed for %s (%s); "
+                    "IG will free-form probes for this hypothesis.",
+                    h.id, _e,
+                )
+                candidates_by_hypothesis[h.id] = []
+    else:
+        # KB load failed at NA-prep time; IG falls back to free-form
+        # for every hypothesis.
+        candidates_by_hypothesis = {h.id: [] for h in hypotheses}
+    state["probe_candidates"] = render_candidates_for_prompt(
+        candidates_by_hypothesis,
+    )
+    log.info(
+        "Decision B — KB-sourced candidates per hypothesis: %s",
+        {hid: len(cs) for hid, cs in candidates_by_hypothesis.items()},
+    )
 
     # Two layered guards run on IG's output:
     #

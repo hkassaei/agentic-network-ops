@@ -1444,15 +1444,25 @@ metrics:
 
           '
         meaning:
-          what_it_signals: 'Direct signal of active media-plane problems. Zero in healthy
-
-            operation; non-zero means RTPEngine is failing to relay packets
-
-            RIGHT NOW (not cumulative history).
-
-            '
-          spike: Active relay errors. Investigate RTPEngine container state or media path.
-          zero: Healthy default.
+          what_it_signals: |
+            Real-time rate of relay-loop errors at rtpengine —
+            packets the relay received but failed to forward
+            (rejected/malformed RTP, no matching session, send
+            call refused, etc.). Bounded to faults the relay
+            surfaces directly; insensitive to packet loss occurring
+            elsewhere on the media path (rtpengine container
+            boundaries, network between rtpengine and adjacent NFs,
+            RAN, radio). errors_per_second = 0 does NOT exonerate
+            the rtpengine container or the media plane — it only
+            narrows the fault location away from the relay loop
+            itself. For end-to-end media-plane loss visibility,
+            cross-check loss_ratio (RTCP-reported, sees loss
+            anywhere on the path).
+          spike: Active relay-loop errors. Investigate rtpengine container state, session/peer config, or relay resource limits.
+          zero: |
+            Healthy relay loop. Other parts of the media path may
+            still be lossy — verify with loss_ratio before treating
+            this as evidence the rtpengine container is uninvolved.
         healthy:
           scale_independent: true
           typical_range:
@@ -1477,9 +1487,37 @@ metrics:
           relationship: correlated_with
           use: Both reflect media-plane health; RTPEngine errors are the direct signal.
         disambiguators:
+        - metric: ims.rtpengine.loss_ratio
+          separates: |
+            Faults inside the relay loop (errors_per_second > 0) vs.
+            packet loss occurring outside the relay loop
+            (errors_per_second = 0, loss_ratio > 0). errors_per_second
+            only fires for conditions the relay surfaces directly —
+            packets it received but failed to forward. Loss occurring
+            elsewhere on the media path (on rtpengine's egress before
+            packets leave the host, between rtpengine and a downstream
+            hop, between an upstream hop and rtpengine's ingress, or
+            further away on the call path) reaches rtpengine only as
+            RTCP-reported loss from far-end receivers.
+            errors_per_second = 0 narrows WHERE the loss is, but does
+            not exonerate the rtpengine container — the relay can be
+            healthy while packets are dropped on the path the
+            container's traffic traverses.
         - metric: core.upf.gtp_indatapktn3upf_per_ue
-          separates: RTPEngine-specific fault (errors>0, UPF in/out symmetric) vs. UPF dropping (errors=0
-            at RTPEngine, UPF in/out asymmetric)
+          separates: |
+            Given errors_per_second = 0 and loss_ratio > 0, UPF N3
+            in/out symmetry further partitions the location:
+              - symmetric → loss is downstream of UPF's N3 egress
+                (between UPF and the receiver — RAN, radio).
+              - asymmetric (one direction reduced) → loss is upstream
+                of UPF's N3 egress for the affected direction. This
+                includes UPF-internal drops AND drops on the path
+                between an upstream NF and UPF's ingress on the
+                corresponding interface (for downlink, the path
+                between RTPEngine's relay output and UPF's N6
+                ingress). UPF counters alone cannot separate these
+                two; an active path probe (e.g. measure_rtt
+                rtpengine→upf) is needed to localize further.
         how_to_verify_live:
           tool: get_dp_quality_gauges
           args_hint: Returns rate-based MOS/loss/jitter alongside RTPEngine errors.
@@ -1616,9 +1654,27 @@ metrics:
         disambiguators:
           - metric: core.upf.gtp_outdatapktn3upf_per_ue
             separates: |
-              rtpengine-local loss (only rtpengine sees it) vs.
-              N3-path loss (both UPF counters and rtpengine loss
-              ratio move together).
+              Locations consistent with loss_ratio > 0, partitioned
+              by what UPF N3 counters show:
+                (a) UPF in/out both unchanged → loss is rtpengine-
+                    local (relay loop, container boundaries) OR on
+                    the uplink path between UPF and rtpengine OR
+                    downstream of the receiver. Counters cannot
+                    discriminate these further; errors_per_second at
+                    rtpengine narrows whether the relay loop itself
+                    is at fault (errors > 0) vs. outside it
+                    (errors = 0).
+                (b) UPF in/out both reduced together → loss on the
+                    N3 path (gNB↔UPF) affecting both directions.
+                (c) UPF in/out asymmetric (one direction reduced) →
+                    loss is upstream of UPF's N3 egress on that
+                    direction. For downlink (UPF out reduced), this
+                    includes the path between rtpengine's relay
+                    output and UPF's ingress on the rtpengine-facing
+                    interface, AND UPF-internal drops. UPF counters
+                    alone cannot separate these two; a path probe
+                    (e.g. measure_rtt rtpengine→upf) is needed to
+                    localize further.
         how_to_verify_live:
           tool: get_dp_quality_gauges
           args_hint: "window_seconds=120 to confirm MOS drop and packet-loss percentage across the same window"
@@ -2543,6 +2599,23 @@ metrics:
             fine)
         - metric: core.amf.ran_ue
           separates: UEs gone (ran_ue=0) vs. UEs present but no traffic (ran_ue normal, GTP drops)
+        - metric: ims.rtpengine.loss_ratio
+          separates: |
+            When UPF N3 in/out is asymmetric (one direction reduced
+            relative to the other while calls are active), the deficit
+            can originate at UPF (UPF-internal drop on the affected
+            direction) OR upstream of UPF on that direction (anywhere
+            on the path between the upstream NF and UPF's ingress on
+            the corresponding interface — for downlink, the path
+            passes through RTPEngine and the network between RTPEngine
+            and UPF). A high loss_ratio at RTPEngine corroborates that
+            the affected direction is lossy end-to-end; combined with
+            errors_per_second = 0, the loss is outside RTPEngine's
+            relay loop — consistent with either UPF-internal OR
+            upstream-of-UPF loss. UPF counters and RTPEngine counters
+            together cannot separate these two; a path probe between
+            the upstream NF and UPF (e.g. measure_rtt rtpengine→upf
+            for downlink) is required.
         how_to_verify_live:
           tool: get_dp_quality_gauges
           args_hint: Returns rate-based UPF in/out pps with in/out symmetry check.

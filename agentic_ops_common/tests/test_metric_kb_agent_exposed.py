@@ -74,11 +74,15 @@ def test_full_project_kb_loads_under_new_schema():
     # Sanity: at least one metric entry came through.
     assert kb.metrics, "KB loaded with no metrics — something else is wrong"
 
-    # Step 2 of the diagnostic-tool ADR has shipped: ~16 metrics are
-    # now tagged with agent_exposed=True. The exact count is allowed
-    # to evolve over time as we refine the supporting set, but it
-    # should never be zero (which would mean we lost the tagging) or
-    # implausibly large (>40 would mean we're back to noise).
+    # ADR `expose_kb_disambiguators_to_investigator.md` (2026-05-06)
+    # expanded agent_exposed coverage to every metric with authored
+    # `meaning` or `disambiguators` content (30 entries flipped from
+    # false→true), bringing the total to ~46. Previous range was
+    # 10–40; bumped to 10–70 to accommodate the deliberate expansion
+    # plus modest future growth, without losing the noise-detection
+    # bound at the upper end. The tighter contract (rich-content
+    # entries MUST be exposed) is enforced separately in
+    # `test_kb_authoring_invariants.py`.
     exposed_count = 0
     exposed_ids: list[str] = []
     for nf, nf_block in kb.metrics.items():
@@ -87,8 +91,8 @@ def test_full_project_kb_loads_under_new_schema():
                 exposed_count += 1
                 exposed_ids.append(f"{nf_block.layer.value}.{nf}.{mname}")
 
-    assert 10 <= exposed_count <= 40, (
-        f"Expected 10–40 metrics tagged agent_exposed=True; got "
+    assert 10 <= exposed_count <= 70, (
+        f"Expected 10–70 metrics tagged agent_exposed=True; got "
         f"{exposed_count}. If you intentionally trimmed or expanded "
         f"the supporting set, update this range. Currently exposed: "
         f"{sorted(exposed_ids)}"

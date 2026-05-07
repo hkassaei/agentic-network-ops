@@ -81,7 +81,14 @@ def compute_evidence_strength_for_verdict(
         * CONTRADICTS — refutes the hypothesis
         * AMBIGUOUS — couldn't determine
 
-    Strength rules:
+    Probes whose `outcome` is `tool_unavailable` or `error` are filtered
+    out before scoring — they did not produce evidence at all (the
+    target container was missing the required binary, or the tool
+    failed for another structural reason). Counting them would let a
+    verdict driven entirely by un-runnable probes claim STRONG
+    evidence; see docs/ADR/nf_container_diagnostic_tooling.md.
+
+    Strength rules (computed against the FILTERED probe list):
         * NONE — no probes at all OR more than half are AMBIGUOUS
           (the hypothesis didn't actually get tested).
         * WEAK — at least one CONTRADICTS, OR fewer than 2 CONSISTENT.
@@ -93,7 +100,10 @@ def compute_evidence_strength_for_verdict(
     don't typically drive Synthesis confidence (they should be filtered
     out by the caller — only the surviving verdict drives the cap).
     """
-    probes = verdict.probes_executed
+    probes = [
+        p for p in verdict.probes_executed
+        if p.outcome not in ("tool_unavailable", "error")
+    ]
     if not probes:
         return "NONE"
 
@@ -304,15 +314,25 @@ def _explain_verdict_strength(
     verdict: InvestigatorVerdict,
     strength: EvidenceStrength,
 ) -> str:
-    """Render a short rationale string for the recorder / cap note."""
-    probes = verdict.probes_executed
+    """Render a short rationale string for the recorder / cap note.
+
+    Probes excluded from the strength score (tool_unavailable / error)
+    are counted separately so the rationale makes clear they were not
+    silently dropped.
+    """
+    all_probes = verdict.probes_executed
+    excluded = sum(1 for p in all_probes if p.outcome in ("tool_unavailable", "error"))
+    probes = [p for p in all_probes if p.outcome not in ("tool_unavailable", "error")]
     consistent = sum(1 for p in probes if p.compared_to_expected == "CONSISTENT")
     contradicting = sum(1 for p in probes if p.compared_to_expected == "CONTRADICTS")
     ambiguous = sum(1 for p in probes if p.compared_to_expected == "AMBIGUOUS")
     total = len(probes)
-    return (
+    base = (
         f"verdict {verdict.hypothesis_id}: "
         f"{consistent}/{total} CONSISTENT, "
         f"{contradicting} CONTRADICTS, "
         f"{ambiguous} AMBIGUOUS"
     )
+    if excluded:
+        base += f" (+{excluded} excluded as tool_unavailable/error)"
+    return base

@@ -318,21 +318,45 @@ def _render_two_block_per_nf(
         layer = NF_LAYER.get(nf, "?")
         out.append(f"{nf.upper()} ({layer} layer):")
 
-        # Block 1 — Model features
+        # Block 1 — Model features. Each feature is rendered through the
+        # unified KB-block helper so the LLM sees the full authored
+        # semantics (what_it_signals, value-specific interpretation,
+        # every disambiguator with partner value inlined).
         feats = feats_by_nf.get(nf, {})
         out.append("  -- Model features --")
         if feats:
             for fkey, val in sorted(feats.items()):
-                out.extend(_render_model_feature(fkey, val, learned_means, kb))
+                kb_id = map_preprocessor_key_to_kb(fkey)
+                entry = kb.get_metric(kb_id) if kb_id else None
+                out.extend(_render_metric_with_full_kb_block(
+                    label=fkey,
+                    value=val,
+                    entry=entry,
+                    kb=kb,
+                    raw_snapshot=raw_snapshot,
+                    features=features,
+                    learned_value=learned_means.get(fkey),
+                ))
         else:
             out.append("    (no model features for this NF)")
 
-        # Block 2 — Diagnostic supporting
+        # Block 2 — Diagnostic supporting. Same renderer, raw-snapshot
+        # value lookup instead of preprocessor-feature lookup.
         supporting = supporting_by_nf.get(nf, [])
         out.append("  -- Diagnostic supporting --")
         if supporting:
             for kb_id, entry in supporting:
-                out.extend(_render_supporting_metric(kb_id, entry, raw_snapshot))
+                metric_name = kb_id.split(".", 2)[-1]
+                raw_value = _lookup_raw_value(kb_id, raw_snapshot)
+                out.extend(_render_metric_with_full_kb_block(
+                    label=metric_name,
+                    value=raw_value,
+                    entry=entry,
+                    kb=kb,
+                    raw_snapshot=raw_snapshot,
+                    features=features,
+                    learned_value=None,
+                ))
         else:
             out.append("    (no diagnostic supporting metrics for this NF)")
         out.append("")
@@ -394,92 +418,160 @@ def _bucket_supporting_metrics_by_nf(
     return by_nf
 
 
-def _render_model_feature(
-    fkey: str,
-    value: float,
-    learned_means: dict[str, float],
-    kb: MetricsKB,
-) -> list[str]:
-    """One model-feature entry. Includes value + learned baseline +
-    KB-derived semantic where available."""
-    lines = [f"    {fkey} = {_fmt_value(value)}"]
-
-    learned = learned_means.get(fkey)
-    if learned is not None:
-        lines.append(f"        learned_normal = {_fmt_value(learned)}")
-
-    # Pull KB content via the feature-key → KB-id mapping. Some features
-    # (e.g., `derived.rtpengine_loss_ratio`) won't map cleanly; just
-    # skip the annotation in that case.
-    kb_id = map_preprocessor_key_to_kb(fkey)
-    if kb_id is not None:
-        entry = kb.get_metric(kb_id)
-        if entry and entry.meaning and entry.meaning.what_it_signals:
-            first_sentence = entry.meaning.what_it_signals.split(".")[0].strip()
-            if first_sentence:
-                lines.append(f"        {first_sentence}.")
-
-    return lines
-
-
-def _render_supporting_metric(
+def _lookup_raw_value(
     kb_id: str,
-    entry: Any,
     raw_snapshot: dict[str, dict[str, float]],
-) -> list[str]:
-    """One diagnostic-supporting metric entry. Pulls value from the
-    raw snapshot (since these are kamcmd / Prometheus raw values, not
-    preprocessor outputs).
+) -> Optional[float]:
+    """Read a metric's current value from the snapshot using its
+    fully-qualified KB id `<layer>.<nf>.<metric>`.
 
     The snapshot's per-NF dict can be either flat (`{key: value}`) or
     wrapped (`{"metrics": {key: value}}`) — both shapes are accepted.
     Live mode (parse_nf_metrics_text) emits flat. Historical mode
     (observation_snapshots from MetricsCollector) emits wrapped.
+    Returns None when the metric is not in the snapshot.
     """
-    # kb_id = "<layer>.<nf>.<metric_name>"
     parts = kb_id.split(".", 2)
     if len(parts) < 3:
-        return [f"    {kb_id} = (KB id malformed)"]
+        return None
     _layer, nf, metric_name = parts
-
-    # Look up the raw value in the snapshot. Handle both shapes —
-    # see comment above. Some Kamailio metric names contain ":" which
-    # the parse layer preserves verbatim.
     nf_data = raw_snapshot.get(nf) or {}
     if isinstance(nf_data, dict) and "metrics" in nf_data:
         nf_data = nf_data["metrics"]
-    raw_value = nf_data.get(metric_name) if isinstance(nf_data, dict) else None
+    if not isinstance(nf_data, dict):
+        return None
+    return nf_data.get(metric_name)
 
-    type_str = f"[{entry.type.value}"
-    if entry.unit:
-        type_str += f", {entry.unit}"
-    type_str += "]"
 
-    if raw_value is None:
+def _select_meaning_variant(
+    entry: Any,
+    value: Optional[float],
+) -> Optional[tuple[str, str]]:
+    """Pick the meaning.* variant that matches the current value.
+
+    Returns (variant_name, variant_text) or None if no authored
+    variant matches.
+
+    Selection rule (ordered):
+      - value is None  → no variant (we can't reason about absence).
+      - value == 0 and meaning.zero authored → ("zero", text).
+      - value > healthy.typical_range[1] and meaning.spike authored → ("spike", text).
+      - value < healthy.typical_range[0] (non-zero) and meaning.drop authored → ("drop", text).
+      - meaning.steady_non_zero authored and value within healthy range and value != 0
+        → ("steady_non_zero", text).
+      - otherwise: no variant.
+
+    Deliberately conservative — when the KB doesn't author a matching
+    variant, the renderer omits the line cleanly rather than guessing.
+    """
+    if value is None or entry is None or entry.meaning is None:
+        return None
+    m = entry.meaning
+    healthy = entry.healthy
+    typical = healthy.typical_range if healthy else None
+
+    if value == 0 and m.zero:
+        return ("zero", m.zero)
+    if typical is not None:
+        low, high = typical
+        if value > high and m.spike:
+            return ("spike", m.spike)
+        if value < low and value != 0 and m.drop:
+            return ("drop", m.drop)
+        if low <= value <= high and value != 0 and m.steady_non_zero:
+            return ("steady_non_zero", m.steady_non_zero)
+    # Fall through: no typical_range or no matching variant authored.
+    if m.spike and (value or 0) > 0 and typical is None:
+        # When typical_range is absent, treat any non-zero as a spike
+        # only if zero is the authored healthy state. Conservative.
+        return None
+    return None
+
+
+def _render_metric_with_full_kb_block(
+    *,
+    label: str,
+    value: Optional[float],
+    entry: Optional[Any],
+    kb: MetricsKB,
+    raw_snapshot: dict[str, dict[str, float]],
+    features: dict[str, float],
+    learned_value: Optional[float],
+) -> list[str]:
+    """Unified renderer. One metric → its full KB-authored semantic block.
+
+    Used for BOTH the Model-features and Diagnostic-supporting blocks,
+    so every metric the LLM sees carries the same depth: full
+    `what_it_signals` (verbatim, no truncation), the value-specific
+    `meaning.*` variant matching the current value, every
+    `disambiguators` entry with the partner metric's current value
+    inlined, full `description`, full `healthy.pre_existing_noise`,
+    and `healthy.typical_range`.
+
+    The truncation that hid 30 metrics' worth of authored content from
+    the LLM (see ADR `expose_kb_disambiguators_to_investigator.md`) is
+    deliberately impossible here — there is no first-sentence shortcut,
+    no length cap, no paraphrase. A static-analysis test in
+    `tests/test_renderer_no_truncation_patterns.py` enforces that the
+    forbidden patterns never reappear in the source.
+    """
+    lines: list[str] = []
+
+    # ---- Header line: `label = value [type, unit]` ----
+    type_annotation = ""
+    if entry is not None:
+        type_str = f"[{entry.type.value}"
+        if entry.unit:
+            type_str += f", {entry.unit}"
+        type_str += "]"
+        type_annotation = f" {type_str}"
+    if value is None:
         value_str = "(not in snapshot)"
     else:
-        value_str = _fmt_value(raw_value)
+        value_str = _fmt_value(value)
+    lines.append(f"    {label} = {value_str}{type_annotation}")
 
-    lines = [f"    {metric_name} = {value_str} {type_str}"]
+    # ---- Learned baseline (model-features path only) ----
+    if learned_value is not None:
+        lines.append(f"        learned_normal = {_fmt_value(learned_value)}")
 
-    # Description (one line, agent-readable).
+    if entry is None:
+        return lines
+
+    # ---- Healthy typical range ----
+    if entry.healthy and entry.healthy.typical_range is not None:
+        low, high = entry.healthy.typical_range
+        lines.append(
+            f"        healthy_range = [{_fmt_value(low)}, {_fmt_value(high)}]"
+        )
+
+    # ---- Value-specific interpretation ----
+    variant = _select_meaning_variant(entry, value)
+    if variant is not None:
+        variant_name, variant_text = variant
+        lines.append(f"        interpretation ({variant_name}):")
+        for vline in variant_text.rstrip().splitlines():
+            lines.append(f"            {vline}")
+
+    # ---- Full what_it_signals (no truncation) ----
+    if entry.meaning and entry.meaning.what_it_signals:
+        lines.append("        what_it_signals:")
+        for sline in entry.meaning.what_it_signals.rstrip().splitlines():
+            lines.append(f"            {sline}")
+
+    # ---- Full description (no truncation) ----
     if entry.description:
-        first_sentence = entry.description.split(".")[0].strip()
-        if first_sentence:
-            lines.append(f"        {first_sentence}.")
+        lines.append("        description:")
+        for dline in entry.description.rstrip().splitlines():
+            lines.append(f"            {dline}")
 
-    # Pre-existing noise — flag this prominently. The P-CSCF
-    # `httpclient:connfail` baseline is a famous trap (1300-1500 by
-    # default due to SCP_BIND_IP placeholder).
+    # ---- pre_existing_noise — flag prominently and in full ----
     if entry.healthy and entry.healthy.pre_existing_noise:
-        # Render only the first sentence to keep the line compact.
-        noise = entry.healthy.pre_existing_noise.strip().split(".")[0]
-        lines.append(f"        NOTE: {noise}.")
+        lines.append("        NOTE (pre-existing noise):")
+        for nline in entry.healthy.pre_existing_noise.rstrip().splitlines():
+            lines.append(f"            {nline}")
 
-    # Scale-dependent guidance: render layer special-cases this tag
-    # to translate "absolute count varies by deployment" into the
-    # presence-check framing the operator wants. ADR:
-    # get_diagnostic_metrics_tool.md — KB schema discussion.
+    # ---- Scale-dependent guidance ----
     if "scale_dependent" in (entry.tags or []):
         lines.append(
             "        Scale-dependent: read as a presence check "
@@ -487,7 +579,55 @@ def _render_supporting_metric(
             "varies by deployment."
         )
 
+    # ---- Disambiguators (every entry, full text, partner value inlined) ----
+    if entry.disambiguators:
+        lines.append("        disambiguators:")
+        for d in entry.disambiguators:
+            partner_value = _resolve_partner_value(
+                d.metric, raw_snapshot, features, kb,
+            )
+            partner_value_str = (
+                _fmt_value(partner_value) if partner_value is not None
+                else "not in snapshot"
+            )
+            lines.append(
+                f"            vs {d.metric} (current = {partner_value_str}):"
+            )
+            for sline in d.separates.rstrip().splitlines():
+                lines.append(f"                {sline}")
+
     return lines
+
+
+def _resolve_partner_value(
+    partner_kb_id: str,
+    raw_snapshot: dict[str, dict[str, float]],
+    features: dict[str, float],
+    kb: MetricsKB,
+) -> Optional[float]:
+    """Resolve a disambiguator partner's current value.
+
+    Lookup order:
+      1. Raw snapshot at the partner's `<nf>.<metric>` location.
+      2. Preprocessor features under any feature-key that maps back
+         to the partner's KB id (covers per-UE rates and other
+         derived features that don't appear in raw snapshots).
+
+    Returns None when neither path produces a numeric value. Non-
+    numeric values found in the snapshot or features are treated as
+    "not in snapshot" — the renderer must never crash on a malformed
+    upstream value.
+    """
+    raw = _lookup_raw_value(partner_kb_id, raw_snapshot)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    # Feature lookup — scan the features dict, mapping each feature
+    # key back to its KB id and matching against the partner.
+    for fkey, fval in features.items():
+        if map_preprocessor_key_to_kb(fkey) == partner_kb_id:
+            if isinstance(fval, (int, float)) and not isinstance(fval, bool):
+                return float(fval)
+    return None
 
 
 def _fmt_value(v: float) -> str:

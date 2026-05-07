@@ -151,7 +151,7 @@ The helper is wired into `_render_two_block_per_nf` (`diagnostic_metrics.py:286`
 
 ### KB flag flip (`network_ontology/data/metrics.yaml`)
 
-Set `agent_exposed: true` on every metric that has authored `meaning` and `disambiguators` content. The 29 affected metrics are enumerated in the Context inventory above. The flip is mechanical — no other field changes. The KB gains a brief authoring rule documented in [`metric_knowledge_base_schema.md`](metric_knowledge_base_schema.md): *"Any metric with authored `meaning` or `disambiguators` content should be `agent_exposed: true`. The flag exists to suppress duplicates or implementation-detail metrics, not to gate the KB's reasoning."*
+Set `agent_exposed: true` on every metric that has authored `meaning` content (whether or not it also has `disambiguators`). The 30 affected metrics are enumerated in the Context inventory above (17 with disambiguators + 13 with meaning-only). The flip is mechanical — no other field changes. The KB gains a brief authoring rule documented in [`metric_knowledge_base_schema.md`](metric_knowledge_base_schema.md): *"Any metric with authored `meaning` or `disambiguators` content should be `agent_exposed: true`. The flag exists to suppress duplicates or implementation-detail metrics, not to gate the KB's reasoning."*
 
 A new unit test `test_kb_authoring_invariants` enforces the rule going forward: any metric entry with `meaning` or `disambiguators` populated but `agent_exposed: false` (or unset) fails the test. This catches future drift at PR time, not in production.
 
@@ -190,7 +190,7 @@ The verification bar this ADR sets: **every single metric in the KB renders ever
 
 ### Per-metric exhaustiveness (the headline test)
 
-A single parametrized test, `test_every_kb_metric_renders_in_full`, enumerates **every metric entry in `network_ontology/data/metrics.yaml` at test-collection time** (not a hand-curated list — discovered by walking the loaded `MetricsKB`) and runs one parametrized case per metric. The current count is 32; if a metric is added to the KB, the test grows automatically. If an entry is renamed, the test fails until the rename is consistent.
+A single parametrized test, `test_every_kb_metric_renders_in_full`, enumerates **every metric entry with authored `meaning` content in `network_ontology/data/metrics.yaml` at test-collection time** (not a hand-curated list — discovered by walking the loaded `MetricsKB`) and runs one parametrized case per metric. The current count is 32 metrics with `meaning` (out of 108 total entries; the bare-counter entries without rich KB content are not in scope for the renderer-depth test). If a metric is added to the KB with authored `meaning`, the test grows automatically. If an entry is renamed, the test fails until the rename is consistent.
 
 For each metric, the test loads a synthetic snapshot containing that metric's value plus the values of every metric named in its `disambiguators[].metric` pointers, calls `_render_metric_with_full_kb_block`, and asserts every one of the following invariants on the rendered output:
 
@@ -202,7 +202,7 @@ For each metric, the test loads a synthetic snapshot containing that metric's va
 6. **`healthy.typical_range` rendered.** Always, when present. The agent reads "current = X vs healthy [low, high]" as a unit and the range is non-optional context.
 7. **No string-shortening operations applied to any KB-sourced field.** The test introspects the rendered output's substrings against the source KB strings character-by-character. If `len(rendered_field) < len(kb_field)` for any KB-sourced field, the test fails with the per-character diff.
 
-The test runs `pytest --tb=short` and reports per-metric pass/fail. A passing run shows 32 PASSED. A failure shows exactly which metric and which invariant.
+The test runs `pytest --tb=short` and reports per-metric pass/fail. A passing run shows ≥32 PASSED (one per `meaning`-bearing metric). A failure shows exactly which metric and which invariant.
 
 ### Anti-truncation source-level guards
 
@@ -218,7 +218,7 @@ The static check fails CI before the parametrized test even runs. Adding a new t
 
 ### KB authoring invariant
 
-`test_kb_authoring_invariants` enforces that **every** KB entry with authored `meaning` or `disambiguators` content has `agent_exposed: true`. This is the test that would have caught today's gap before it shipped: 29 entries with `disambiguators` and `agent_exposed: false` would all fail. After the ADR's KB flip, all 32 entries pass. Future entries authored without the flag fail at CI.
+`test_kb_authoring_invariants` enforces that **every** KB entry with authored `meaning` or `disambiguators` content has `agent_exposed: true`. This is the test that would have caught today's gap before it shipped: 17 entries with `disambiguators` and 13 more with `meaning`-only — 30 entries total — would all fail today. After the ADR's KB flip, all 32 `meaning`-bearing entries (including the 2 already-exposed `gnb`/`ran_ue`) pass. Future entries authored without the flag fail at CI.
 
 ### Per-metric inventory snapshot
 

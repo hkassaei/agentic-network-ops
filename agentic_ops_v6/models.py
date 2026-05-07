@@ -161,7 +161,8 @@ _InvestigatorTool = Literal[
     "query_subscriber",
     "list_flows",
     "get_flow",
-    "get_flows_through_component",
+    "get_canonical_flows_through_component",
+    "get_active_flows_through_component",
     "get_causal_chain",
     "find_chains_by_observable_metric",
     "OntologyConsultationAgent",
@@ -253,13 +254,38 @@ class FalsificationPlanSet(BaseModel):
 # ============================================================================
 
 class ProbeResult(BaseModel):
-    """Outcome of one probe."""
+    """Outcome of one probe.
+
+    Two outcome fields, intentionally:
+
+    - `compared_to_expected` — the LLM's judgment of evidence direction.
+      CONSISTENT supports the hypothesis, CONTRADICTS refutes it,
+      AMBIGUOUS means the probe ran but didn't speak to the hypothesis.
+
+    - `outcome` — whether the probe actually produced a signal at all.
+      Closed enum: consistent / contradicts / ambiguous /
+      tool_unavailable / error. Only `tool_unavailable` and `error` are
+      structurally meaningful today (they get filtered out of evidence-
+      strength scoring in the confidence-cap guardrail); the other three
+      mirror `compared_to_expected` and exist so the field can fully
+      replace it in a follow-up. See
+      docs/ADR/nf_container_diagnostic_tooling.md for why the split
+      matters and why we're shipping both fields together.
+
+    The Investigator prompt teaches the LLM to set
+    `outcome="tool_unavailable"` whenever a tool result begins with
+    `PROBE_TOOL_UNAVAILABLE:` (the contract from
+    `agentic_ops/tools.py::_tool_unavailable`).
+    """
     probe_description: str
     tool_call: str = ""                     # what was called
     observation: str = ""                    # what was observed (with [EVIDENCE: ...])
     compared_to_expected: Literal[
         "CONSISTENT", "CONTRADICTS", "AMBIGUOUS"
     ] = "AMBIGUOUS"
+    outcome: Literal[
+        "consistent", "contradicts", "ambiguous", "tool_unavailable", "error"
+    ] = "ambiguous"
     commentary: str = ""
 
 

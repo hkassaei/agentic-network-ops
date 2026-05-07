@@ -747,3 +747,19 @@ All seven open questions from the initial draft were resolved on 2026-04-19.
 6. **Derived metrics live under their owning NF.** A metric like `derived.pcscf_avg_register_time_ms` (the model feature key) lives in the KB as `ims.pcscf.avg_register_time_ms` — under the `pcscf` NF with `type: derived` and `source: derived`. No separate `derived:` pseudo-NF. The original model feature key is preserved in `feeds_model_features` for cross-reference. Example 3 reflects this.
 
 7. **Keep both `correlates_with` and `disambiguators`.** Different consumers at different moments: `correlates_with` is for the correlation engine at event-firing time ("events A and B firing together mean X"); `disambiguators` is for the active reasoner at diagnosis time ("go check this other metric to discriminate H1 from H2"). Concrete example in the "Disambiguators — clarifying the reasoning-time role" section.
+
+---
+
+## Authoring rule: rich-content metrics must be `agent_exposed: true`
+
+Added 2026-05-06 per ADR [`expose_kb_disambiguators_to_investigator.md`](expose_kb_disambiguators_to_investigator.md).
+
+**Rule.** Any metric entry with authored `meaning` content (`what_it_signals` plus any of `zero` / `spike` / `drop` / `steady_non_zero`) OR authored `disambiguators` content MUST have `agent_exposed: true`.
+
+**Why.** The `agent_exposed` flag exists to gate duplicates and implementation-detail metrics out of agent-facing tools, NOT to gate the KB's reasoning. A metric that an engineer took the time to author rich semantic content for is, by the very act of authoring, declared load-bearing for agent reasoning. Keeping the flag at `false` while authoring `meaning` or `disambiguators` is incoherent — it tells the renderer to surface no semantics for a metric whose semantics were specifically authored.
+
+The original gap (audited 2026-05-06): 30 metrics across the KB carried authored `meaning` and/or `disambiguators` content while sitting at `agent_exposed: false`. The `get_diagnostic_metrics` supporting block never surfaced them; the LLM never read the disambiguators that would have prevented the RTPEngine call-quality misdiagnosis pattern documented in [`../critical-observations/why_agent_fails_with_dataplane_failure_scenarios.md`](../critical-observations/why_agent_fails_with_dataplane_failure_scenarios.md).
+
+**Enforcement.** `agentic_ops_common/tests/test_kb_authoring_invariants.py::test_every_metric_with_authored_content_is_agent_exposed` walks the loaded KB at test time and fails CI on any violation. Adding a new metric with `meaning` or `disambiguators` but without `agent_exposed: true` is a CI-blocking error at PR time.
+
+**When `agent_exposed: false` IS appropriate.** Bare counter entries that exist for raw-lookup tooling (Prometheus exporter aliases, deprecated raw counters retained for compatibility) and have no authored `meaning` / `disambiguators` content can stay at `false`. Such entries are not subject to this rule.

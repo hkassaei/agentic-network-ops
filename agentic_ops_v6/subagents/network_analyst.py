@@ -59,13 +59,17 @@ def create_network_analyst() -> LlmAgent:
             # anchoring hypotheses in authored ontology branches rather
             # than LLM priors.
             tools.find_chains_by_observable_metric,
-            # Flow tools: use `get_flows_through_component` to understand
-            # what's downstream of a suspect NF when forming hypotheses.
-            # `list_flows` surfaces the available flow ids so the agent
-            # doesn't invent them. Deep flow walks belong in the
-            # Investigator; NA should stay at the overview level.
+            # Flow tools: use `get_canonical_flows_through_component`
+            # (KB lookup) to understand what's downstream of a suspect
+            # NF when forming hypotheses. NA reasons about which flows
+            # the hypothesis predicts will fail, not which are
+            # currently in flight — the canonical view is the right
+            # mode here. `list_flows` surfaces the available flow ids
+            # so the agent doesn't invent them. Deep flow walks belong
+            # in the Investigator; NA should stay at the overview level.
+            # See ADR `flows_tool_deployment_awareness.md`.
             tools.list_flows,
-            tools.get_flows_through_component,
+            tools.get_canonical_flows_through_component,
             AgentTool(ontology, skip_summarization=True),
         ],
     )

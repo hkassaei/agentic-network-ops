@@ -28,10 +28,22 @@ from agentic_ops_v6.models import (
 # ===========================================================================
 
 
-def _probe(verdict: str = "CONSISTENT") -> ProbeResult:
+def _probe(verdict: str = "CONSISTENT", outcome: str = "consistent") -> ProbeResult:
+    # Default outcome mirrors compared_to_expected so existing tests
+    # don't have to thread a new arg through; tests that specifically
+    # exercise tool_unavailable filtering pass outcome explicitly.
+    if outcome == "consistent" and verdict == "CONSISTENT":
+        out = "consistent"
+    elif outcome == "consistent" and verdict == "CONTRADICTS":
+        out = "contradicts"
+    elif outcome == "consistent" and verdict == "AMBIGUOUS":
+        out = "ambiguous"
+    else:
+        out = outcome
     return ProbeResult(
         probe_description="test probe",
         compared_to_expected=verdict,  # type: ignore
+        outcome=out,  # type: ignore
     )
 
 
@@ -120,6 +132,89 @@ def test_strength_none_majority_ambiguous():
 def test_strength_none_no_probes():
     v = _verdict(probe_outcomes=[])
     assert compute_evidence_strength_for_verdict(v) == "NONE"
+
+
+# ===========================================================================
+# tool_unavailable filtering — see ADR nf_container_diagnostic_tooling
+# ===========================================================================
+
+
+def _tu_probe() -> ProbeResult:
+    """A ProbeResult that the v6 Investigator would emit for a probe
+    whose target container was missing the required binary.
+    `compared_to_expected` is AMBIGUOUS by default; the discriminating
+    field is `outcome="tool_unavailable"`."""
+    return ProbeResult(
+        probe_description="test probe (tool unavailable)",
+        compared_to_expected="AMBIGUOUS",
+        outcome="tool_unavailable",
+    )
+
+
+def _err_probe() -> ProbeResult:
+    return ProbeResult(
+        probe_description="test probe (error)",
+        compared_to_expected="AMBIGUOUS",
+        outcome="error",
+    )
+
+
+def test_strength_tool_unavailable_does_not_lift_strength():
+    """One CONSISTENT + two tool_unavailable should NOT round up to
+    MODERATE/STRONG. Filtered probe count is 1 → WEAK (<2 CONSISTENT).
+    Without the filter the 2 tool_unavailables would have counted as
+    AMBIGUOUS and tripped the >50% NONE rule, also wrong."""
+    v = InvestigatorVerdict(
+        hypothesis_id="h1",
+        hypothesis_statement="h1",
+        verdict="NOT_DISPROVEN",
+        reasoning="r",
+        probes_executed=[
+            _probe("CONSISTENT"),
+            _tu_probe(),
+            _tu_probe(),
+        ],
+    )
+    assert compute_evidence_strength_for_verdict(v) == "WEAK"
+
+
+def test_strength_all_tool_unavailable_is_NONE():
+    """If every probe came back tool_unavailable, the verdict is
+    structurally untested — NONE, not STRONG by accident of empty
+    AMBIGUOUS counts."""
+    v = InvestigatorVerdict(
+        hypothesis_id="h1",
+        hypothesis_statement="h1",
+        verdict="INCONCLUSIVE",
+        reasoning="r",
+        probes_executed=[_tu_probe(), _tu_probe(), _tu_probe()],
+    )
+    assert compute_evidence_strength_for_verdict(v) == "NONE"
+
+
+def test_strength_error_probes_filtered_like_tool_unavailable():
+    """outcome='error' probes are filtered the same as tool_unavailable
+    — they didn't produce a signal that should drive confidence."""
+    v = InvestigatorVerdict(
+        hypothesis_id="h1",
+        hypothesis_statement="h1",
+        verdict="NOT_DISPROVEN",
+        reasoning="r",
+        probes_executed=[
+            _probe("CONSISTENT"),
+            _probe("CONSISTENT"),
+            _err_probe(),
+        ],
+    )
+    # 2 CONSISTENT, 0 CONTRADICTS, 0 AMBIGUOUS after filtering.
+    assert compute_evidence_strength_for_verdict(v) == "STRONG"
+
+
+def test_strength_filter_preserves_clean_strong():
+    """Filtering must not penalise verdicts that have NO unavailable
+    probes — backwards-compat on the happy path."""
+    v = _verdict(probe_outcomes=["CONSISTENT", "CONSISTENT", "CONSISTENT"])
+    assert compute_evidence_strength_for_verdict(v) == "STRONG"
 
 
 # ===========================================================================

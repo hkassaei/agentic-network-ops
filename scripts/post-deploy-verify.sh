@@ -19,6 +19,24 @@ echo "  Post-Deploy Verification"
 echo "============================================"
 echo ""
 
+# Diagnostic toolbelt audit — gates everything else. If any NF is
+# missing a probe-required binary, the Investigator will silently
+# degrade later; fail the deploy now so the operator notices.
+# See docs/ADR/nf_container_diagnostic_tooling.md.
+echo "--- Diagnostic toolbelt audit ---"
+if ! "$SCRIPT_DIR/audit-container-tooling.sh" --skip-absent; then
+    echo ""
+    echo "============================================"
+    echo "  POST-DEPLOY VERIFICATION FAILED"
+    echo "============================================"
+    echo ""
+    echo "  Diagnostic toolbelt audit failed — at least one NF is"
+    echo "  missing a binary required by Investigator probes. Rebuild"
+    echo "  the affected images and redeploy."
+    exit 1
+fi
+echo ""
+
 # Run the Python verification (Diameter fix, health check, UPF counters)
 .venv/bin/python -c "
 import asyncio, sys, logging

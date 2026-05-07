@@ -45,6 +45,65 @@ def _truncate(text: str, max_lines: int = _MAX_OUTPUT_LINES) -> str:
     return "\n".join(truncated)
 
 
+# ---------------------------------------------------------------------------
+# Diagnostic toolbelt preflight
+# ---------------------------------------------------------------------------
+#
+# Any probe that shells into a container must call _container_has_binary
+# first; if the binary is missing, return PROBE_TOOL_UNAVAILABLE_PREFIX +
+# explanation rather than a generic failure. The v6 Investigator prompt
+# teaches the LLM to map this token to ProbeResult.outcome="tool_unavailable",
+# which the confidence-cap guardrail then excludes from evidence-strength
+# computation.
+#
+# See docs/ADR/nf_container_diagnostic_tooling.md.
+
+PROBE_TOOL_UNAVAILABLE_PREFIX = "PROBE_TOOL_UNAVAILABLE:"
+
+# Cache `command -v` results for the lifetime of the process. Containers
+# do not gain or lose binaries mid-run, so re-checking is wasted overhead
+# and adds Docker latency to every probe.
+_BINARY_AVAILABILITY_CACHE: dict[tuple[str, str], bool] = {}
+
+
+async def _container_has_binary(container: str, binary: str) -> bool:
+    """Return True iff `binary` is on PATH inside `container`.
+
+    Result is cached per (container, binary) for the lifetime of the
+    process. The audit script
+    (`scripts/audit-container-tooling.sh`) is the deploy-time version
+    of the same check; this helper is the runtime version that gates
+    probe execution.
+    """
+    key = (container, binary)
+    if key in _BINARY_AVAILABILITY_CACHE:
+        return _BINARY_AVAILABILITY_CACHE[key]
+    rc, _ = await _shell(
+        f"docker exec {container} sh -c 'command -v {binary} >/dev/null 2>&1'"
+    )
+    available = rc == 0
+    _BINARY_AVAILABILITY_CACHE[key] = available
+    return available
+
+
+def _tool_unavailable(container: str, binary: str, probe: str) -> str:
+    """Render the standard PROBE_TOOL_UNAVAILABLE message for a probe.
+
+    Format chosen so the v6 Investigator's prompt can pattern-match
+    the prefix and emit ProbeResult(outcome='tool_unavailable'). The
+    message names the probe and the missing binary so the
+    Investigator can surface the gap in its reasoning text.
+    """
+    return (
+        f"{PROBE_TOOL_UNAVAILABLE_PREFIX} {probe} cannot run on container "
+        f"`{container}` — required binary `{binary}` is not present. "
+        "The probe did not execute. Treat this as no evidence — "
+        "neither confirms nor contradicts the hypothesis. "
+        "(Toolbelt contract violated; see "
+        "docs/ADR/nf_container_diagnostic_tooling.md.)"
+    )
+
+
 # Config file paths relative to repo root, keyed by component name.
 _CONFIG_PATHS: dict[str, str] = {
     "amf": "amf/amf.yaml",
@@ -671,16 +730,21 @@ async def check_process_listeners(
     if container not in deps.all_containers:
         return f"Unknown container '{container}'. Known: {', '.join(deps.all_containers)}"
 
-    cmd = f"docker exec {container} ss -tulnp"
-    rc, output = await _shell(cmd)
-
-    if rc != 0:
-        # ss might not be available, try netstat
+    # Toolbelt preflight — try ss first, fall back to netstat. If neither
+    # is present we surface PROBE_TOOL_UNAVAILABLE so the Investigator
+    # records ProbeResult.outcome='tool_unavailable' rather than reading
+    # an empty result as soft non-evidence.
+    has_ss = await _container_has_binary(container, "ss")
+    if has_ss:
+        cmd = f"docker exec {container} ss -tulnp"
+    else:
+        if not await _container_has_binary(container, "netstat"):
+            return _tool_unavailable(container, "ss/netstat", "check_process_listeners")
         cmd = f"docker exec {container} netstat -tulnp"
-        rc, output = await _shell(cmd)
 
+    rc, output = await _shell(cmd)
     if rc != 0:
-        return f"Neither ss nor netstat available in {container}. Output: {output.strip()}"
+        return f"Listener check failed on {container}: {output.strip()}"
 
     return output.strip() or "(no listeners found)"
 
@@ -771,6 +835,14 @@ async def measure_rtt(
     """
     if container not in deps.all_containers:
         return f"Unknown container '{container}'. Known: {', '.join(deps.all_containers)}"
+
+    # Toolbelt preflight — distinguish "ping isn't installed" (no
+    # signal) from "ping ran and saw 100% loss" (strong contradicting
+    # signal). Without this, both paths land on the same generic
+    # failure string and the Investigator silently chains on a probe
+    # that didn't run.
+    if not await _container_has_binary(container, "ping"):
+        return _tool_unavailable(container, "ping", "measure_rtt")
 
     cmd = f"docker exec {container} ping -c 3 -W 10 {target_ip}"
     rc, output = await _shell(cmd)

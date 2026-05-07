@@ -6,6 +6,13 @@ and UPF throughput (pps, KB/s in/out) as pre-computed rates.
 
 Backed by Prometheus scraping RTPEngine's native /metrics endpoint
 and the existing Open5GS UPF exporter — no custom collection needed.
+
+Metrics with a matching KB entry are rendered through the unified
+`_render_metric_with_full_kb_block` helper from `diagnostic_metrics.py`,
+so the LLM sees the full authored semantics — `what_it_signals`, the
+value-specific `meaning.*` variant, every `disambiguators` entry — at
+the point of observation. See ADR
+`expose_kb_disambiguators_to_investigator.md`.
 """
 
 from __future__ import annotations
@@ -13,6 +20,10 @@ from __future__ import annotations
 import httpx
 
 from ._common import _get_deps
+from agentic_ops_common.metric_kb import load_kb
+from agentic_ops_common.tools.diagnostic_metrics import (
+    _render_metric_with_full_kb_block,
+)
 
 _DEFAULT_WINDOW_SECONDS = 120
 
@@ -158,6 +169,7 @@ async def get_dp_quality_gauges(
     rtp_mos = _ratio_or_no_data(results["rtp_mos_rate"], results["rtp_mos_samples_rate"])
     rtp_loss = _ratio_or_no_data(results["rtp_loss_rate"], results["rtp_loss_samples_rate"])
     rtp_jitter = _ratio_or_no_data(results["rtp_jitter_rate"], results["rtp_jitter_samples_rate"])
+    rtp_loss_value = _ratio_or_none(results["rtp_loss_rate"], results["rtp_loss_samples_rate"])
 
     upf_in_pps = round(results["upf_in_pps"], 1)
     upf_out_pps = round(results["upf_out_pps"], 1)
@@ -175,6 +187,14 @@ async def get_dp_quality_gauges(
             f"anchored at ts={at_time_ts:.0f}):"
         )
 
+    # Load the KB so we can route metrics with rich content through the
+    # unified renderer. KB load failure is non-fatal — we fall back to
+    # plain rendering so the probe still produces useful output.
+    try:
+        kb = load_kb()
+    except Exception:
+        kb = None
+
     lines = [
         header,
         "",
@@ -182,7 +202,20 @@ async def get_dp_quality_gauges(
         f"    packets/sec    : {rtp_pps}",
         f"    throughput     : {rtp_kbps} KB/s",
         f"    MOS (recent)   : {rtp_mos}",
-        f"    loss (recent)  : {rtp_loss}",
+    ]
+    # `loss (recent)` has a rich KB entry with disambiguators that point
+    # the LLM at errors_per_second and UPF directional rates — exactly
+    # the reasoning that prevents the false-DISPROVEN trap documented in
+    # ADR `expose_kb_disambiguators_to_investigator.md`. Route through
+    # the unified renderer so the disambiguator block appears inline.
+    lines.extend(_render_kb_metric_block(
+        label="loss (recent)",
+        kb_id="ims.rtpengine.loss_ratio",
+        value=rtp_loss_value,
+        plain_value_str=rtp_loss,
+        kb=kb,
+    ))
+    lines.extend([
         f"    jitter (recent): {rtp_jitter}",
         f"    active sessions: {rtp_sessions}",
         "",
@@ -192,8 +225,124 @@ async def get_dp_quality_gauges(
         f"    in  throughput : {upf_in_kbps} KB/s",
         f"    out throughput : {upf_out_kbps} KB/s",
         f"    active sessions: {upf_sessions}",
-    ]
+    ])
+    # Append the upf_counters_are_directional verdict in the rate-window
+    # form. The agent must never read in/out asymmetry as packet loss;
+    # the verdict says so explicitly with the asymmetry % and the three
+    # correct loss-detection methods inline. See ADR
+    # `upf_directional_rates_in_dp_quality_gauges.md`.
+    lines.extend(_render_upf_directional_verdict(
+        upf_in_pps=upf_in_pps,
+        upf_out_pps=upf_out_pps,
+        window_seconds=window_seconds,
+    ))
     return "\n".join(lines)
+
+
+def _render_upf_directional_verdict(
+    *,
+    upf_in_pps: float,
+    upf_out_pps: float,
+    window_seconds: int,
+) -> list[str]:
+    """Render the upf_counters_are_directional rule's verdict for the
+    rate-windowed pair, inline with the UPF block.
+
+    The pure evaluator at `network_ontology.rules.upf_directional`
+    handles asymmetry computation and severity selection; this
+    function only concerns itself with formatting.
+
+    On evaluator-import failure, emit a single line noting the rule
+    was unavailable — the probe must keep producing values regardless.
+    """
+    try:
+        from network_ontology.rules import evaluate_upf_directional_rule
+    except Exception as e:
+        return [
+            "    rule verdict   : (upf_counters_are_directional "
+            f"unavailable: {e})"
+        ]
+
+    verdicts = evaluate_upf_directional_rule({
+        "upf_in_pps": upf_in_pps,
+        "upf_out_pps": upf_out_pps,
+    })
+    if not verdicts:
+        # Should not happen given numeric values were passed, but
+        # defensive — if the evaluator returned nothing, surface it.
+        return ["    rule verdict   : (upf_counters_are_directional did not fire)"]
+
+    v = verdicts[0]
+    lines = [
+        f"    asymmetry      : {v['asymmetry_pct']}%   (|in - out| / max)",
+        (
+            f"    rule verdict   : upf_counters_are_directional "
+            f"[severity={v['severity']}, window_kind={v['window_kind']}]"
+        ),
+    ]
+    # The verdict text can be multi-line; render each line indented.
+    for vline in v["verdict"].rstrip().splitlines():
+        lines.append(f"                     {vline}")
+    lines.append("    correct_methods (for actual loss detection):")
+    for i, method in enumerate(v["correct_methods"], start=1):
+        # Each method may be multi-line; indent continuation lines.
+        method_lines = method.splitlines() or [method]
+        lines.append(f"      {i}. {method_lines[0]}")
+        for cont in method_lines[1:]:
+            lines.append(f"         {cont}")
+    return lines
+
+
+def _render_kb_metric_block(
+    *,
+    label: str,
+    kb_id: str,
+    value: float | None,
+    plain_value_str: str,
+    kb,
+) -> list[str]:
+    """Render a data-plane gauge through the unified KB-block helper.
+
+    `value` is the numeric value (or None when the gauge resolved to
+    "N/A — no samples in window"). `plain_value_str` is the human-
+    readable string the probe already computed (e.g. "25.05" or
+    "N/A (no samples in window)") — used as a header line so the
+    existing UI shape is preserved when the KB is unavailable or the
+    metric has no rich content.
+
+    Behavior:
+      - KB unavailable OR no entry for kb_id: emit a single
+        plain-rendered line (`    label : plain_value_str`).
+      - Entry present: emit the same header line plus the unified
+        renderer's full block (what_it_signals, meaning.*, every
+        disambiguator). Disambiguator partner lookups resolve via the
+        renderer's snapshot/feature lookup; the data-plane probe
+        passes empty maps, so partner values surface as "not in
+        snapshot" — the disambiguator TEXT still renders in full.
+    """
+    header_line = f"    {label}  : {plain_value_str}"
+    if kb is None:
+        return [header_line]
+    entry = kb.get_metric(kb_id)
+    if entry is None:
+        return [header_line]
+    block = _render_metric_with_full_kb_block(
+        label=label,
+        value=value,
+        entry=entry,
+        kb=kb,
+        raw_snapshot={},
+        features={},
+        learned_value=None,
+    )
+    # The unified renderer's first line is `    label = value [...]`,
+    # which duplicates the header in a different shape. Preserve the
+    # probe's existing `label : value_str` header (so MOS / loss
+    # rendering look uniform), then append everything but the
+    # renderer's own header line.
+    if block:
+        return [header_line] + block[1:]
+    return [header_line]
 
 
 def _ratio_or_no_data(numerator: float, denominator: float) -> str:
@@ -212,3 +361,16 @@ def _ratio_or_no_data(numerator: float, denominator: float) -> str:
     if denominator <= 0:
         return "N/A (no samples in window)"
     return f"{numerator / denominator:.2f}"
+
+
+def _ratio_or_none(numerator: float, denominator: float) -> float | None:
+    """Companion to `_ratio_or_no_data` that returns the numeric ratio
+    or None (rather than the human-readable string).
+
+    Used by the KB-routing path so the unified renderer can apply the
+    `meaning.*` variant selection on a real number, falling through to
+    "value not available" when the window had no samples.
+    """
+    if denominator <= 0:
+        return None
+    return numerator / denominator

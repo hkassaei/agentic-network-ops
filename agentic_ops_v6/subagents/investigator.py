@@ -71,14 +71,26 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
             tools.read_running_config,
             tools.read_env_config,
             tools.query_subscriber,
-            # Flow tools for mechanism-walk falsification: pull the
-            # full flow for the procedure the hypothesis implicates,
-            # then step through its `failure_modes` to identify the
-            # exact metric / SIP response code / container status you
-            # should see at each step if the hypothesis is true.
+            # Flow tools for mechanism-walk falsification:
+            # `get_canonical_flows_through_component` (KB lookup) lists
+            # every flow that touches the hypothesis's NF along with
+            # each step's authored `failure_modes` — use this for
+            # hypothesis development and probe selection.
+            # `get_active_flows_through_component` filters that set
+            # against live Prometheus indicators — use this when the
+            # question is "what is actually happening through this NF
+            # right now," for example before claiming a procedure is
+            # exhibiting a fault, or when ruling out a hypothesis
+            # whose flow is not active.
+            # `get_flow` returns the full step sequence so the
+            # Investigator can step through each step's `failure_modes`
+            # to identify the exact metric / SIP response / container
+            # status the hypothesis predicts.
+            # See ADR `flows_tool_deployment_awareness.md`.
             tools.list_flows,
             tools.get_flow,
-            tools.get_flows_through_component,
+            tools.get_canonical_flows_through_component,
+            tools.get_active_flows_through_component,
             # Causal-chain tools: agent can read the full branch-first
             # chain for its hypothesis (mechanism, source_steps,
             # discriminating_from) to know what a clean/contradicting

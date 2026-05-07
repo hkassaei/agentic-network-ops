@@ -50,13 +50,20 @@ def create_instruction_generator() -> LlmAgent:
             tools.find_chains_by_observable_metric,
             tools.get_network_topology,
             tools.get_vonr_components,
-            # Flow tools help design probes: `get_flows_through_component`
-            # reveals which flows touch the suspect NF so probes can be
-            # targeted at specific steps. `get_flow` returns the step
-            # sequence so the plan can reference the exact `failure_modes`
-            # the Investigator will later verify against.
+            # Flow tools help design probes:
+            # `get_canonical_flows_through_component` reveals which flows
+            # touch the suspect NF (canonical KB lookup) so probes can be
+            # targeted at specific steps and their authored failure_modes.
+            # `get_active_flows_through_component` filters that set
+            # against live Prometheus indicators when the question is
+            # what's currently active in the deployment.
+            # `get_flow` returns the step sequence so the plan can
+            # reference the exact `failure_modes` the Investigator will
+            # later verify against.
+            # See ADR `flows_tool_deployment_awareness.md`.
             tools.list_flows,
             tools.get_flow,
-            tools.get_flows_through_component,
+            tools.get_canonical_flows_through_component,
+            tools.get_active_flows_through_component,
         ],
     )

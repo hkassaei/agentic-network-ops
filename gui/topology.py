@@ -156,6 +156,11 @@ _KNOWN_NF_TYPES: dict[str, tuple[str, str, str, str, list[str], tuple[int, int],
     "e2e_ue1":   ("UE1",         "ue",   "subscriber",        "UE1_IP",       ["NAS", "SIP"],          (ROW_UE, 3), ""),
     "e2e_ue2":   ("UE2",         "ue",   "subscriber",        "UE2_IP",       ["NAS", "SIP"],          (ROW_UE, 5), ""),
 
+    # External Data Network — off-stack endpoint reachable via UPF's
+    # N6 egress (NAT'd through ogstun). Logical-only: no container, no
+    # IP env var; rendered next to UPF on the core-edge row.
+    "internet": ("Internet",     "data", "external-data-network", "",        ["IP"],                  (ROW_CORE_EDGE, 8), ""),
+
     # Infrastructure (Sidebar — slots 10-11)
     "mysql":     ("MySQL",       "infrastructure", "relational-store",   "MYSQL_IP",     ["SQL"],                 (ROW_IMS, 10), ""),
     "dns":       ("DNS",         "infrastructure", "name-resolution",    "DNS_IP",       ["DNS"],                 (ROW_IMS, 11), ""),
@@ -184,6 +189,10 @@ _STATIC_EDGES: list[tuple[str, str, str, str, str, str, bool]] = [
     ("nr_gnb",  "amf",       "NGAP",    "N2",   "control",    "N2 (NGAP)",          False),
     ("nr_gnb",  "upf",       "GTP-U",   "N3",   "data",       "N3 (GTP-U)",         False),
     ("smf",     "upf",       "PFCP",    "N4",   "control",    "N4 (PFCP)",          False),
+
+    # N6 — UPF egress to external DN (Internet). Bidirectional;
+    # rendered as a single edge in the GUI.
+    ("upf",     "internet",  "IP",      "N6",   "data",       "N6 (DN egress)",     False),
 
     # 5G Core SBI (12)
     ("amf",     "nrf",       "SBI",     "Nnrf", "control",    "SBI (NRF)",          False),

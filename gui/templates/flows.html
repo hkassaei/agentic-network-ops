@@ -39,8 +39,37 @@
   .topo-container { flex: 1; position: relative; min-height: 0; overflow: hidden; }
   .topo-container svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 
-  .detail-panel { height: 280px; background: var(--surface); border-top: 1px solid var(--border); padding: 16px 24px; overflow-y: auto; flex-shrink: 0; }
+  .detail-panel { height: 280px; min-height: 80px; background: var(--surface); border-top: 1px solid var(--border); padding: 16px 24px; overflow-y: auto; flex-shrink: 0; }
   .detail-panel h3 { font-size: 15px; color: var(--text); margin-bottom: 8px; }
+
+  /* Drag handle for resizing the detail panel vertically. Steals
+     space from .topo-container (flex: 1) when the user drags up. */
+  .detail-resize-handle {
+    height: 6px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    cursor: ns-resize;
+    position: relative;
+    transition: background 0.15s;
+  }
+  .detail-resize-handle:hover,
+  .detail-resize-handle.dragging { background: var(--accent); }
+  /* Subtle grip indicator centered horizontally */
+  .detail-resize-handle::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 32px;
+    height: 2px;
+    background: var(--text-dim);
+    border-radius: 1px;
+    opacity: 0.5;
+  }
+  body.detail-resizing { cursor: ns-resize; user-select: none; }
   .detail-panel .detail-desc { color: var(--text-dim); font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
   .detail-panel .detail-section { margin-bottom: 12px; }
   .detail-panel .detail-section h4 { font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
@@ -125,6 +154,10 @@
       <span class="step-counter" id="step-counter">Step 0 / 0</span>
     </div>
 
+    <div class="detail-resize-handle" id="detail-resize-handle"
+         role="separator" aria-orientation="horizontal"
+         aria-label="Resize detail panel" tabindex="0"></div>
+
     <div class="detail-panel" id="detail-panel">
       <h3 id="detail-title">Select a flow to begin</h3>
       <div class="detail-desc" id="detail-desc">
@@ -136,7 +169,90 @@
 </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', initFlowViewer);
+document.addEventListener('DOMContentLoaded', () => {
+  initFlowViewer();
+  initDetailPanelResizer();
+});
+
+function initDetailPanelResizer() {
+  const handle = document.getElementById('detail-resize-handle');
+  const panel = document.getElementById('detail-panel');
+  if (!handle || !panel) return;
+
+  // Restore last chosen height across page reloads.
+  const STORAGE_KEY = 'flows.detailPanelHeight';
+  const stored = parseInt(localStorage.getItem(STORAGE_KEY), 10);
+  if (stored && stored > 80) panel.style.height = stored + 'px';
+
+  // Keep at least 120px for the topology and 80px for the panel.
+  const TOPOLOGY_MIN = 120;
+  const PANEL_MIN = 80;
+
+  let dragging = false;
+  let startY = 0;
+  let startHeight = 0;
+
+  function clamp(h) {
+    const containerHeight = panel.parentElement.clientHeight;
+    const max = Math.max(PANEL_MIN, containerHeight - TOPOLOGY_MIN);
+    return Math.min(Math.max(h, PANEL_MIN), max);
+  }
+
+  function onMouseDown(ev) {
+    dragging = true;
+    startY = ev.clientY;
+    startHeight = panel.getBoundingClientRect().height;
+    handle.classList.add('dragging');
+    document.body.classList.add('detail-resizing');
+    ev.preventDefault();
+  }
+
+  let rafPending = false;
+  function onMouseMove(ev) {
+    if (!dragging) return;
+    // Dragging UP (smaller clientY) should GROW the panel.
+    const next = clamp(startHeight + (startY - ev.clientY));
+    panel.style.height = next + 'px';
+    // Throttle topology re-render to one per animation frame so the
+    // SVG stays correctly laid out during the drag rather than
+    // visually stretching until mouseup.
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        window.dispatchEvent(new Event('resize'));
+      });
+    }
+  }
+
+  function onMouseUp() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.classList.remove('detail-resizing');
+    localStorage.setItem(STORAGE_KEY,
+      Math.round(panel.getBoundingClientRect().height));
+    // Topology SVG resizes responsively (width/height = 100%); nothing
+    // to redraw on D3 since the existing renderers already use viewBox-
+    // free absolute positioning over the live container size.
+    window.dispatchEvent(new Event('resize'));
+  }
+
+  handle.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+
+  // Keyboard accessibility: ArrowUp/Down nudge by 16px when handle is focused.
+  handle.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
+    const delta = ev.key === 'ArrowUp' ? 16 : -16;
+    const cur = panel.getBoundingClientRect().height;
+    panel.style.height = clamp(cur + delta) + 'px';
+    localStorage.setItem(STORAGE_KEY,
+      Math.round(panel.getBoundingClientRect().height));
+    ev.preventDefault();
+  });
+}
 </script>
 </body>
 </html>

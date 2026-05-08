@@ -33,6 +33,13 @@ flows:
     description: "UE registers with the 5G core network. Establishes NAS security, authenticates via AUSF/UDM, and receives a 5G-GUTI for subsequent procedures."
     use_case: 5g_core
     trigger: "UE powers on, enters coverage, or re-registration timer fires"
+    activity_indicator:
+      expr: 'rate(fivegs_amffunction_rm_reginitreq[{w}s])'
+      threshold_gt: 0.0
+      description: |
+        AMF registration-init request rate. Fires for every NAS Registration
+        Request the AMF receives — the kickoff of this flow. Non-zero rate
+        in the window means at least one UE registration was initiated.
     preconditions:
       - "gNB connected to AMF (N2/SCTP active)"
       - "USIM provisioned with SUPI in UDR/MongoDB"
@@ -257,6 +264,18 @@ flows:
     description: "UE registers with the IMS network for voice services. Establishes SIP identity, authenticates via HSS, and sets up QoS policy."
     use_case: vonr
     trigger: "UE powers on, or re-registration timer fires"
+    activity_indicator:
+      expr: 'rate(fivegs_amffunction_amf_authreq[{w}s])'
+      threshold_gt: 0.0
+      description: |
+        AMF authentication request rate as a Prometheus-observable proxy
+        for IMS REGISTER activity in this stack — every IMS registration
+        triggers an AMF auth exchange (and the cascading I-CSCF UAR /
+        S-CSCF MAR Diameter exchanges that this flow walks). The Kamailio
+        SIP rcv_requests counters live in kamcmd, not Prometheus, so
+        AMF auth is the cleanest rate-windowed activity signal available
+        from Prometheus alone. Non-zero rate in the window means at
+        least one (re-)registration is in progress.
     preconditions:
       - "UE attached to 5G (NAS registration complete)"
       - "Internet and IMS PDU sessions established"
@@ -490,6 +509,17 @@ flows:
     description: "UE1 initiates a voice call to UE2 over the IMS network. Establishes SIP dialog, allocates RTP media path, and sets up dedicated QoS bearers."
     use_case: vonr
     trigger: "User initiates a voice call (pjsua 'm' command)"
+    activity_indicator:
+      expr: 'rate(fivegs_pcffunction_pa_policysmassoreq[{w}s])'
+      threshold_gt: 0.0
+      description: |
+        PCF policy-session association request rate. Every VoNR call setup
+        triggers a PCF policy negotiation (P-CSCF → SCP → PCF via N5) for
+        the dedicated voice bearer; PCF policy-association is the
+        Prometheus-observable touchpoint for "a call is being set up."
+        Non-zero rate in the window means at least one call setup is in
+        progress. (RTPEngine sessions/packet rates are also live during
+        an established call but lag slightly behind PCF.)
     preconditions:
       - "Both UE1 and UE2 IMS-registered (registered_contacts = 2)"
       - "IMS PDU sessions active for both UEs"
@@ -752,6 +782,17 @@ flows:
     description: "One party hangs up, terminating the VoNR voice call. Releases SIP dialog, RTP media, and dedicated QoS bearers."
     use_case: vonr
     trigger: "User hangs up (pjsua 'h' command or BYE from remote)"
+    # No clean rate-windowed Prometheus indicator for call teardown is
+    # available in this stack — Kamailio BYE counts live in kamcmd, and
+    # PCF policy-session-release is exposed but does not produce a
+    # reliable per-window signal under the testbed's load. The active-
+    # flows tool returns this flow with `active: null` and surfaces the
+    # absence honestly so the LLM does not infer "no teardown happening"
+    # when it might be. Authoring an indicator here would require a
+    # Prometheus exporter expansion (e.g. exposing dialog_ng:terminated
+    # as a counter) — tracked as a follow-up to ADR
+    # `flows_tool_deployment_awareness.md`.
+    activity_indicator: null
     preconditions:
       - "Active VoNR call between UE1 and UE2"
       - "dialog_ng:active = 2, bearers_active = 6"
@@ -879,6 +920,14 @@ flows:
     description: "UE requests a PDU session (data connection) from the 5G core. AMF orchestrates session creation through SMF and UPF, establishing the GTP-U tunnel for user data."
     use_case: 5g_core
     trigger: "UE sends PDU Session Establishment Request (after NAS registration)"
+    activity_indicator:
+      expr: 'rate(fivegs_smffunction_sm_pdusessioncreationreq[{w}s])'
+      threshold_gt: 0.0
+      description: |
+        SMF PDU-session-creation request rate. Fires for every PDU session
+        establishment request the SMF receives (the kickoff of this
+        flow). Non-zero rate in the window means at least one PDU session
+        establishment is in progress.
     preconditions:
       - "UE registered with AMF (NAS registration complete)"
       - "gNB connected to AMF via N2"
@@ -1095,6 +1144,15 @@ flows:
     description: "UE deregisters from the 5G network, releasing all resources: NAS registration, PDU sessions, IMS registration, and associated bearers."
     use_case: 5g_core
     trigger: "UE powers off, or network-initiated deregistration"
+    # AMF does not expose a deregistration counter in this stack's
+    # Prometheus surface — only registration-init counters exist. A
+    # decrement in `amf_session` or `ran_ue` is observable but is a
+    # gauge edge, not a rate, and conflates dereg with crash/timeout.
+    # The active-flows tool surfaces this as `active: null` so the LLM
+    # never reads "no dereg" when the indicator simply isn't authored.
+    # Tracked as a follow-up to ADR
+    # `flows_tool_deployment_awareness.md`.
+    activity_indicator: null
     preconditions:
       - "UE registered with AMF"
       - "One or more PDU sessions active"
@@ -1206,6 +1264,19 @@ flows:
     description: "Detailed view of the Diameter Cx exchanges between I-CSCF/S-CSCF and HSS during IMS registration. Shows UAR, MAR, and SAR message flows."
     use_case: ims
     trigger: "IMS REGISTER arrives at I-CSCF (part of IMS Registration flow)"
+    activity_indicator:
+      expr: 'rate(fivegs_amffunction_amf_authreq[{w}s])'
+      threshold_gt: 0.0
+      description: |
+        AMF authentication request rate as a Prometheus-observable proxy
+        for Diameter Cx activity in this stack. Cx UAR/MAR/SAR exchanges
+        are triggered by IMS REGISTERs, which themselves are triggered
+        after AMF authentication succeeds; AMF auth-req is therefore the
+        upstream Prometheus signal for the Cx exchanges this flow walks.
+        I-CSCF / S-CSCF Diameter counters live in kamcmd, not Prometheus,
+        so the AMF proxy is the cleanest available rate-windowed signal.
+        Non-zero rate in the window means at least one IMS registration
+        — and therefore at least one Cx exchange — is in progress.
     preconditions:
       - "I-CSCF and S-CSCF have Diameter Cx connections to HSS"
       - "HSS has the subscriber provisioned"
@@ -1324,3 +1395,269 @@ flows:
         - "ims_usrloc_scscf:active_contacts increases by 1"
         - "ims_registrar_scscf:accepted_regs increases by 1"
         - "cdp:replies_received increases by 3 on first registration (UAA + MAA + SAA). On re-registrations the I-CSCF skips UAR if it has a cached S-CSCF list, so only MAA + SAA (2 round-trips) fire."
+
+  # ============================================================================
+  # vonr_media — explicit data-path walk for path-anchored localization
+  # ============================================================================
+  # Per ADR `path_anchored_probe_planning_for_transport_layer_faults.md`,
+  # this flow exists specifically so the path resolver can derive the
+  # ordered hop list a media-plane packet traverses. Unlike vonr_call_setup
+  # (which describes the SIP signaling transactions that establish a call),
+  # vonr_media describes the continuous RTP/RTCP packet path that carries
+  # the established call's audio.
+  #
+  # The path resolver looks up this flow when a transport-layer symptom
+  # implicates a media-plane metric (rtpengine.loss_ratio,
+  # upf.gtp_indatapktn3upf_per_ue, etc.) and walks each hop with
+  # KernelHopProber + DockerBridgeProber.
+
+  vonr_media:
+    name: "VoNR Media Path"
+    display_order: 6
+    description: "Continuous RTP/RTCP packet path between two UEs once a VoNR call is established. UE1 → gNB → UPF → RTPEngine → UPF → gNB → UE2 (and the symmetric return path). Bytes-per-second flow, not a transactional sequence."
+    use_case: vonr
+    trigger: "An established VoNR call is in talkpath state."
+    activity_indicator:
+      expr: 'rate(rtpengine_packets[{w}s])'
+      threshold_gt: 0.0
+      description: |
+        RTPEngine packet rate over the window. The cleanest signal that
+        media is actually flowing through the relay; non-zero means at
+        least one VoNR call is in active talkpath state.
+    preconditions:
+      - "VoNR call setup completed (vonr_call_setup flow's terminal step ran)"
+      - "RTPEngine session allocated and bound to the call's SDP"
+      - "Both UEs have media bearers up (5QI=1) on N3"
+
+    steps:
+      - order: 1
+        from: e2e_ue1
+        to: nr_gnb
+        protocol: PDCP/RLC/MAC over PHY
+        interface: Uu
+        label: "UE1 → gNB radio"
+        failure_modes:
+          - "RAN radio degradation → packets fail to decode at gNB MAC; loss visible at RLC AM/UM counters."
+        metrics_to_watch:
+          - "ran_radio_quality_metrics (per-UE PRB allocation, BLER if exposed)"
+
+      - order: 2
+        from: nr_gnb
+        to: upf
+        protocol: GTP-U
+        interface: N3
+        label: "gNB → UPF uplink (N3)"
+        failure_modes:
+          - "N3 path drops → upf.gtp_indatapktn3upf_per_ue reduced relative to expected for active call."
+        metrics_to_watch:
+          - "core.upf.gtp_indatapktn3upf_per_ue"
+
+      - order: 3
+        from: upf
+        to: rtpengine
+        protocol: UDP/RTP
+        interface: N6
+        label: "UPF → RTPEngine (N6 leg, uplink media)"
+        failure_modes:
+          - "Drops on UPF egress to N6 (UPF-side qdisc / iface) → RTPEngine RX packets less than UPF TX over the window."
+          - "Drops on the docker bridge between UPF and RTPEngine → same signature; localized to bridge by DockerBridgeProber."
+
+      - order: 4
+        from: rtpengine
+        to: upf
+        protocol: UDP/RTP
+        interface: N6
+        label: "RTPEngine → UPF (N6 leg, downlink media after relay)"
+        failure_modes:
+          - "Drops on RTPEngine egress qdisc (the rtpengine 30% loss scenario in the ADR) → KernelHopProber on rtpengine reports drops_attributed_here."
+          - "Drops on the docker bridge between RTPEngine and UPF → DockerBridgeProber localizes."
+
+      - order: 5
+        from: upf
+        to: nr_gnb
+        protocol: GTP-U
+        interface: N3
+        label: "UPF → gNB downlink (N3)"
+        failure_modes:
+          - "N3 path drops → upf.gtp_outdatapktn3upf_per_ue reduced."
+        metrics_to_watch:
+          - "core.upf.gtp_outdatapktn3upf_per_ue"
+
+      - order: 6
+        from: nr_gnb
+        to: e2e_ue2
+        protocol: PDCP/RLC/MAC over PHY
+        interface: Uu
+        label: "gNB → UE2 radio"
+        failure_modes:
+          - "RAN radio degradation → UE2 RTCP RR reports loss back to RTPEngine; rtpengine.loss_ratio rises."
+
+    outcome:
+      success: "RTP frames flow continuously between UE1 and UE2 with rtpengine.loss_ratio ≈ 0 and upf.gtp_in/outdatapktn3upf_per_ue at expected per-UE rate (~50 pps for G.711)."
+      observable_metrics:
+        - "rtpengine.loss_ratio (RTCP-reported, exact for receiver-side loss)"
+        - "core.upf.gtp_indatapktn3upf_per_ue, core.upf.gtp_outdatapktn3upf_per_ue (per-direction N3 rates)"
+        - "rtpengine.errors_per_second (relay-loop errors only — does NOT see kernel drops)"
+
+  data_pdu_session_user_traffic:
+    name: "Data PDU Session — User Traffic"
+    display_order: 8
+    description: "Continuous user-data path between a UE and the public Internet over an established PDU session. UE → gNB → UPF → (NAT) → Internet on the uplink, and the symmetric return on the downlink. Bytes-per-second flow, not a transactional sequence."
+    use_case: 5g_core
+    trigger: "An established PDU session for the `internet` DNN is carrying user data (UE app sends/receives via the modem netdev)."
+    activity_indicator:
+      expr: 'rate(gtp_indatapktn3upf_per_ue[{w}s])'
+      threshold_gt: 0.0
+      description: |
+        UPF N3 uplink GTP-U packet rate over the window. Non-zero means
+        at least one UE is sending data into the 5GC over an active
+        PDU session. The companion `gtp_outdatapktn3upf_per_ue` counter
+        rising in the same window confirms the symmetric downlink path
+        is also active.
+    preconditions:
+      - "PDU session established for the `internet` DNN (see `pdu_session_establishment` flow)"
+      - "UE has an IPv4 address from `UE_IPV4_INTERNET` and a default route via the modem netdev (e.g. `uesimtun0` in UERANSIM)"
+      - "UPF has installed PDR/FAR/QER for both UL and DL (PFCP Session Establishment from SMF)"
+      - "Session-AMBR distributed to UE, gNB, and UPF; UE-AMBR distributed to gNB"
+      - "gNB knows the UPF-side N3 F-TEID and has mapped each QoS flow → DRB"
+
+    steps:
+      # ---- Uplink: UE → Internet ----
+      - order: 1
+        from: e2e_ue1
+        to: nr_gnb
+        protocol: PDCP/RLC/MAC over PHY
+        interface: Uu
+        label: "UE → gNB radio (uplink)"
+        description: "UE app socket emits an IP packet; the UE modem stack maps it to a QoS flow (QFI), runs SDAP/PDCP/RLC/MAC/PHY, and transmits on the assigned DRB."
+        detail: |
+          The UE's Linux IP stack routes the outbound packet to the modem
+          netdev (e.g. `uesimtun0` in UERANSIM). The UE's QoS rules pick
+          the matching QoS flow; for the default `internet` DNN this is
+          a non-GBR flow (5QI=9 in this deployment). SDAP carries the
+          QFI; PDCP applies ciphering and integrity (and ROHC if
+          configured); RLC/MAC schedule on the DRB; PHY transmits.
+          Session-AMBR-UL is enforced here at the UE before the packet
+          ever hits the air.
+        failure_modes:
+          - "RAN radio degradation (low SINR, high BLER) → packets retransmitted at RLC AM or dropped at RLC UM; aggregate uplink throughput collapses."
+          - "UE modem hangs / interface down → no packets enter the air; symptom is `gtp_indatapktn3upf_per_ue` flat at 0 even though the UE app is sending."
+          - "Session-AMBR-UL exceeded → UE drops over-budget packets locally; no signal upstream of the UE."
+        metrics_to_watch:
+          - "ran_radio_quality_metrics (per-UE PRB allocation, BLER if exposed)"
+
+      - order: 2
+        from: nr_gnb
+        to: upf
+        protocol: GTP-U
+        interface: N3
+        label: "gNB → UPF uplink (N3, GTP-U encap)"
+        description: "gNB decodes the radio frame, recovers the IP packet plus its QFI, and encapsulates in `IP/UDP(2152)/GTP-U(TEID=UL-F-TEID, QFI in PDU Session Container)/innerIP` over N3."
+        detail: |
+          On the air-side the gNB decodes PHY → MAC → RLC → PDCP → SDAP
+          and recovers the inner IP packet plus the QFI. It looks up
+          the F-TEID and UPF N3 IP for the UE's PDU session, builds the
+          GTP-U header with the PDU Session Container extension carrying
+          the QFI, and sends UDP/2152 to the UPF. UE-AMBR is the
+          aggregate cap applied across all of the UE's non-GBR DRBs at
+          the gNB scheduler.
+        failure_modes:
+          - "N3 underlay drops (Docker bridge in this lab) → `gtp_indatapktn3upf_per_ue` shortfall vs. gNB's egress counter."
+          - "gNB-side F-TEID mismatch (rare, control-plane bug) → packets sent to wrong UPF endpoint; UPF logs `no PDR matched`."
+          - "UE-AMBR exceeded → gNB drops over-budget aggregate; symptom is reduced N3 throughput vs. expected."
+        metrics_to_watch:
+          - "core.upf.gtp_indatapktn3upf_per_ue"
+
+      - order: 3
+        from: upf
+        to: internet
+        protocol: IP
+        interface: N6
+        label: "UPF → Internet (N6, GTP-U decap + NAT)"
+        description: "UPF matches the inbound GTP-U against an installed PDR, applies the FAR (forward to N6 / TUN) and QER (Session-AMBR), decapsulates to inner IP, writes to `ogstun`, and the Linux kernel forwards via the default route with MASQUERADE NAT."
+        detail: |
+          The Open5GS user-space UPF receives on UDP/2152 (per
+          `gtpu.server.address` in `upf.yaml`), looks up the PDR by
+          F-TEID + inner UE-IP, and applies the linked FAR + QER. The
+          decapsulated IP packet is written to the per-DNN TUN interface
+          (`ogstun` for `internet`). The kernel routes it via the
+          default external interface; the nftables/iptables MASQUERADE
+          rule installed by `upf_init.sh::tun_if.py` rewrites src=UE-IP
+          to src=UPF-egress-IP. Carve-outs (e.g. `--no_nat_ipv4_addr=PCSCF_IP`)
+          keep on-stack IMS traffic un-NAT'd. Session-AMBR-UL has
+          already been enforced at the UE, so no rate-cap typically
+          fires here on the uplink.
+        failure_modes:
+          - "PDR/FAR not installed (PFCP failure) → UPF logs `no matching PDR`; packet dropped silently from a counter perspective."
+          - "TUN interface down (link DOWN, kernel issue) → packets accumulate in UPF's send queue; eventual buffer drops."
+          - "NAT carve-out misconfigured → traffic destined for an internal NF (e.g. P-CSCF) gets NAT'd and the reply path breaks."
+          - "Default route / external NIC down → uplink to public Internet fails; `gtp_outdatapktn3upf_per_ue` zero on the return."
+
+      # ---- Downlink: Internet → UE ----
+      - order: 4
+        from: internet
+        to: upf
+        protocol: IP
+        interface: N6
+        label: "Internet → UPF (N6, reverse-NAT + TUN read)"
+        description: "Reply packet arrives at UPF's external interface destined for the NAT'd IP; conntrack reverse-NATs to the UE-IP; kernel routes by destination into `ogstun`; UPF reads the inner packet from the TUN."
+        detail: |
+          The reply arrives on the UPF container's external NIC with
+          dst = UPF-egress-IP. Linux conntrack matches the existing NAT
+          flow entry and rewrites dst back to the UE's private IP. The
+          kernel routes the packet by destination — UE-IP is in
+          `ogstun`'s subnet, so it gets sent into the TUN. UPF reads
+          it from the TUN file descriptor.
+        failure_modes:
+          - "Conntrack table eviction (under DoS / high churn) → reverse-NAT lookup fails, reply dropped at UPF."
+          - "TUN read starved (CPU pressure on UPF) → packets pile up in the TUN queue; eventual tail-drop."
+
+      - order: 5
+        from: upf
+        to: nr_gnb
+        protocol: GTP-U
+        interface: N3
+        label: "UPF → gNB downlink (N3, GTP-U encap)"
+        description: "UPF matches the inner IP packet against the DL PDR by destination UE-IP, applies the DL FAR (gNB-side N3 F-TEID + IP) and DL QER (Session-AMBR-DL cap), encapsulates in GTP-U with the QFI, and sends UDP/2152 to the gNB."
+        detail: |
+          DL PDRs are typically keyed on the destination UE-IP (and may
+          add 5-tuple filters when SDF templates are in play). The
+          matched PDR's FAR carries the gNB-side N3 F-TEID and gNB N3
+          IP. The QER applies Session-AMBR-DL — over-budget packets are
+          dropped here, not at the gNB. The PDU Session Container
+          extension on GTP-U carries the QFI so the gNB knows which
+          DRB to map onto.
+        failure_modes:
+          - "Session-AMBR-DL exceeded → UPF drops over-budget DL packets; UE sees TCP retransmits / video stalls; `gtp_outdatapktn3upf_per_ue` lower than the inbound N6 rate."
+          - "N3 underlay drops → `gtp_outdatapktn3upf_per_ue` succeeds at UPF but gNB never receives; the lab's DockerBridgeProber localizes."
+          - "DL F-TEID stale (gNB restarted without SMF reconvergence) → UPF tunnels to a TEID gNB no longer recognizes."
+        metrics_to_watch:
+          - "core.upf.gtp_outdatapktn3upf_per_ue"
+
+      - order: 6
+        from: nr_gnb
+        to: e2e_ue1
+        protocol: PDCP/RLC/MAC over PHY
+        interface: Uu
+        label: "gNB → UE radio (downlink)"
+        description: "gNB decapsulates GTP-U, reads the QFI, picks the DRB, runs SDAP/PDCP/RLC/MAC/PHY, and transmits to the UE. UE-AMBR scheduling cap is applied at the gNB MAC across all the UE's non-GBR DRBs."
+        detail: |
+          The gNB's N3 listener decapsulates GTP-U, reads QFI from the
+          PDU Session Container extension, and looks up the DRB carrying
+          that QoS flow on the radio. SDAP echoes the QFI for the UE;
+          PDCP ciphers; RLC and MAC schedule the DRB. UE-AMBR is the
+          aggregate cap across all of the UE's non-GBR DRBs at the gNB
+          scheduler. Once the radio frame reaches the UE, the modem
+          decodes back up the stack to IP and delivers to the listening
+          socket; the app's `recv()` returns.
+        failure_modes:
+          - "RAN radio degradation → DL packets dropped at PHY/RLC; UE TCP stack sees losses, retransmits over a longer RTT."
+          - "UE-AMBR exceeded → gNB drops over-budget aggregate at the scheduler; some flows starve while others get through."
+
+    outcome:
+      success: "User data flows bidirectionally between the UE and the public Internet. `gtp_indatapktn3upf_per_ue` and `gtp_outdatapktn3upf_per_ue` rise together at rates proportional to the application's send/receive load; no PDR-miss errors at UPF; no conntrack drops on the return path."
+      observable_metrics:
+        - "core.upf.gtp_indatapktn3upf_per_ue (uplink N3 packet rate, per UE)"
+        - "core.upf.gtp_outdatapktn3upf_per_ue (downlink N3 packet rate, per UE)"
+        - "gNB radio counters (per-UE throughput, BLER if exposed)"
+        - "Conntrack table size on UPF (NAT entries; saturation produces drops)"

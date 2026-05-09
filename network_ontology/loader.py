@@ -591,6 +591,17 @@ def load_flows(tx):
     import json
 
     for flow_id, flow in data.get("flows", {}).items():
+        # Per ADR `flows_tool_deployment_awareness.md`: activity_indicator
+        # carries the Prometheus expression (and threshold) used by
+        # `get_active_flows_through_component` to decide whether this flow
+        # is currently active in the deployment. None when no rate-windowed
+        # Prometheus signal is available — the tool then returns the flow
+        # with `active: null` rather than silently treating it as inactive.
+        ai = flow.get("activity_indicator") or {}
+        activity_indicator_expr = ai.get("expr") if ai else None
+        activity_indicator_threshold = ai.get("threshold_gt") if ai else None
+        activity_indicator_description = ai.get("description") if ai else None
+
         # Create Flow node
         tx.run("""
             MERGE (f:Flow {id: $id})
@@ -601,7 +612,10 @@ def load_flows(tx):
                 f.display_order = $display_order,
                 f.preconditions = $preconditions,
                 f.outcome_success = $outcome_success,
-                f.outcome_metrics = $outcome_metrics
+                f.outcome_metrics = $outcome_metrics,
+                f.activity_indicator_expr = $activity_indicator_expr,
+                f.activity_indicator_threshold = $activity_indicator_threshold,
+                f.activity_indicator_description = $activity_indicator_description
         """,
             id=flow_id,
             name=flow["name"],
@@ -612,6 +626,9 @@ def load_flows(tx):
             preconditions=flow.get("preconditions", []),
             outcome_success=flow.get("outcome", {}).get("success", ""),
             outcome_metrics=flow.get("outcome", {}).get("observable_metrics", []),
+            activity_indicator_expr=activity_indicator_expr,
+            activity_indicator_threshold=activity_indicator_threshold,
+            activity_indicator_description=activity_indicator_description,
         )
 
         # Create FlowStep nodes

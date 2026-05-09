@@ -487,70 +487,23 @@ class OntologyClient:
                     triggered.append(rule)
 
             elif rule_id == "upf_counters_are_directional":
-                # Fires whenever both UPF directional counters are in
-                # observations. Purpose: proactive education — tell the
-                # agent these counters are independent directions and
-                # can NEVER be subtracted to compute loss. Always-on
-                # guidance, but attaches an asymmetry_pct so the agent
-                # can see the magnitude of the (harmless) asymmetry.
-                in_total = observations.get("fivegs_ep_n3_gtp_indatapktn3upf")
-                out_total = observations.get("fivegs_ep_n3_gtp_outdatapktn3upf")
-
-                if (in_total is not None and out_total is not None
-                        and isinstance(in_total, (int, float))
-                        and isinstance(out_total, (int, float))):
-
-                    max_val = max(abs(in_total), abs(out_total))
-                    if max_val > 0:
-                        asymmetry_pct = round(
-                            abs(in_total - out_total) / max_val * 100, 1
-                        )
-                    else:
-                        asymmetry_pct = 0.0
-
-                    # Severity escalates with asymmetry — above 30% the
-                    # agent is most tempted to misread it as loss.
-                    if asymmetry_pct >= 30:
-                        severity = "high_temptation"
-                        verdict = (
-                            f"Asymmetry is {asymmetry_pct}% — HIGH temptation "
-                            f"to misinterpret as packet loss. It is NOT. This "
-                            f"asymmetry is structural (determined by historical "
-                            f"traffic mix over the container's lifetime). DO NOT "
-                            f"report the difference as loss. Use one of the "
-                            f"correct_methods below for actual loss detection."
-                        )
-                    else:
-                        severity = "informational"
-                        verdict = (
-                            f"Asymmetry is {asymmetry_pct}% — counters are "
-                            f"roughly consistent. Regardless, these counters "
-                            f"cannot be subtracted to compute loss under any "
-                            f"circumstance. See correct_methods for actual "
-                            f"loss detection."
-                        )
-
-                    correct_methods = [
-                        "Same-direction rate comparison: "
-                        "rate(fivegs_ep_n3_gtp_indatapktn3upf[2m]) vs expected "
-                        "rate for current traffic (G.711 call = ~50 pps per direction)",
-                        "RTCP-based voice quality: "
-                        "rate(rtpengine_packetloss_total[2m]) / "
-                        "rate(rtpengine_packetloss_samples_total[2m]) = "
-                        "sampled loss fraction from RTCP reports",
-                        "Interface drop counters on tc qdisc "
-                        "(not currently exposed as a tool)",
-                    ]
-
-                    triggered.append({
-                        **rule,
-                        "in_total": in_total,
-                        "out_total": out_total,
-                        "asymmetry_pct": asymmetry_pct,
-                        "severity": severity,
-                        "verdict": verdict,
-                        "correct_methods": correct_methods,
-                    })
+                # Delegated to the pure-Python evaluator under
+                # `network_ontology.rules.upf_directional`. The
+                # evaluator handles BOTH cumulative-pair and rate-pair
+                # fire conditions — when both pairs are in the
+                # observations dict, BOTH verdicts fire (one each,
+                # tagged with window_kind=cumulative|rate) so the
+                # agent sees the analysis on both surfaces. Single
+                # source of truth for the rule logic; consumed by
+                # this method AND by `get_dp_quality_gauges` directly.
+                # See ADR `upf_directional_rates_in_dp_quality_gauges.md`.
+                from .rules import evaluate_upf_directional_rule
+                triggered.extend(
+                    evaluate_upf_directional_rule(
+                        observations,
+                        rule_prose=rule,
+                    )
+                )
 
             elif rule_id == "idle_data_plane_is_normal":
                 # Fires when any data plane throughput rate is present

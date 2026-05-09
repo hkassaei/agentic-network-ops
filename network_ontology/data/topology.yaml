@@ -1,0 +1,99 @@
+# Topology — per-node hop_kind + iface mapping for the path-walk resolver.
+#
+# See ADR `path_anchored_probe_planning_for_transport_layer_faults.md`.
+#
+# The path resolver (`agentic_ops_v7/path_resolver.py`) consumes this file
+# to expand a flow's symbolic step list (e.g. "UE1 -> P-CSCF via [gNB, UPF]")
+# into an ordered list of `Hop(node, kind, iface)` entries that the
+# `PathWalkInvestigator` walks.
+#
+# Schema:
+#   nodes:
+#     <node_name>:
+#       kind: <hop_kind>     # see HopKind in agentic_ops_common/path_walk/protocol.py
+#       iface: <interface>   # default 'eth0' for container nodes
+#       metadata:            # optional, hop-kind-specific
+#         <key>: <value>
+#
+#   bridges:                 # the lab has one Docker bridge between every
+#                            # container pair; carrier deployments author
+#                            # explicit per-link bridge / switch / router
+#                            # entries here instead.
+#     - name: <bridge_id>
+#       kind: docker_bridge
+#       iface: <bridge_iface>
+#       between:             # optional — restricts which container pairs
+#         - [a, b]            # this bridge sits between; omit for "all pairs"
+#
+#   default_inter_container_bridge: <bridge_id>
+#       # fallback bridge inserted between any two adjacent container hops
+#       # not covered by an explicit `between:` entry.
+#
+# All container nodes are on the docker_open5gs default network, which is
+# a single Linux bridge (`docker0` or the compose-managed equivalent) on
+# the host. Every container-to-container hop in this lab traverses that
+# bridge.
+#
+# Future carrier deployments add `l2_switch`, `l3_router`, `vpn_gateway`,
+# `optical_segment`, etc. nodes here, plus per-link bridge entries naming
+# the specific switch port between two endpoints.
+
+nodes:
+  # ---- 5G Core (Open5GS, all on docker_open5gs default network) ----
+  amf:    {kind: container, iface: eth0}
+  smf:    {kind: container, iface: eth0}
+  upf:    {kind: container, iface: eth0}
+  ausf:   {kind: container, iface: eth0}
+  udm:    {kind: container, iface: eth0}
+  udr:    {kind: container, iface: eth0}
+  nrf:    {kind: container, iface: eth0}
+  nssf:   {kind: container, iface: eth0}
+  pcf:    {kind: container, iface: eth0}
+  bsf:    {kind: container, iface: eth0}
+  scp:    {kind: container, iface: eth0}
+  smsc:   {kind: container, iface: eth0}
+
+  # ---- IMS (Kamailio CSCFs + RTPEngine) ----
+  pcscf:     {kind: container, iface: eth0}
+  icscf:     {kind: container, iface: eth0}
+  scscf:     {kind: container, iface: eth0}
+  rtpengine: {kind: container, iface: eth0}
+  ibcf:      {kind: container, iface: eth0}
+
+  # ---- HSS subsystem ----
+  pyhss: {kind: container, iface: eth0}
+  mysql: {kind: container, iface: eth0}
+
+  # ---- Infrastructure ----
+  mongo:   {kind: container, iface: eth0}
+  dns:     {kind: container, iface: eth0}
+  metrics: {kind: container, iface: eth0}
+  webui:   {kind: container, iface: eth0}
+
+  # ---- RAN + UEs ----
+  nr_gnb:  {kind: container, iface: eth0}
+  e2e_ue1: {kind: container, iface: eth0}
+  e2e_ue2: {kind: container, iface: eth0}
+
+  # ---- External Data Network (off-stack) ----
+  # Logical endpoint representing the public Internet / external DN
+  # reachable through UPF's N6 egress (NAT'd via ogstun in this lab).
+  # Not a container; included so flows like
+  # `data_pdu_session_user_traffic` can name it as their UL terminus
+  # and DL origin. The path-walk resolver does not traverse beyond
+  # this node — it represents "off-stack" by definition.
+  internet: {kind: external_network, iface: ""}
+
+bridges:
+  - name: docker_open5gs_default
+    kind: docker_bridge
+    iface: br-docker_open5gs
+    metadata:
+      docker_network: docker_open5gs_default
+      description: |
+        The single Linux bridge that backs the docker_open5gs default
+        network. Every container-to-container packet in this lab passes
+        through this bridge in the host's network namespace.
+        DockerBridgeProber inspects this bridge via nsenter into PID 1.
+
+default_inter_container_bridge: docker_open5gs_default

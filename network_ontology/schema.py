@@ -221,6 +221,28 @@ class FlowOutcome(_Base):
     observable_metrics: list[str] | None = None
 
 
+class ActivityIndicator(_Base):
+    """Per-flow live-activity probe authored in flows.yaml.
+
+    The Prometheus expression `expr` is evaluated over the caller's
+    window (`{w}s` is substituted at query time, matching the pattern
+    used by `agentic_ops_common/tools/data_plane.py`). The flow is
+    "active" iff the result is strictly greater than `threshold_gt`.
+
+    A flow may legitimately set `activity_indicator: null` when no
+    rate-windowed Prometheus signal is available in this deployment
+    (e.g., teardown procedures whose only counters live in kamcmd).
+    The `get_active_flows_through_component` tool surfaces such flows
+    with `active: null` so the LLM never reads "no activity" when the
+    indicator simply isn't authored.
+
+    See ADR `flows_tool_deployment_awareness.md`.
+    """
+    expr: str
+    threshold_gt: float
+    description: str | None = None
+
+
 class Flow(_Base):
     name: str
     description: str | None = None
@@ -230,6 +252,7 @@ class Flow(_Base):
     preconditions: list[str] | None = None
     steps: list[FlowStep]
     outcome: FlowOutcome | None = None
+    activity_indicator: ActivityIndicator | None = None
 
 
 class FlowsFile(_Base):

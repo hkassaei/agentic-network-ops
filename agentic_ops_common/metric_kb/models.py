@@ -34,6 +34,39 @@ class Plane(str, Enum):
     MEDIA = "media"
 
 
+class FaultLayer(str, Enum):
+    """Which layer of fault moves this metric.
+
+    Consumed by the v7 transport-layer pipeline (ADR
+    `path_anchored_probe_planning_for_transport_layer_faults.md`) to
+    route episodes to the path-walk localizer vs the application-layer
+    investigator pipeline. The label travels with the metric in the KB
+    rather than being re-derived at runtime from heuristics.
+
+    transport    Value moves directly with packet-level damage on a link
+                 this metric observes (loss ratios, GTP/RTP rates,
+                 qdisc-derived counters, link RTT). Won't move if only
+                 the application is broken.
+    application  Value moves only when the NF process itself behaves
+                 abnormally: error counters, auth/registration rejects,
+                 timeout ratios, rates that depend on internal state
+                 machines, dialog/bearer counts reflecting call-control.
+                 Won't move under a kernel/qdisc fault that doesn't also
+                 break the application.
+    mixed        Genuinely moves under either kind of fault and the
+                 metric alone cannot disambiguate (canonical case:
+                 control-plane forwarding rates at intermediate hops
+                 like P-CSCF -> I-CSCF, and Diameter reply rates from a
+                 peer that could go silent because the link OR the peer
+                 broke). The path walker runs first; falls through to
+                 the application-layer pipeline if no transport hop
+                 attribution is found.
+    """
+    TRANSPORT = "transport"
+    APPLICATION = "application"
+    MIXED = "mixed"
+
+
 class MetricType(str, Enum):
     GAUGE = "gauge"
     COUNTER = "counter"
@@ -205,6 +238,7 @@ class MetricEntry(BaseModel):
     protocol: Optional[str] = None
     interface: Optional[str] = None
     plane: Optional[Plane] = None
+    fault_layer: Optional[FaultLayer] = None
 
     # --- Semantics ---
     description: str

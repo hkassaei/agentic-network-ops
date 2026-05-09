@@ -166,6 +166,129 @@ data_plane_degradation = Scenario(
     ttl_seconds=600,
 )
 
+rtpengine_latency_injection = Scenario(
+    name="RTPEngine Latency Injection",
+    description=(
+        "Inject 100ms latency on RTPEngine egress. Same fault locus as "
+        "Call Quality Degradation (rtpengine container, kernel-level "
+        "qdisc) but the manifestation is delay rather than drop. Tests "
+        "v7's path-walk generalization from `drops_attributed_here` to "
+        "`latency_at_hop` — both are first-class HopAttribution variants. "
+        "Operators see audio jitter / one-way audio rather than gappy "
+        "audio. v7's `KernelHopProber` reads the qdisc's authored "
+        "`delay 100ms` parameter and v7's `LocalizedSynthesis` emits "
+        "verdict_kind=localized with attribution_kind=latency_at_hop. "
+        "v6's per-NF pipeline mis-diagnoses for the same reason it "
+        "mis-diagnoses Call Quality Degradation: rtpengine.errors_per_second "
+        "stays at 0 (the relay loop sees no errors), and 3-ping measure_rtt "
+        "is too undersampled to reliably distinguish 100ms latency from "
+        "Docker-bridge baseline."
+    ),
+    category=FaultCategory.NETWORK,
+    blast_radius=BlastRadius.SINGLE_NF,
+    faults=[
+        FaultSpec(
+            fault_type="network_latency",
+            target="rtpengine",
+            params={"delay_ms": 100, "jitter_ms": 0},
+            ttl_seconds=600,
+        ),
+    ],
+    expected_symptoms=[
+        "RTCP one-way RTT spikes by ~100ms (one direction; symmetric "
+        "delay would double)",
+        "Audio jitter increases at receiver UE",
+        "rtpengine.errors_per_second UNCHANGED (relay loop is healthy)",
+        "rtpengine.loss_ratio UNCHANGED (delay does not drop packets)",
+        "UPF GTP counters UNAFFECTED (delay is on rtpengine egress only)",
+        "SIP signaling UNAFFECTED (doesn't traverse rtpengine)",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=600,
+)
+
+upf_bandwidth_cap = Scenario(
+    name="UPF Bandwidth Cap",
+    description=(
+        "Cap UPF egress at 100 kbit/s with a tc tbf qdisc. The cap is "
+        "deliberately tight — VoNR media (G.711 ~64 kbit/s per direction "
+        "at 100 pps) plus signaling traffic exceeds the budget; tbf drops "
+        "over-rate packets. Tests v7's path walk localizing a "
+        "bandwidth-induced drop counter at a tbf qdisc, complementing "
+        "the netem-loss case. The KernelHopProber distinguishes "
+        "qdisc_tbf from qdisc_netem in the counter_kind field. v6 "
+        "would see UPF GTP counters drop and likely diagnose UPF "
+        "correctly by NF, but with low confidence and without naming "
+        "the qdisc — v7 names the qdisc and the exact dropped count."
+    ),
+    category=FaultCategory.NETWORK,
+    blast_radius=BlastRadius.SINGLE_NF,
+    faults=[
+        FaultSpec(
+            fault_type="network_bandwidth",
+            target="upf",
+            params={"rate_kbit": 100},
+            ttl_seconds=600,
+        ),
+    ],
+    expected_symptoms=[
+        "upf.gtp_outdatapktn3upf_per_ue drops below baseline (egress capped)",
+        "upf.gtp_indatapktn3upf_per_ue partially drops (depends on "
+        "direction the cap applies to)",
+        "Voice quality degrades — overflow packets dropped",
+        "tbf qdisc reports non-zero `dropped` counter on UPF eth0",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=600,
+)
+
+pcscf_packet_loss = Scenario(
+    name="P-CSCF Packet Loss",
+    description=(
+        "Inject 30% packet loss on the P-CSCF (SIP edge proxy) — the "
+        "same fault class as Call Quality Degradation but on a "
+        "signaling-plane container. Packets leaving P-CSCF (REGISTER "
+        "forwards to I-CSCF, 401/200 responses to UEs) are silently "
+        "dropped by the kernel after Kamailio's sendto() returns "
+        "success. SIP retransmission timers (T1 = 500 ms) absorb "
+        "some of the loss; a meaningful fraction of registrations "
+        "still time out. This is the second worked example in ADR "
+        "`path_anchored_probe_planning_for_transport_layer_faults.md` "
+        "— it proves that the same fault class manifests in the "
+        "signaling plane and that v7's path walk localizes both "
+        "data-plane (Call Quality Degradation) and signaling-plane "
+        "(this scenario) instances of it correctly. v6's per-NF "
+        "hypothesis pipeline mis-diagnoses both."
+    ),
+    category=FaultCategory.NETWORK,
+    blast_radius=BlastRadius.SINGLE_NF,
+    faults=[
+        FaultSpec(
+            fault_type="network_loss",
+            target="pcscf",
+            params={"loss_pct": 30},
+            ttl_seconds=600,
+        ),
+    ],
+    expected_symptoms=[
+        "pcscf.avg_register_time_ms spikes (UE retransmissions before success)",
+        "icscf.rcv_requests_register_per_ue drops to ~70% of baseline",
+        "scscf.rcv_requests_register_per_ue drops further (compounded)",
+        "IMS registration completion rate drops",
+        "Kamailio internal counters (pcscf.errors_per_second) UNCHANGED — "
+        "kernel-level drops are below the application's `sendto()` boundary",
+        "Data plane (UPF GTP counters, RTPEngine) UNAFFECTED — media path "
+        "doesn't traverse P-CSCF",
+        "Diameter timeout-ratio metrics may spike if registration cascades "
+        "fail before HSS responses come back",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=600,
+)
+
 call_quality_degradation = Scenario(
     name="Call Quality Degradation",
     description=(
@@ -360,7 +483,10 @@ SCENARIOS: dict[str, Scenario] = {
         scscf_crash,
         hss_unresponsive,
         data_plane_degradation,
+        pcscf_packet_loss,
         call_quality_degradation,
+        rtpengine_latency_injection,
+        upf_bandwidth_cap,
         mongodb_gone,
         dns_failure,
         ims_network_partition,

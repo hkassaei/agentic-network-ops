@@ -763,3 +763,63 @@ The original gap (audited 2026-05-06): 30 metrics across the KB carried authored
 **Enforcement.** `agentic_ops_common/tests/test_kb_authoring_invariants.py::test_every_metric_with_authored_content_is_agent_exposed` walks the loaded KB at test time and fails CI on any violation. Adding a new metric with `meaning` or `disambiguators` but without `agent_exposed: true` is a CI-blocking error at PR time.
 
 **When `agent_exposed: false` IS appropriate.** Bare counter entries that exist for raw-lookup tooling (Prometheus exporter aliases, deprecated raw counters retained for compatibility) and have no authored `meaning` / `disambiguators` content can stay at `false`. Such entries are not subject to this rule.
+
+---
+
+## Topology schema additions for path-walk
+
+Per ADR [`path_anchored_probe_planning_for_transport_layer_faults.md`](path_anchored_probe_planning_for_transport_layer_faults.md), the v7 path resolver consumes a new `network_ontology/data/topology.yaml` file plus optional per-step annotations on existing flows in `network_ontology/data/flows.yaml`.
+
+### `topology.yaml` — per-node hop kind and interface
+
+```yaml
+nodes:
+  <node_name>:
+    kind: <hop_kind>     # "container" | "host_kernel" | "docker_bridge" |
+                         # "l2_switch" | "l3_router" | "wan_edge" |
+                         # "vpn_gateway" | "optical_segment" |
+                         # "transit_segment" | "firewall" |
+                         # "load_balancer" | "dpi"
+    iface: <interface>   # default 'eth0' for container nodes
+    metadata:            # optional, hop-kind-specific
+      <key>: <value>
+
+bridges:
+  - name: <bridge_id>
+    kind: docker_bridge
+    iface: <bridge_iface>
+    metadata:
+      docker_network: <name>
+      description: <text>
+    between:             # optional — restricts which container pairs
+      - [a, b]            # this bridge sits between; omit for "all pairs"
+
+default_inter_container_bridge: <bridge_id>
+    # fallback bridge inserted between any two adjacent container hops
+    # not covered by an explicit `between:` entry.
+```
+
+Loaded at agent-init time and consumed by `agentic_ops_v7/path_resolver.py`. Carrier-grade deployments author richer topology here without changing the schema; new hop kinds are added to `agentic_ops_common/path_walk/protocol.HopKind` and to the registry.
+
+### Optional per-step iface override on flows
+
+`network_ontology/data/flows.yaml` flow steps may specify a per-step physical-layer interface override:
+
+```yaml
+flows:
+  some_flow:
+    steps:
+      - order: 1
+        from: upf
+        to: rtpengine
+        protocol: UDP/RTP
+        interface: N6                # protocol-level interface (existing field)
+        iface_override: eth0         # physical-layer iface for path-walk; optional,
+                                     # defaults to topology.yaml's per-node iface.
+```
+
+This is an override, not a required field. Container-only deployments don't need it. Carrier deployments where a step's physical interface differs from the node default (e.g. UPF talking to gNB on `ens1f0` for N3 vs `ens1f1` for N6) author it here.
+
+### Authoring rule for new flows that the path walk should walk
+
+For any new flow that represents a transport-layer-attributable continuous packet path (i.e. the path resolver may be asked to expand it for a `transport_layer` symptom), the flow's `steps[].from`, `to`, and `via` MUST reference nodes that exist in `topology.yaml`. A test (`test_flow_nodes_exist_in_topology`) walks `flows.yaml` and asserts every named node has a topology entry, failing CI on missing nodes.

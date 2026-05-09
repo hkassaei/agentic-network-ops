@@ -15,7 +15,14 @@ from .container_status import get_network_status
 # were repeatedly unreliable and empty log searches were mis-read as
 # strong-negative evidence.
 from .log_search import read_container_logs, search_logs
-from .reachability import measure_rtt, check_process_listeners, check_tc_rules
+from .reachability import (
+    measure_rtt,
+    check_process_listeners,
+    check_tc_rules,
+    get_qdisc_drops,
+    get_interface_drops,
+    get_link_rate_diff,
+)
 from .config_inspection import read_config, read_running_config, read_env_config
 from .kamailio_state import run_kamcmd
 from .subscriber_lookup import query_subscriber
@@ -49,6 +56,7 @@ __all__ = [
     "get_nf_metrics",
     "get_network_status",
     "measure_rtt", "check_process_listeners", "check_tc_rules",
+    "get_qdisc_drops", "get_interface_drops", "get_link_rate_diff",
     "read_config", "read_running_config", "read_env_config",
     "run_kamcmd",
     "query_subscriber",

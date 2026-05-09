@@ -814,24 +814,72 @@ async def check_tc_rules(
 # Tool 11: measure_rtt
 # ---------------------------------------------------------------------------
 
+def measure_rtt_sample_size(loss_threshold: float) -> int:
+    """Sample size that detects loss >= `loss_threshold` with false-negative
+    probability <= 0.001.
+
+    Derivation: P(no drops in N samples | true loss = p) = (1-p)^N. Solving
+    (1-p)^N <= 0.001 for N gives N >= log(0.001) / log(1-p). We ceil to the
+    next integer.
+
+    Examples (rounded):
+        threshold 0.30 -> N = 20  (~2 s at -i 0.1)
+        threshold 0.10 -> N = 66  (~7 s)
+        threshold 0.01 -> N = 688 (~69 s)
+
+    The 3-ping default of the previous implementation had a 34% false-
+    negative rate against a 30% loss fault — coin-flip — and was the
+    immediate cause of the 2026-05-06 rtpengine mis-diagnosis. See ADR
+    `path_anchored_probe_planning_for_transport_layer_faults.md`.
+
+    Raises ValueError if threshold is outside (0, 1).
+    """
+    import math
+    if not (0.0 < loss_threshold < 1.0):
+        raise ValueError(
+            f"loss_threshold must be in (0, 1); got {loss_threshold!r}"
+        )
+    return math.ceil(math.log(0.001) / math.log(1.0 - loss_threshold))
+
+
 async def measure_rtt(
     deps: AgentDeps,
     container: str,
     target_ip: str,
+    loss_threshold: float = 0.10,
 ) -> str:
-    """Measure round-trip time (RTT) from a container to a target IP.
+    """Measure round-trip time and packet loss from a container to a target IP.
 
     In a healthy Docker bridge network, RTT between any two containers is
-    <1ms. Elevated RTT (>10ms) indicates abnormal latency or congestion
-    on the network path. Use this to detect transport-layer degradation.
+    <1ms. Elevated RTT (>10ms) indicates abnormal latency or congestion;
+    non-zero packet loss indicates transport-layer degradation.
+
+    Sample size is **derived from `loss_threshold`** so the probe is
+    statistically capable of detecting the loss rate it claims to test for:
+
+        loss_threshold=0.30 -> 20 packets   (~2 s)   detects >=30% loss reliably
+        loss_threshold=0.10 -> 66 packets   (~7 s)   detects >=10% loss reliably (default)
+        loss_threshold=0.01 -> 688 packets  (~69 s)  detects >=1%  loss reliably
+
+    The previous `-c 3` default is gone — it was statistically incapable of
+    detecting a 30% loss fault (false-negative rate 34%). See ADR
+    `path_anchored_probe_planning_for_transport_layer_faults.md`.
+
+    For exact, sample-size-free localization of kernel-level qdisc drops on
+    a known path, prefer the path-walk probes (`get_qdisc_drops`,
+    `get_interface_drops`) over `measure_rtt`. `measure_rtt` is the right
+    tool when the question is "is this end-to-end path lossy at >= X%."
 
     Args:
         deps: Agent dependencies.
         container: Source container name (e.g. 'pcscf', 'icscf').
         target_ip: Target IP address to ping (e.g. '172.22.0.19').
+        loss_threshold: Detection-threshold for loss. Sample size is set so
+            the probe almost-never (P <= 0.001) misses a true loss rate at
+            or above this threshold. Default 0.10.
 
     Returns:
-        Ping output with RTT statistics, or error message.
+        Ping output with RTT statistics + per-N loss summary, or error message.
     """
     if container not in deps.all_containers:
         return f"Unknown container '{container}'. Known: {', '.join(deps.all_containers)}"
@@ -844,15 +892,300 @@ async def measure_rtt(
     if not await _container_has_binary(container, "ping"):
         return _tool_unavailable(container, "ping", "measure_rtt")
 
-    cmd = f"docker exec {container} ping -c 3 -W 10 {target_ip}"
+    n = measure_rtt_sample_size(loss_threshold)
+    # -i 0.1 (100ms inter-packet interval) keeps wall-time bounded;
+    # -W 1 (1s per-packet wait) keeps probes responsive even when
+    # part of the path is dropping.
+    cmd = f"docker exec {container} ping -c {n} -i 0.1 -W 1 {target_ip}"
     rc, output = await _shell(cmd)
 
     if rc != 0 and "100% packet loss" in output:
-        return f"Target {target_ip} is UNREACHABLE from {container} (no response within 10s):\n{output.strip()}"
+        return (
+            f"Target {target_ip} is UNREACHABLE from {container} "
+            f"(0/{n} packets received):\n{output.strip()}"
+        )
     if rc != 0:
         return f"Ping failed from {container} to {target_ip}: {output.strip()}"
 
-    return output.strip()
+    return (
+        f"[loss_threshold={loss_threshold}, sample_size={n}]\n"
+        f"{output.strip()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Path-walk probe wrappers
+#
+# Per ADR `path_anchored_probe_planning_for_transport_layer_faults.md`,
+# these wrappers extract structured drop / error / rate counters from
+# kernel and bridge telemetry. Probers in
+# `agentic_ops_common/path_walk/probers/*` use them; v7's PathWalkInvestigator
+# composes prober output into a PathWalkReport.
+#
+# Returns are typed dicts (Python's TypedDict not used to avoid a hard
+# typing-extensions floor; consumers treat the result shape as documented).
+# Failure modes:
+#   - tool_unavailable: dict with key "_error" == "tool_unavailable" and
+#     "missing_binary" naming the binary; mirrors PROBE_TOOL_UNAVAILABLE
+#     semantics so probers can map cleanly to InconclusiveHop.
+#   - other failures: dict with "_error" carrying the message.
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+
+async def get_qdisc_drops(container: str, iface: str = "eth0") -> dict:
+    """Read per-qdisc drop counters at a container's interface.
+
+    Wraps `tc -s qdisc show dev <iface>` inside the container's network
+    namespace. Returns a structured dict with the qdisc kind, packets
+    sent, packets dropped, and drop fraction.
+
+    For tc netem `loss N%` faults this is the source of truth — the
+    kernel's exact counter, no statistical sampling required.
+
+    Returns dict with keys:
+        qdisc_kind:   "netem" | "tbf" | "fq_codel" | "noqueue" | ...
+        sent_pkts:    int
+        dropped_pkts: int
+        dropped_pct:  float | None  (None when sent_pkts == 0)
+        loss_pct:     float | None  (the netem `loss N%` parameter, if authored)
+        delay_ms:     float | None  (the netem `delay Nms` parameter, if authored)
+        raw:          str  (full tc -s output)
+        _error:       str  (when probe could not run; absent on success)
+    """
+    if not await _container_has_binary(container, "tc"):
+        return {
+            "_error": "tool_unavailable",
+            "missing_binary": "tc",
+            "container": container,
+        }
+
+    cmd = f"docker exec {container} tc -s qdisc show dev {iface}"
+    rc, output = await _shell(cmd)
+    if rc != 0:
+        return {
+            "_error": f"tc qdisc show failed (rc={rc}): {output.strip()}",
+            "container": container,
+            "iface": iface,
+            "raw": output,
+        }
+
+    raw = output.strip()
+    qdisc_kind = _parse_qdisc_kind(raw)
+    sent_pkts, dropped_pkts = _parse_qdisc_pkt_counters(raw)
+    dropped_pct = (dropped_pkts / sent_pkts) if sent_pkts > 0 else None
+    loss_pct = _parse_netem_loss_pct(raw)
+    delay_ms = _parse_netem_delay_ms(raw)
+
+    return {
+        "qdisc_kind": qdisc_kind,
+        "sent_pkts": sent_pkts,
+        "dropped_pkts": dropped_pkts,
+        "dropped_pct": dropped_pct,
+        "loss_pct": loss_pct,
+        "delay_ms": delay_ms,
+        "raw": raw,
+    }
+
+
+def _parse_qdisc_kind(raw: str) -> str:
+    """Identify the root qdisc kind from `tc -s qdisc show` output.
+
+    Output line shape: `qdisc <kind> <handle>: root <opts>...`. We pick
+    the first matching qdisc declaration; deep-tree qdiscs are a follow-up.
+    """
+    m = _re.search(r"^qdisc\s+(\S+)\s+", raw, _re.MULTILINE)
+    return m.group(1) if m else "unknown"
+
+
+def _parse_qdisc_pkt_counters(raw: str) -> tuple[int, int]:
+    """Parse `Sent N bytes M pkt (dropped K, ...)` from tc -s output.
+
+    Returns (sent_pkts, dropped_pkts). Returns (0, 0) if the line isn't
+    found.
+    """
+    m = _re.search(
+        r"Sent\s+\d+\s+bytes\s+(\d+)\s+pkt\s+\(dropped\s+(\d+),", raw
+    )
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return 0, 0
+
+
+def _parse_netem_loss_pct(raw: str) -> float | None:
+    """Extract the authored `loss N%` parameter from a netem qdisc, if any."""
+    m = _re.search(r"loss\s+([\d.]+)%", raw)
+    return float(m.group(1)) / 100.0 if m else None
+
+
+def _parse_netem_delay_ms(raw: str) -> float | None:
+    """Extract the authored `delay Nms` parameter from a netem qdisc, if any."""
+    m = _re.search(r"delay\s+([\d.]+)\s*ms", raw)
+    return float(m.group(1)) if m else None
+
+
+async def get_interface_drops(container: str, iface: str = "eth0") -> dict:
+    """Read interface-level RX/TX counters at a container's interface.
+
+    Wraps `ip -s link show dev <iface>`. Catches drops not tied to a
+    qdisc (ring-buffer overrun, NIC errors).
+
+    Returns dict with keys:
+        rx_pkts, rx_bytes, rx_errors, rx_dropped:  int
+        tx_pkts, tx_bytes, tx_errors, tx_dropped:  int
+        raw: str
+        _error: str  (when probe could not run; absent on success)
+    """
+    if not await _container_has_binary(container, "ip"):
+        return {
+            "_error": "tool_unavailable",
+            "missing_binary": "ip",
+            "container": container,
+        }
+
+    cmd = f"docker exec {container} ip -s link show dev {iface}"
+    rc, output = await _shell(cmd)
+    if rc != 0:
+        return {
+            "_error": f"ip link show failed (rc={rc}): {output.strip()}",
+            "container": container,
+            "iface": iface,
+            "raw": output,
+        }
+
+    raw = output.strip()
+    rx = _parse_ip_link_stats_block(raw, "RX")
+    tx = _parse_ip_link_stats_block(raw, "TX")
+    return {
+        "rx_bytes":   rx[0],
+        "rx_pkts":    rx[1],
+        "rx_errors":  rx[2],
+        "rx_dropped": rx[3],
+        "tx_bytes":   tx[0],
+        "tx_pkts":    tx[1],
+        "tx_errors":  tx[2],
+        "tx_dropped": tx[3],
+        "raw": raw,
+    }
+
+
+def _parse_ip_link_stats_block(raw: str, direction: str) -> tuple[int, int, int, int]:
+    """Parse a `RX:` or `TX:` block from `ip -s link show` output.
+
+    `ip -s link show` prints:
+        RX:  bytes packets errors dropped overrun mcast
+             12345 678     0      0       0       0
+        TX:  bytes packets errors dropped carrier collsns
+             67890 123     0      0       0       0
+
+    We return (bytes, packets, errors, dropped). Order is determined by
+    the header on systems where iproute2 changed column ordering, but
+    the four columns we care about are reliably the first four numbers.
+    Returns (0, 0, 0, 0) if the block isn't found.
+    """
+    m = _re.search(
+        rf"{direction}:.*?\n\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+        raw,
+        _re.DOTALL,
+    )
+    if m:
+        return (int(m.group(1)), int(m.group(2)),
+                int(m.group(3)), int(m.group(4)))
+    return 0, 0, 0, 0
+
+
+async def get_link_rate_diff(
+    container_a: str,
+    iface_a: str,
+    container_b: str,
+    iface_b: str,
+    direction: str = "a_to_b",
+    window_seconds: int = 5,
+) -> dict:
+    """Compare same-direction packet rates at two adjacent hops.
+
+    For an A->B direction, we sample TX(A, iface_a) and RX(B, iface_b)
+    over `window_seconds`, compute per-second rates, and report the
+    difference. A meaningful TX > RX delta attributes loss to the link
+    between A and B.
+
+    The implementation takes two interface-counter snapshots
+    `window_seconds` apart and computes the delta — same shape as the
+    preprocessor's rate windows elsewhere in this codebase.
+
+    Returns dict with keys:
+        direction:           "a_to_b" | "b_to_a"
+        window_seconds:      int
+        tx_rate_pkts_per_s:  float
+        rx_rate_pkts_per_s:  float
+        diff_pkts_per_s:     float  (tx_rate - rx_rate)
+        attributed_loss_pct: float | None  (diff / tx_rate, when tx_rate > 0)
+        evidence:            str  (verbatim two-snapshot comparison)
+        _error:              str  (when probe could not run; absent on success)
+    """
+    if direction not in ("a_to_b", "b_to_a"):
+        return {"_error": f"invalid direction {direction!r}; expected 'a_to_b' or 'b_to_a'"}
+
+    # Sample t0
+    a0 = await get_interface_drops(container_a, iface_a)
+    b0 = await get_interface_drops(container_b, iface_b)
+    if "_error" in a0:
+        return {"_error": f"hop A unreachable: {a0['_error']}", "side": "a", "underlying": a0}
+    if "_error" in b0:
+        return {"_error": f"hop B unreachable: {b0['_error']}", "side": "b", "underlying": b0}
+
+    import asyncio as _asyncio
+    await _asyncio.sleep(window_seconds)
+
+    # Sample t1
+    a1 = await get_interface_drops(container_a, iface_a)
+    b1 = await get_interface_drops(container_b, iface_b)
+    if "_error" in a1 or "_error" in b1:
+        return {
+            "_error": "second-snapshot read failed",
+            "a1_error": a1.get("_error"),
+            "b1_error": b1.get("_error"),
+        }
+
+    if direction == "a_to_b":
+        tx_delta = a1["tx_pkts"] - a0["tx_pkts"]
+        rx_delta = b1["rx_pkts"] - b0["rx_pkts"]
+        tx_label = f"{container_a}[{iface_a}].tx_pkts"
+        rx_label = f"{container_b}[{iface_b}].rx_pkts"
+    else:
+        tx_delta = b1["tx_pkts"] - b0["tx_pkts"]
+        rx_delta = a1["rx_pkts"] - a0["rx_pkts"]
+        tx_label = f"{container_b}[{iface_b}].tx_pkts"
+        rx_label = f"{container_a}[{iface_a}].rx_pkts"
+
+    tx_rate = tx_delta / window_seconds if window_seconds > 0 else 0.0
+    rx_rate = rx_delta / window_seconds if window_seconds > 0 else 0.0
+    diff = tx_rate - rx_rate
+    attributed_loss = (diff / tx_rate) if tx_rate > 0 else None
+
+    evidence = (
+        f"window={window_seconds}s direction={direction}\n"
+        f"  {tx_label}: delta={tx_delta} pkts, rate={tx_rate:.2f} pps\n"
+        f"  {rx_label}: delta={rx_delta} pkts, rate={rx_rate:.2f} pps\n"
+        f"  diff: {diff:.2f} pps "
+        f"({attributed_loss * 100:.1f}% attributed loss)"
+        if attributed_loss is not None else
+        f"window={window_seconds}s direction={direction}\n"
+        f"  {tx_label}: delta={tx_delta} pkts, rate={tx_rate:.2f} pps\n"
+        f"  {rx_label}: delta={rx_delta} pkts, rate={rx_rate:.2f} pps\n"
+        f"  diff: {diff:.2f} pps (no traffic in window — attribution unavailable)"
+    )
+
+    return {
+        "direction": direction,
+        "window_seconds": window_seconds,
+        "tx_rate_pkts_per_s": tx_rate,
+        "rx_rate_pkts_per_s": rx_rate,
+        "diff_pkts_per_s": diff,
+        "attributed_loss_pct": attributed_loss,
+        "evidence": evidence,
+    }
 
 
 # ---------------------------------------------------------------------------

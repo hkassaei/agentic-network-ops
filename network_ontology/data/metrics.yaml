@@ -5,6 +5,7 @@ metrics:
       amf_session:
         source: prometheus
         type: counter
+        fault_layer: application
         agent_exposed: true
         description: Active NAS sessions on the AMF. Each UE has 2 (internet + IMS APN).
         healthy:
@@ -18,6 +19,7 @@ metrics:
       fivegs_amffunction_amf_authfail:
         source: prometheus
         type: counter
+        fault_layer: application
         description: Authentication failures (counter). Non-zero delta indicates auth problems.
         healthy:
           scale_independent: true
@@ -25,6 +27,7 @@ metrics:
       fivegs_amffunction_amf_authreject:
         source: prometheus
         type: counter
+        fault_layer: application
         description: Authentication rejections (counter). Non-zero delta indicates rejected credentials.
         healthy:
           scale_independent: true
@@ -32,12 +35,14 @@ metrics:
       fivegs_amffunction_amf_authreq:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: Authentication requests sent to AUSF (counter).
         healthy:
           scale_independent: true
       fivegs_amffunction_rm_reginitreq:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: Registration initial requests received (counter). Delta indicates new registrations.
         healthy:
           scale_independent: true
@@ -45,6 +50,7 @@ metrics:
       fivegs_amffunction_rm_reginitsucc:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: Successful registrations (counter). Gap from reginitreq = failed registrations.
         healthy:
           scale_independent: true
@@ -58,6 +64,7 @@ metrics:
         protocol: NGAP
         interface: N2
         plane: control
+        fault_layer: mixed
         description: 'Count of gNBs with active N2 (NGAP/SCTP) association to this AMF.
 
           '
@@ -122,6 +129,7 @@ metrics:
         protocol: NGAP
         interface: N2
         plane: control
+        fault_layer: mixed
         description: 'Count of UEs currently attached to the 5G RAN via this AMF. Incremented
 
           on successful attach, decremented on detach. Reported by the AMF
@@ -220,6 +228,7 @@ metrics:
       cdp:average_response_time:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Average Diameter Cx response time (ms). Typical 50-150ms. >500ms indicates HSS overload
           or network latency.
         healthy:
@@ -232,6 +241,7 @@ metrics:
       cdp:queuelength:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Diameter messages waiting in the outgoing queue. Should be 0. Non-zero indicates
           HSS backpressure.
         healthy:
@@ -239,18 +249,21 @@ metrics:
       cdp:replies_received:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Diameter Cx replies received from HSS (counter).
         healthy:
           scale_independent: true
       cdp:replies_response_time:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Sum of all Diameter response times (ms) since container start. Used to compute average.
         healthy:
           scale_independent: true
       cdp:timeout:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: Diameter Cx query timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity
           issues.
@@ -259,6 +272,7 @@ metrics:
         expected: 0
         alarm_if: '> 0 (Diameter queries timing out — HSS issue)'
       cdp_avg_response_time:
+        agent_exposed: true
         display_name: I-CSCF Diameter average response time
         source: kamcmd
         type: gauge
@@ -266,6 +280,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Average Diameter response time across all Cx operations the I-CSCF
 
           issues toward HSS (UAR + LIR). Reported by Kamailio cdp module.
@@ -356,18 +371,21 @@ metrics:
       core:rcv_requests_invite:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: SIP INVITE requests received at I-CSCF (counter).
         healthy:
           scale_independent: true
       core:rcv_requests_register:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: SIP REGISTER requests received at I-CSCF (counter).
         healthy:
           scale_independent: true
       ims_icscf:lir_timeouts:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: Location-Info-Request (LIR) query timeouts to HSS. Expected 0.
         healthy:
@@ -377,6 +395,7 @@ metrics:
       ims_icscf:uar_timeouts:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: User-Agent-Route (UAR) query timeouts to HSS. Expected 0.
         healthy:
@@ -384,6 +403,7 @@ metrics:
         expected: 0
         alarm_if: '> 0'
       lir_avg_response_time:
+        agent_exposed: true
         display_name: I-CSCF LIR response time
         source: kamcmd
         type: gauge
@@ -391,6 +411,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Average response time for Location-Info-Request queries from I-CSCF
 
           to HSS (used to find which S-CSCF a user is assigned to).
@@ -429,6 +450,7 @@ metrics:
         - lir
         - latency
       rcv_requests_invite_per_ue:
+        agent_exposed: true
         display_name: SIP INVITE rate per UE at I-CSCF
         source: derived
         type: derived
@@ -436,6 +458,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: mixed
         description: 'Rate of INVITEs forwarded from P-CSCF to I-CSCF. Same semantics as
 
           register_per_ue but for call setup.
@@ -475,6 +498,7 @@ metrics:
         - invite
         - partition_signal
       rcv_requests_register_per_ue:
+        agent_exposed: true
         display_name: SIP REGISTER rate per UE at I-CSCF
         source: derived
         type: derived
@@ -482,6 +506,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: mixed
         description: 'Rate of REGISTERs forwarded to the I-CSCF from P-CSCF. Should match
 
           P-CSCF REGISTER rate in healthy operation; gap indicates forwarding
@@ -553,6 +578,7 @@ metrics:
         - rate
         - partition_signal
       sip_error_ratio:
+        agent_exposed: true
         display_name: I-CSCF SIP error response ratio
         source: derived
         type: ratio
@@ -560,6 +586,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: application
         description: 'Same formula as P-CSCF sip_error_ratio but at I-CSCF.
 
           '
@@ -592,11 +619,13 @@ metrics:
       tmx:active_transactions:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Active SIP transactions at I-CSCF. Expected 0.
         healthy:
           scale_independent: true
         expected: 0
       uar_avg_response_time:
+        agent_exposed: true
         display_name: I-CSCF UAR response time
         source: kamcmd
         type: gauge
@@ -604,6 +633,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Average response time for User-Authorization-Request queries from
 
           I-CSCF to HSS (part of IMS registration).
@@ -647,6 +677,7 @@ metrics:
         - uar
         - latency
       uar_timeout_ratio:
+        agent_exposed: true
         display_name: I-CSCF UAR timeout ratio
         source: derived
         type: ratio
@@ -654,6 +685,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Ratio of UAR timeouts to (timeouts + replies). Rises when Diameter
 
           queries to HSS time out without a response.
@@ -713,6 +745,7 @@ metrics:
         - timeout
         - ratio
       lir_timeout_ratio:
+        agent_exposed: true
         display_name: I-CSCF LIR timeout ratio
         source: derived
         type: ratio
@@ -720,6 +753,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Ratio of LIR timeouts to (timeouts + replies). LIR is the
           location-info request issued during call setup to find the
           serving S-CSCF for the callee. Rises when HSS Diameter LIR
@@ -775,6 +809,7 @@ metrics:
         - timeout
         - ratio
       cdp_replies_per_ue:
+        agent_exposed: true
         display_name: I-CSCF Diameter reply rate per UE
         source: derived
         type: ratio
@@ -782,6 +817,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Per-UE rate of Diameter reply receipts at I-CSCF, computed
           as rate(cdp:replies_received) / registered_UEs. Aggregates UAR/LIR
           replies normalized by IMS-registered subscriber count, so the
@@ -818,6 +854,7 @@ metrics:
       subscribers:
         source: mongosh
         type: counter
+        fault_layer: application
         description: Number of 5G subscribers provisioned in MongoDB (queried via mongosh).
         healthy:
           scale_independent: false
@@ -830,12 +867,14 @@ metrics:
       fivegs_pcffunction_pa_policyamassocnbr:
         source: prometheus
         type: gauge
+        fault_layer: application
         description: Active AM (Access and Mobility) policy associations.
         healthy:
           scale_independent: true
       fivegs_pcffunction_pa_policyamassoreq:
         source: prometheus
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: AM policy association requests (counter).
         healthy:
@@ -843,6 +882,7 @@ metrics:
       fivegs_pcffunction_pa_policyamassosucc:
         source: prometheus
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: Successful AM policy associations (counter).
         healthy:
@@ -850,24 +890,28 @@ metrics:
       fivegs_pcffunction_pa_policysmassocrelnbr:
         source: prometheus
         type: gauge
+        fault_layer: application
         description: Active SM (Session Management) policy associations.
         healthy:
           scale_independent: true
       fivegs_pcffunction_pa_policysmassoreq:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: SM policy association requests (counter).
         healthy:
           scale_independent: true
       fivegs_pcffunction_pa_policysmassosucc:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: Successful SM policy associations (counter).
         healthy:
           scale_independent: true
       fivegs_pcffunction_pa_sessionnbr:
         source: prometheus
         type: counter
+        fault_layer: application
         description: Active policy association sessions on the PCF.
         healthy:
           scale_independent: false
@@ -877,6 +921,7 @@ metrics:
     layer: ims
     metrics:
       avg_register_time_ms:
+        agent_exposed: true
         display_name: P-CSCF average SIP REGISTER processing time
         source: derived
         type: derived
@@ -884,6 +929,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: mixed
         raw_sources:
         - script:register_time
         - script:register_success
@@ -1017,30 +1063,35 @@ metrics:
       core:rcv_requests_bye:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: SIP BYE requests received (counter).
         healthy:
           scale_independent: true
       core:rcv_requests_invite:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: SIP INVITE requests received (counter).
         healthy:
           scale_independent: true
       core:rcv_requests_options:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: SIP OPTIONS requests received (counter). Used for keepalive/ping.
         healthy:
           scale_independent: true
       core:rcv_requests_register:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: SIP REGISTER requests received (counter).
         healthy:
           scale_independent: true
       dialog_ng:active:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Active SIP dialogs at P-CSCF. 0 at rest, 2 during active call (one per direction).
         healthy:
           scale_independent: false
@@ -1049,6 +1100,7 @@ metrics:
         expected: 0
         note: 2 dialogs during active call (one per direction)
       dialogs_per_ue:
+        agent_exposed: true
         display_name: Active SIP dialogs per registered UE at P-CSCF
         source: derived
         type: derived
@@ -1056,6 +1108,7 @@ metrics:
         protocol: SIP
         interface: Gm
         plane: control
+        fault_layer: mixed
         description: 'Normalized gauge: pcscf.dialog_ng:active / pcscf.registered_contacts.
 
           0 at rest; ~1.0 per active bidirectional VoNR call between registered
@@ -1134,6 +1187,7 @@ metrics:
       httpclient:connfail:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: HTTP client connection failures (counter). Baseline 1300-1500 is pre-existing due
           to SCP_BIND_IP placeholder. Only alert if delta > 100.
@@ -1149,6 +1203,7 @@ metrics:
       httpclient:connok:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: Successful HTTP client connections (counter).
         healthy:
@@ -1156,6 +1211,7 @@ metrics:
       ims_usrloc_pcscf:registered_contacts:
         source: kamcmd
         type: counter
+        fault_layer: application
         description: UE contacts currently registered at the P-CSCF. Expected 2 (one per UE).
         healthy:
           scale_independent: false
@@ -1165,6 +1221,7 @@ metrics:
         expected: 2
         alarm_if: Dropped from prior stable baseline, or = 0 (all UEs lost)
       rcv_requests_invite_per_ue:
+        agent_exposed: true
         display_name: SIP INVITE rate per UE at P-CSCF
         source: derived
         type: derived
@@ -1172,6 +1229,7 @@ metrics:
         protocol: SIP
         interface: Gm
         plane: control
+        fault_layer: mixed
         raw_sources:
         - core:rcv_requests_invite
         description: 'Sliding-window rate of SIP INVITEs arriving at the P-CSCF.
@@ -1239,6 +1297,7 @@ metrics:
         - invite
         - rate
       rcv_requests_register_per_ue:
+        agent_exposed: true
         display_name: SIP REGISTER rate per UE at P-CSCF
         source: derived
         type: derived
@@ -1246,6 +1305,7 @@ metrics:
         protocol: SIP
         interface: Gm
         plane: control
+        fault_layer: mixed
         raw_sources:
         - core:rcv_requests_register
         description: 'Sliding-window rate of SIP REGISTER requests arriving at the P-CSCF
@@ -1314,6 +1374,7 @@ metrics:
         - register
         - rate
       sip_error_ratio:
+        agent_exposed: true
         display_name: P-CSCF SIP error response ratio
         source: derived
         type: ratio
@@ -1321,6 +1382,7 @@ metrics:
         protocol: SIP
         interface: Gm
         plane: control
+        fault_layer: application
         raw_sources:
         - sl:4xx_replies
         - sl:5xx_replies
@@ -1379,18 +1441,21 @@ metrics:
       sl:1xx_replies:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: 1xx provisional SIP responses sent (counter). E.g., 100 Trying, 180 Ringing.
         healthy:
           scale_independent: true
       sl:200_replies:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: 200 OK SIP responses sent (counter).
         healthy:
           scale_independent: true
       sl:4xx_replies:
         source: kamcmd
         type: counter
+        fault_layer: application
         agent_exposed: true
         description: 4xx client error SIP responses (counter). Non-zero delta indicates client errors.
         healthy:
@@ -1399,6 +1464,7 @@ metrics:
       sl:5xx_replies:
         source: kamcmd
         type: counter
+        fault_layer: application
         agent_exposed: true
         description: 5xx server error SIP responses (counter). Non-zero delta indicates server failures.
         healthy:
@@ -1407,6 +1473,7 @@ metrics:
       tmx:active_transactions:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Active SIP transactions. Expected 0. Growing value indicates transactions accumulating
           without responses.
         healthy:
@@ -1419,6 +1486,7 @@ metrics:
       ims_subscribers:
         source: api
         type: counter
+        fault_layer: application
         description: Number of IMS subscribers provisioned in PyHSS (queried via REST API).
         healthy:
           scale_independent: false
@@ -1429,6 +1497,7 @@ metrics:
     layer: ims
     metrics:
       errors_per_second:
+        agent_exposed: true
         display_name: RTPEngine relay errors per second
         source: prometheus
         type: gauge
@@ -1436,6 +1505,7 @@ metrics:
         protocol: RTP
         interface: N6
         plane: media
+        fault_layer: application
         description: 'Real-time rate of RTP relay errors at RTPEngine. Point-in-time gauge
 
           (not a cumulative counter that persists stale state across chaos runs).
@@ -1530,6 +1600,7 @@ metrics:
       rtpengine_1way_streams:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: Number of RTP streams where only one direction has traffic. Indicates severe packet
           loss or network asymmetry — one side of the call is effectively deaf.
         healthy:
@@ -1537,6 +1608,7 @@ metrics:
       rtpengine_active_sessions:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: application
         description: Number of RTP sessions currently being relayed by RTPEngine. Each call creates one
           session with two media streams (one per direction).
         healthy:
@@ -1544,6 +1616,7 @@ metrics:
       rtpengine_errors_per_sec:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: application
         description: Real-time rate of RTP relay errors per second. Non-zero during a call signals active
           data plane problems. Unlike cumulative counters, this shows the current error rate.
         healthy:
@@ -1551,6 +1624,7 @@ metrics:
       rtpengine_jitter:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: Average reported jitter (ms) across all sessions since RTPEngine container started.
           Based on RTCP reports. <5ms excellent, 5-20ms acceptable, >20ms noticeable.
         healthy:
@@ -1561,6 +1635,7 @@ metrics:
       rtpengine_loss_pct:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: Average packet loss % across all sessions since RTPEngine container started. Not
           a sliding window — includes all past sessions. Check 'Packets lost' for current state.
         healthy:
@@ -1569,6 +1644,7 @@ metrics:
         alarm_if: '> 5 (noticeable quality impact) or > 20 (severe degradation)'
         note: Average packet loss from RTCP reports. Directly degrades MOS.
       loss_ratio:
+        agent_exposed: true
         display_name: RTPEngine RTCP-reported per-RR average packet loss
         source: derived
         type: ratio
@@ -1576,6 +1652,7 @@ metrics:
         protocol: RTP
         interface: Mb
         plane: media
+        fault_layer: transport
         description: |
           Average number of `packets_lost` values reported per RTCP
           Receiver Report processed by rtpengine, over the ≈30 s
@@ -1689,6 +1766,7 @@ metrics:
       rtpengine_loss_stddev:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: Standard deviation of packet loss across RTP sessions. High values indicate bursty,
           uneven loss (e.g., a network fault) vs. low values indicating steady background loss.
         healthy:
@@ -1696,6 +1774,7 @@ metrics:
       rtpengine_mos:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: Mean Opinion Score (1-5, ITU-T G.107 E-model). Cumulative average across all RTP
           sessions since RTPEngine container started. 4.0+ good, 3.5-4.0 acceptable, <3.5 degraded.
         healthy:
@@ -1714,6 +1793,7 @@ metrics:
       rtpengine_packets_lost:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: Absolute count of RTP packets currently reported as lost by RTPEngine. Resets when
           sessions end. Non-zero indicates active packet loss.
         healthy:
@@ -1721,6 +1801,7 @@ metrics:
       rtpengine_pps:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: Real-time RTP packets per second through RTPEngine (both directions). 0 when no call
           is active. ~100 pps typical for G.711 voice at 20ms packetization.
         healthy:
@@ -1733,6 +1814,7 @@ metrics:
       rtpengine_relay_errors:
         source: get_dp_quality_gauges
         type: counter
+        fault_layer: application
         description: Total packet relay errors since RTPEngine started. Increments when RTPEngine fails
           to forward an RTP packet. High values indicate network or resource issues on the media path.
         healthy:
@@ -1740,6 +1822,7 @@ metrics:
       rtpengine_total_managed:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: application
         description: Total RTP sessions managed since RTPEngine container started, including terminated
           ones. Provides context for cumulative averages.
         healthy:
@@ -1750,30 +1833,35 @@ metrics:
       cdp:average_response_time:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Average Diameter Cx response time to HSS (ms). Cumulative since container start.
         healthy:
           scale_independent: true
       cdp:queuelength:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Diameter messages waiting in the outgoing queue to HSS.
         healthy:
           scale_independent: true
       cdp:replies_received:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Diameter Cx replies received from HSS (counter).
         healthy:
           scale_independent: true
       cdp:replies_response_time:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Sum of all Diameter response times (ms) since container start.
         healthy:
           scale_independent: true
       cdp:timeout:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: Diameter Cx timeouts to HSS. Expected 0. Non-zero indicates HSS connectivity issues.
         healthy:
@@ -1783,6 +1871,7 @@ metrics:
       dialog_ng:active:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Active SIP dialogs at S-CSCF. 0 at rest, 2 during active call.
         healthy:
           scale_independent: false
@@ -1793,6 +1882,7 @@ metrics:
       ims_auth:mar_timeouts:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: Multimedia-Auth-Request (MAR) timeouts to HSS. Expected 0.
         healthy:
@@ -1802,6 +1892,7 @@ metrics:
       ims_registrar_scscf:sar_timeouts:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         agent_exposed: true
         description: Server-Assignment-Request (SAR) timeouts to HSS. Expected 0.
         healthy:
@@ -1811,12 +1902,14 @@ metrics:
       ims_registrar_scscf:accepted_regs:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Accepted IMS registrations (counter).
         healthy:
           scale_independent: true
       ims_registrar_scscf:rejected_regs:
         source: kamcmd
         type: counter
+        fault_layer: application
         description: Rejected IMS registrations (counter). Non-zero delta indicates auth or config issues.
         healthy:
           scale_independent: true
@@ -1824,6 +1917,7 @@ metrics:
       ims_usrloc_scscf:active_contacts:
         source: kamcmd
         type: counter
+        fault_layer: application
         description: Active IMS contacts registered at the S-CSCF. Expected 2 (one per UE).
         healthy:
           scale_independent: false
@@ -1832,6 +1926,7 @@ metrics:
           condition: 2 UEs registered
         expected: 2
       mar_avg_response_time:
+        agent_exposed: true
         display_name: S-CSCF MAR response time
         source: kamcmd
         type: gauge
@@ -1839,6 +1934,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Average response time for Multimedia-Auth-Request from S-CSCF to
 
           HSS (used for authentication vector retrieval during REGISTER).
@@ -1896,6 +1992,7 @@ metrics:
         - mar
         - latency
       mar_timeout_ratio:
+        agent_exposed: true
         display_name: S-CSCF MAR timeout ratio
         source: derived
         type: ratio
@@ -1903,6 +2000,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Ratio of MAR timeouts to (timeouts + replies) at S-CSCF.
 
           '
@@ -1949,6 +2047,7 @@ metrics:
         - mar
         - timeout
       sar_timeout_ratio:
+        agent_exposed: true
         display_name: S-CSCF SAR timeout ratio
         source: derived
         type: ratio
@@ -1956,6 +2055,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Ratio of SAR timeouts to (timeouts + replies) at S-CSCF.
 
           '
@@ -2003,6 +2103,7 @@ metrics:
         - sar
         - timeout
       cdp_replies_per_ue:
+        agent_exposed: true
         display_name: S-CSCF CDP Diameter replies per UE
         source: derived
         type: derived
@@ -2010,6 +2111,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Per-UE rate of Diameter replies received via the C Diameter
           Peer (CDP) module at S-CSCF.
 
@@ -2047,6 +2149,7 @@ metrics:
         - diameter
         - cdp
       rcv_requests_invite_per_ue:
+        agent_exposed: true
         display_name: SIP INVITE rate per UE at S-CSCF
         source: derived
         type: derived
@@ -2054,6 +2157,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: mixed
         description: 'Rate of INVITEs forwarded to S-CSCF.
 
           '
@@ -2087,6 +2191,7 @@ metrics:
         - sip
         - invite
       rcv_requests_register_per_ue:
+        agent_exposed: true
         display_name: SIP REGISTER rate per UE at S-CSCF
         source: derived
         type: derived
@@ -2094,6 +2199,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: mixed
         description: 'Rate of REGISTERs forwarded to the S-CSCF from I-CSCF.
 
           '
@@ -2147,6 +2253,7 @@ metrics:
         - register
         - rate
       registration_reject_ratio:
+        agent_exposed: true
         display_name: S-CSCF registration rejection ratio
         source: derived
         type: ratio
@@ -2154,6 +2261,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: application
         description: 'Ratio of rejected REGISTERs to (rejected + accepted) at S-CSCF.
 
           Non-zero when S-CSCF is actively rejecting registrations.
@@ -2201,6 +2309,7 @@ metrics:
         - register
         - rejection
       sar_avg_response_time:
+        agent_exposed: true
         display_name: S-CSCF SAR response time
         source: kamcmd
         type: gauge
@@ -2208,6 +2317,7 @@ metrics:
         protocol: Diameter
         interface: Cx
         plane: control
+        fault_layer: mixed
         description: 'Average response time for Server-Assignment-Request (S-CSCF
 
           registering itself at HSS as the serving S-CSCF for a user).
@@ -2245,6 +2355,7 @@ metrics:
         - sar
         - latency
       sip_error_ratio:
+        agent_exposed: true
         display_name: S-CSCF SIP error response ratio
         source: derived
         type: ratio
@@ -2252,6 +2363,7 @@ metrics:
         protocol: SIP
         interface: Mw
         plane: control
+        fault_layer: application
         description: 'Same formula as P-CSCF sip_error_ratio but at S-CSCF.
 
           '
@@ -2283,6 +2395,7 @@ metrics:
       tmx:active_transactions:
         source: kamcmd
         type: counter
+        fault_layer: mixed
         description: Active SIP transactions at S-CSCF. Expected 0.
         healthy:
           scale_independent: true
@@ -2293,6 +2406,7 @@ metrics:
       bearers_active:
         source: prometheus
         type: counter
+        fault_layer: application
         description: Active QoS bearers. 4 at rest (default bearers), rises to 6 during VoNR call (2 dedicated
           voice QoS flows).
         healthy:
@@ -2303,6 +2417,7 @@ metrics:
         expected: 4
         note: Rises to 6 during active VoNR call (2 dedicated QoS flows for voice)
       bearers_per_ue:
+        agent_exposed: true
         display_name: Active QoS bearers per UE
         source: derived
         type: derived
@@ -2310,6 +2425,7 @@ metrics:
         protocol: PFCP
         interface: N4
         plane: control
+        fault_layer: application
         description: 'Normalized gauge: smf.bearers_active / ran_ue. At rest, ~2 (default
 
           bearers only). During active VoNR calls, rises by 1 per caller as
@@ -2362,18 +2478,21 @@ metrics:
       fivegs_smffunction_sm_pdusessioncreationreq:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: PDU session creation requests (counter).
         healthy:
           scale_independent: true
       fivegs_smffunction_sm_pdusessioncreationsucc:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: Successful PDU session creations (counter). Gap from creation requests = failures.
         healthy:
           scale_independent: true
       fivegs_smffunction_sm_sessionnbr:
         source: prometheus
         type: counter
+        fault_layer: application
         agent_exposed: true
         description: Active PDU sessions managed by the SMF. Each UE establishes 2 (internet + IMS APN).
         healthy:
@@ -2387,6 +2506,7 @@ metrics:
       pfcp_sessions_active:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: Active PFCP sessions between SMF and UPF. Should track PDU session count.
         healthy:
           scale_independent: false
@@ -2394,6 +2514,7 @@ metrics:
             state desync.
         expected: 4
       sessions_per_ue:
+        agent_exposed: true
         display_name: PDU sessions per attached UE
         source: derived
         type: derived
@@ -2401,6 +2522,7 @@ metrics:
         protocol: PFCP
         interface: N4
         plane: control
+        fault_layer: application
         description: 'Normalized gauge computed as fivegs_smffunction_sm_sessionnbr / ran_ue.
 
           Should be approximately constant (~2 in this deployment: one internet
@@ -2472,6 +2594,7 @@ metrics:
       ues_active:
         source: prometheus
         type: counter
+        fault_layer: application
         description: Number of UEs with active PDU sessions on this SMF.
         healthy:
           scale_independent: false
@@ -2484,15 +2607,26 @@ metrics:
       fivegs_ep_n3_gtp_indatapktn3upf:
         source: prometheus
         type: counter
-        description: Cumulative GTP-U packets received on N3 (gNB to UPF) since UPF started. Must be incrementing
-          for healthy data plane.
+        fault_layer: transport
+        description: |
+          Cumulative GTP-U packets received on N3 (gNB to UPF) since UPF
+          started. Must be incrementing for healthy data plane. This is
+          a LIFETIME counter — its absolute value is the integral of all
+          uplink traffic ever forwarded by this UPF instance. Use the
+          rate-windowed form (upf_in_pps via get_dp_quality_gauges) or
+          the per-UE derived form (gtp_indatapktn3upf_per_ue) for
+          current-state activity reasoning. Asymmetry between this and
+          fivegs_ep_n3_gtp_outdatapktn3upf is structural and is NEVER,
+          by itself, evidence of packet loss — see stack rule
+          upf_counters_are_directional.
         healthy:
           scale_independent: true
         alarm_if: = 0 or stopped incrementing
-        note: Must be > 0 and incrementing for healthy data plane. Zero = data plane dead.
+        note: Must be > 0 and incrementing for healthy data plane. Zero = data plane dead. Do NOT subtract this from the downlink counter to compute loss; see stack rule upf_counters_are_directional.
       fivegs_ep_n3_gtp_indatavolumeqosleveln3upf:
         source: prometheus
         type: counter
+        fault_layer: transport
         description: Cumulative bytes received on N3 interface since UPF started. Used to compute throughput
           rate.
         healthy:
@@ -2500,14 +2634,26 @@ metrics:
       fivegs_ep_n3_gtp_outdatapktn3upf:
         source: prometheus
         type: counter
-        description: Cumulative GTP-U packets sent on N3 (UPF to gNB) since UPF started. Must be incrementing.
+        fault_layer: transport
+        description: |
+          Cumulative GTP-U packets sent on N3 (UPF to gNB) since UPF
+          started. Must be incrementing. This is a LIFETIME counter —
+          its absolute value is the integral of all downlink traffic
+          ever forwarded by this UPF instance. Use the rate-windowed
+          form (upf_out_pps via get_dp_quality_gauges) or the per-UE
+          derived form (gtp_outdatapktn3upf_per_ue) for current-state
+          activity reasoning. Asymmetry between this and
+          fivegs_ep_n3_gtp_indatapktn3upf is structural and is NEVER,
+          by itself, evidence of packet loss — see stack rule
+          upf_counters_are_directional.
         healthy:
           scale_independent: true
         alarm_if: = 0 or stopped incrementing
-        note: Must be > 0 and incrementing. Zero = data plane dead.
+        note: Must be > 0 and incrementing. Zero = data plane dead. Do NOT subtract the uplink counter from this one to compute loss; see stack rule upf_counters_are_directional.
       fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf:
         source: prometheus
         type: counter
+        fault_layer: transport
         description: Cumulative bytes sent on N3 interface since UPF started. Used to compute throughput
           rate.
         healthy:
@@ -2515,6 +2661,7 @@ metrics:
       fivegs_upffunction_upf_sessionnbr:
         source: prometheus
         type: counter
+        fault_layer: mixed
         description: Active PFCP sessions on the UPF. Should match SMF session count.
         healthy:
           scale_independent: false
@@ -2522,6 +2669,7 @@ metrics:
             failure.
         expected: 4
       gtp_indatapktn3upf_per_ue:
+        agent_exposed: true
         display_name: GTP-U uplink rate per UE (N3)
         source: derived
         type: derived
@@ -2529,6 +2677,7 @@ metrics:
         protocol: GTP-U
         interface: N3
         plane: user
+        fault_layer: transport
         raw_sources:
         - fivegs_ep_n3_gtp_indatapktn3upf
         description: 'Per-UE rate of GTP-U packets arriving at the UPF from gNB on N3
@@ -2565,8 +2714,22 @@ metrics:
           typical_range:
           - 0.0
           - 10.0
-          invariant: Per-UE — constant regardless of UE pool size. Rises during active VoNR calls (~100
-            pps for G.711 voice) and data transfer.
+          invariant: |
+            Per-UE rate. Constant regardless of UE pool size. Rises during
+            active VoNR calls (~100 pps for G.711 voice) and data transfer.
+            Uplink and downlink (gtp_outdatapktn3upf_per_ue) are independent
+            directions whose ratio is determined entirely by the current
+            traffic profile — voice with NULL_AUDIO (this testbed),
+            signaling-only chatter, idle UEs, and asymmetric data sessions
+            all produce persistent in/out imbalance under healthy operation.
+            Asymmetry between uplink and downlink rates is NEVER, by itself,
+            evidence of packet loss — not at any magnitude, not under any
+            traffic mix. To detect actual loss, use the methods listed in
+            stack rule `upf_counters_are_directional` (same-direction rate
+            comparison, RTCP loss_ratio at RTPEngine, or tc qdisc drop
+            counters). Rate-based metrics like this one are usually MORE
+            informative than the underlying lifetime cumulative counter for
+            current-state failure detection.
         event_triggers:
         - id: core.upf.gtp_uplink_drop
           trigger: current < 0.1 and prior_stable(window='5m') > 1.0 and sustained_lt(0.3, min_duration='60s')
@@ -2589,7 +2752,14 @@ metrics:
         related_metrics:
         - metric: core.upf.gtp_outdatapktn3upf_per_ue
           relationship: peer_of
-          use: Uplink and downlink typically move together. Asymmetry = directional path failure.
+          use: |
+            Uplink and downlink are INDEPENDENT directions. Their
+            relationship reflects the current traffic profile, not
+            data-plane health. Asymmetry between them is NEVER, by
+            itself, evidence of loss or directional path failure —
+            see stack rule upf_counters_are_directional. Use both
+            for detecting same-direction collapses (a known-active
+            direction dropping toward zero), not as a symmetry check.
         - metric: core.upf.activity_during_calls
           relationship: composite_of
           use: Contributes to the upf_activity signal.
@@ -2618,7 +2788,14 @@ metrics:
             for downlink) is required.
         how_to_verify_live:
           tool: get_dp_quality_gauges
-          args_hint: Returns rate-based UPF in/out pps with in/out symmetry check.
+          args_hint: |
+            Returns rate-windowed UPF in/out pps over the probe's window
+            and the upf_counters_are_directional verdict inline. Read
+            the verdict — in/out asymmetry is structural, never loss
+            evidence on its own. Use the same-direction value (e.g.
+            upf_in_pps over the window vs the expected per-direction
+            rate for active traffic) to detect a directional collapse,
+            never the in-vs-out delta.
         applicable_use_cases:
         - vonr
         - 5g_core
@@ -2628,6 +2805,7 @@ metrics:
         - gtp
         - user_plane
       gtp_outdatapktn3upf_per_ue:
+        agent_exposed: true
         display_name: GTP-U downlink rate per UE (N3)
         source: derived
         type: derived
@@ -2635,6 +2813,7 @@ metrics:
         protocol: GTP-U
         interface: N3
         plane: user
+        fault_layer: transport
         raw_sources:
         - fivegs_ep_n3_gtp_outdatapktn3upf
         description: 'Per-UE rate of GTP-U packets leaving the UPF toward gNB on N3
@@ -2653,22 +2832,50 @@ metrics:
 
           '
         meaning:
-          what_it_signals: 'Health of the downlink user-plane path UPF → gNB. Typically mirrors
-
-            uplink rate during calls/data; asymmetry indicates directional
-
-            faults (e.g., UPF receiving from internet but not forwarding).
-
-            '
-          drop: Downlink data plane degraded — UPF not forwarding to gNB.
+          what_it_signals: |
+            Health of the downlink user-plane path UPF → gNB. Drops to
+            near-zero during a downlink-affecting RAN, N3, or UPF
+            outage; stays nonzero during active calls or data sessions.
+            Decoupled from SIP signaling. The cross-direction
+            relationship to uplink (gtp_indatapktn3upf_per_ue) reflects
+            current traffic profile, NOT data-plane health — voice
+            with NULL_AUDIO, signaling-only chatter, idle UEs, and
+            asymmetric data sessions all produce persistent in/out
+            imbalance under healthy operation. Use this metric for
+            same-direction collapse detection (a known-active downlink
+            collapsing toward zero); do NOT infer loss from
+            uplink-vs-downlink asymmetry — see stack rule
+            upf_counters_are_directional.
+          drop: |
+            Downlink data plane degraded ON THIS DIRECTION SPECIFICALLY
+            — UPF is not forwarding toward gNB at the rate consistent
+            with the current traffic profile. To confirm loss (vs a
+            traffic-profile shift that just lowered downlink demand),
+            cross-check RTCP loss_ratio at RTPEngine and the same-
+            direction expected rate per stack rule
+            upf_counters_are_directional.
           zero: No traffic leaving UPF toward RAN.
         healthy:
           scale_independent: true
           typical_range:
           - 0.0
           - 10.0
-          invariant: Per-UE — constant regardless of UE pool size. Roughly symmetric with uplink during
-            healthy calls.
+          invariant: |
+            Per-UE rate. Constant regardless of UE pool size. Uplink
+            (gtp_indatapktn3upf_per_ue) and downlink are independent
+            directions whose ratio is determined entirely by the current
+            traffic profile — voice with NULL_AUDIO (this testbed),
+            signaling-only chatter, idle UEs, and asymmetric data
+            sessions all produce persistent in/out imbalance under
+            healthy operation. Asymmetry between uplink and downlink
+            rates is NEVER, by itself, evidence of packet loss — not
+            at any magnitude, not under any traffic mix. To detect
+            actual loss, use the methods listed in stack rule
+            `upf_counters_are_directional` (same-direction rate
+            comparison, RTCP loss_ratio at RTPEngine, or tc qdisc drop
+            counters). Rate-based metrics like this one are usually
+            MORE informative than the underlying lifetime cumulative
+            counter for current-state failure detection.
         event_triggers:
         - id: core.upf.gtp_downlink_drop
           trigger: current < 0.1 and prior_stable(window='5m') > 1.0 and sustained_lt(0.3, min_duration='60s')
@@ -2691,14 +2898,28 @@ metrics:
         related_metrics:
         - metric: core.upf.gtp_indatapktn3upf_per_ue
           relationship: peer_of
-          use: Asymmetry between these two is diagnostic for directional faults.
+          use: |
+            Uplink and downlink are INDEPENDENT directions. Their
+            relationship reflects the current traffic profile, not
+            data-plane health. Asymmetry between them is NEVER, by
+            itself, evidence of loss or directional path failure —
+            see stack rule upf_counters_are_directional. Use both
+            for detecting same-direction collapses (a known-active
+            direction dropping toward zero), not as a symmetry check.
         disambiguators:
         - metric: core.upf.gtp_indatapktn3upf_per_ue
           separates: UPF dropping outbound (this zero, inbound normal) vs. bidirectional outage (both
             zero)
         how_to_verify_live:
           tool: get_dp_quality_gauges
-          args_hint: Check UPF in/out symmetry in the output.
+          args_hint: |
+            Returns rate-windowed UPF in/out pps over the probe's window
+            and the upf_counters_are_directional verdict inline. Read
+            the verdict — in/out asymmetry is structural, never loss
+            evidence on its own. Use the same-direction value (e.g.
+            upf_out_pps over the window vs the expected per-direction
+            rate for active traffic) to detect a downlink collapse,
+            never the in-vs-out delta.
         applicable_use_cases:
         - vonr
         - 5g_core
@@ -2708,6 +2929,7 @@ metrics:
         - gtp
         - user_plane
       activity_during_calls:
+        agent_exposed: true
         display_name: UPF activity consistency with active dialogs
         source: derived
         type: derived
@@ -2715,6 +2937,7 @@ metrics:
         protocol: GTP-U
         interface: N3
         plane: user
+        fault_layer: transport
         description: 'Ratio of observed UPF pps to the expected pps given the number of
 
           active dialogs. 1.0 when UPF is moving traffic consistent with active
@@ -2781,18 +3004,21 @@ metrics:
       upf_bytes_in:
         source: prometheus
         type: counter
+        fault_layer: transport
         description: Cumulative bytes received on N3 (gNB to UPF) since UPF started. Counter from Prometheus.
         healthy:
           scale_independent: true
       upf_bytes_out:
         source: prometheus
         type: counter
+        fault_layer: transport
         description: Cumulative bytes sent on N3 (UPF to gNB) since UPF started. Counter from Prometheus.
         healthy:
           scale_independent: true
       upf_kbps:
         source: get_dp_quality_gauges
         type: gauge
+        fault_layer: transport
         description: GTP-U throughput (in + out) through the UPF, computed as rate between consecutive
           5-second Prometheus polls. Includes all PDU session traffic (SIP signaling + RTP media). ~16
           KB/s during healthy G.711 call.
@@ -2805,6 +3031,7 @@ metrics:
       upf_sessions:
         source: prometheus
         type: gauge
+        fault_layer: mixed
         description: Number of active PDU sessions on the UPF. Each UE establishes 2 (internet + IMS APN),
           so 2 UEs = 4 sessions.
         healthy:

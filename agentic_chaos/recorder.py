@@ -9,6 +9,10 @@ produces two files per agent:
 Files are written to the respective agent's log directory:
   - v1.5: agentic_ops/docs/agent_logs/
   - v3:   agentic_ops_v3/docs/agent_logs/
+  - v4:   agentic_ops_v4/docs/agent_logs/
+  - v5:   agentic_ops_v5/docs/agent_logs/
+  - v6:   agentic_ops_v6/docs/agent_logs/
+  - v7:   agentic_ops_v7/docs/agent_logs/
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ _AGENT_LOG_DIRS = {
     "v4": _OPERATE_DIR / "agentic_ops_v4" / "docs" / "agent_logs",
     "v5": _OPERATE_DIR / "agentic_ops_v5" / "docs" / "agent_logs",
     "v6": _OPERATE_DIR / "agentic_ops_v6" / "docs" / "agent_logs",
+    "v7": _OPERATE_DIR / "agentic_ops_v7" / "docs" / "agent_logs",
 }
 
 

@@ -181,6 +181,18 @@ components:
       vonr: {enabled: true, note: "Forwards all user data including RTP voice media between gNB and IMS/RTPEngine"}
     description: "User Plane Function. Forwards user data packets between gNB and external networks. The data plane anchor."
 
+  internet:
+    label: Internet
+    layer: data
+    role: external-data-network
+    tgpp_role: "External Data Network reachable via UPF's N6 reference point (TS 23.501 clause 4.2.3). Logical endpoint, not a 3GPP NF."
+    subsystem: External
+    diagnostic: false
+    protocols: [IP]
+    use_cases:
+      vonr: {enabled: true, note: "Public Internet reachable through UPF N6 egress; off-stack endpoint for the data PDU session."}
+    description: "External data network (public Internet). NAT'd through UPF's TUN interface (ogstun) on the N6 side. Not deployed as a container — represents 'beyond UPF egress'."
+
   # =========================================================================
   # 5G Core — Service Plane
   # =========================================================================

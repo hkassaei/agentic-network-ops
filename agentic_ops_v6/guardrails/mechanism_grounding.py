@@ -171,18 +171,18 @@ def _build_rejection_reason(flagged: list[_HypothesisHits]) -> str:
     """Assemble the per-hypothesis rejection feedback NA sees on
     resample."""
     parts: list[str] = [
-        "Your previous NetworkAnalystReport was REJECTED by the post-NA "
-        "mechanism-grounding linter (Decision G). The linter forbids "
-        "narrative-mechanism claims that aren't grounded in observed "
-        "evidence or KB-authored causal chains.",
+        "Your previous NetworkAnalystReport was rejected because it "
+        "contains narrative-mechanism claims that aren't grounded in "
+        "observed evidence or KB-authored causal chains.",
         "",
-        "Different from Decision D's layer-scoping check (which catches "
-        "phrases like 'internal fault', 'due to overload'), this linter "
-        "catches *invented narratives* — mechanism stories the LLM "
-        "leaps to when it sees an elevated metric. Examples include "
-        "'traffic storm', 'is overloaded by', 'network partition' (as "
-        "a claimed mechanism, not the chaos scenario name), 'cascade "
-        "failure', 'meltdown'. These are LLM priors, not measurements.",
+        "This is a different problem from layer-scoping language "
+        "(phrases like 'internal fault', 'due to overload'). What's "
+        "flagged here is *invented narratives* — mechanism stories the "
+        "LLM leaps to when it sees an elevated metric. Examples "
+        "include 'traffic storm', 'is overloaded by', 'network "
+        "partition' (as a claimed mechanism, not the chaos scenario "
+        "name), 'cascade failure', 'meltdown'. These are LLM priors, "
+        "not measurements.",
         "",
     ]
 
@@ -214,8 +214,7 @@ def _build_rejection_reason(flagged: list[_HypothesisHits]) -> str:
         "if you have it, belongs in `falsification_probes` (where the "
         "Investigator can test it) or in `supporting_events` (where "
         "the KB metadata can corroborate it) — NOT in the statement "
-        "as fact. Decision D says 'don't scope the HOW'; Decision G "
-        "extends that: don't INVENT the HOW either."
+        "as fact. Don't scope the HOW, and don't INVENT the HOW either."
     )
 
     return "\n".join(parts)

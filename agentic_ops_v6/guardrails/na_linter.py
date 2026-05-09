@@ -113,14 +113,13 @@ def _build_rejection_reason(flagged: list[_HypothesisHits]) -> str:
       * The "where to put mechanism intuition instead" reminder.
     """
     parts: list[str] = [
-        "Your previous NetworkAnalystReport was REJECTED by the post-NA "
-        "hypothesis-statement linter. The linter forbids mechanism-scoping "
-        "language in Hypothesis.statement (NA principle #10). When the "
-        "statement names a HOW, the Investigator may correctly localize "
-        "the fault to the named component and still disprove the "
-        "hypothesis because the actual failure was at a different layer "
-        "of the same component. The component was right; the adjective "
-        "wasn't.",
+        "Your previous NetworkAnalystReport was rejected. Mechanism-"
+        "scoping language is not allowed in Hypothesis.statement "
+        "(NA principle #10). When the statement names a HOW, the "
+        "Investigator may correctly localize the fault to the named "
+        "component and still disprove the hypothesis because the "
+        "actual failure was at a different layer of the same "
+        "component. The component was right; the adjective wasn't.",
         "",
     ]
 

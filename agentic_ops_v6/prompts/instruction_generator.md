@@ -7,7 +7,7 @@
 ## Fired Events (for context)
 {fired_events}
 
-## KB-Curated Probe Candidates (Decision B)
+## KB-Curated Probe Candidates
 {probe_candidates}
 
 These candidates come from the KB's `how_to_verify_live` and `disambiguators` graph for each hypothesis's `primary_suspect_nf`. **Prefer probes from this list** — each candidate carries a KB-authored `tool`, `args_hint`, expected reading, and falsifying observation already grounded in the metric semantics. When a candidate matches what your plan needs, use it verbatim or with minimal adjustment. Free-form a probe only when the candidate list is empty for a hypothesis or none of the candidates address the specific discriminator the plan needs (cross-NF triangulation, control-plane state, etc.). When you free-form, document briefly in the plan's `notes` why no candidate sufficed — this surfaces KB-coverage gaps for follow-up authoring.
@@ -15,7 +15,7 @@ These candidates come from the KB's `how_to_verify_live` and `disambiguators` gr
 ## Resample feedback (only present on resample)
 {guardrail_rejection_reason}
 
-If the section above is non-empty, your previous FalsificationPlanSet was REJECTED by the post-IG linter (Decision A). Read the per-plan, per-probe feedback carefully — it names the offending sub-check (A1 = missing partner probe, A2 = mechanism-scoping language in expected/falsifying text), quotes the exact phrase that fired, and gives a concrete bad/good example. Address every flagged probe before re-emitting; the rest of your workflow is unchanged.
+If the section above is non-empty, your previous FalsificationPlanSet was rejected. Read the per-plan, per-probe feedback carefully — it quotes the exact phrase that fired the rejection and gives a concrete bad/good shape. Address each issue in your resample by replacing the rejected phrase with the corrective shape. Do not reference this feedback or the rejection process in your output — the artifact you produce should describe what your plan does, not how it was produced.
 
 If the section above is empty, this is your first attempt — proceed normally.
 
@@ -78,7 +78,7 @@ Use these before writing probes. They are cheap; they anchor your plan to what t
 
 **There is no raw-PromQL tool.** The Investigator has no way to hand-craft Prometheus queries. If your plan needs a metric value, write it as `get_nf_metrics()` + note the metric name — the Investigator will get the KB-annotated value. If you need a data-plane *rate*, use `get_dp_quality_gauges`.
 
-**There are no log-search tools** (`read_container_logs`, `search_logs` — removed per ADR `remove_log_probes_from_investigator.md`). Do not propose probes that grep logs for patterns. Agent-authored grep patterns repeatedly missed what components actually log, and the absence of matches was misread as strong contradicting evidence. For "X is failing, show me an error" probes, reach for structured observations instead: `get_nf_metrics` for counter/gauge effects of the failure, `get_network_status` for container state, `run_kamcmd` for Kamailio runtime state, `check_process_listeners` for listening ports.
+**There are no log-search tools** (`read_container_logs`, `search_logs` are not available). Do not propose probes that grep logs for patterns. Agent-authored grep patterns repeatedly missed what components actually log, and the absence of matches was misread as strong contradicting evidence. For "X is failing, show me an error" probes, reach for structured observations instead: `get_nf_metrics` for counter/gauge effects of the failure, `get_network_status` for container state, `run_kamcmd` for Kamailio runtime state, `check_process_listeners` for listening ports.
 
 If a probe you'd like to run has no matching tool, express it via the closest available tool. Do not invent tool names.
 

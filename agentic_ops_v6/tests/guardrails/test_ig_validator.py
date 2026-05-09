@@ -120,7 +120,6 @@ def test_a1_compositional_probe_with_empty_conflates_with_rejects():
     assert len(findings) == 1
     assert findings[0]["missing_conflates_with"] is True
     assert findings[0]["no_partner_probe"] is False
-    assert "[A1]" in result.reason
     assert "empty `conflates_with`" in result.reason
 
 
@@ -195,7 +194,6 @@ def test_a2_internal_fault_in_falsifying_rejects():
     assert "upf-internal fault" in f["falsifying_hits"]
     assert "internal fault" in f["falsifying_hits"]
     assert "internal" in f["falsifying_hits"]
-    assert "[A2]" in result.reason
     assert "UPF-internal fault" in result.reason
 
 
@@ -317,16 +315,17 @@ def test_reason_includes_per_probe_example_correction():
     assert "upf" in result.reason.lower()
 
 
-def test_reason_includes_a1_and_a2_explanation():
-    """The rejection reason teaches IG about both sub-checks even when
-    only one fired — IG benefits from seeing the full contract."""
+def test_reason_includes_both_rule_explanations():
+    """The rejection reason teaches IG about both rules even when only
+    one fired — IG benefits from seeing the full contract. Domain-term
+    only: no internal taxonomy labels."""
     plan_set = _plan_set(_plan(probes=[
         _probe(falsifying="The N3 path has an internal fault."),
         _probe(),
     ]))
     result = lint_ig_plan(plan_set)
-    assert "(A1)" in result.reason
-    assert "(A2)" in result.reason
+    assert "Compositional probes" in result.reason
+    assert "mechanism-scoping" in result.reason or "scope the mechanism" in result.reason
 
 
 # ---------------------------------------------------------------------------

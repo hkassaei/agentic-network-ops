@@ -93,15 +93,13 @@ class Hypothesis(BaseModel):
 class NetworkAnalystReport(BaseModel):
     """NA output: layer assessment + ranked hypotheses.
 
-    Schema-level requirements (enforced by Gemini's constrained decoder):
-      - `summary` must be non-empty. An empty summary signals the
-        Gemini `tools + output_schema` short-circuit that produced the
-        Apr-28 `p_cscf_latency` regression.
+    Schema-level requirements:
+      - `summary` must be non-empty.
       - `hypotheses` must contain 1–3 entries. The prompt caps at 3
         ("Cap: produce at most 3 hypotheses"); requiring at least 1
         prevents the empty-output failure mode where NA emits a
-        hypotheses-less report and the orchestrator skips Phase 4
-        entirely.
+        hypotheses-less report and downstream stages have nothing to
+        investigate.
     """
     summary: str = Field(..., min_length=1)
     layer_status: dict[str, LayerStatus] = Field(default_factory=dict)
@@ -266,11 +264,8 @@ class ProbeResult(BaseModel):
       Closed enum: consistent / contradicts / ambiguous /
       tool_unavailable / error. Only `tool_unavailable` and `error` are
       structurally meaningful today (they get filtered out of evidence-
-      strength scoring in the confidence-cap guardrail); the other three
-      mirror `compared_to_expected` and exist so the field can fully
-      replace it in a follow-up. See
-      docs/ADR/nf_container_diagnostic_tooling.md for why the split
-      matters and why we're shipping both fields together.
+      strength scoring); the other three mirror `compared_to_expected`
+      and exist so the field can fully replace it in a follow-up.
 
     The Investigator prompt teaches the LLM to set
     `outcome="tool_unavailable"` whenever a tool result begins with
@@ -309,24 +304,22 @@ class InvestigatorVerdict(BaseModel):
 class DiagnosisReport(BaseModel):
     """Final NOC-ready diagnosis produced by Synthesis.
 
-    PR 5.5b converted Synthesis from plain-markdown to structured output
-    so the candidate-pool membership constraint (Decision E) can be
-    enforced mechanically. The orchestrator passes the populated
-    DiagnosisReport through `lint_synthesis_pool_membership` and renders
-    it back to markdown for the recorder/scorer via
-    `_render_diagnosis_report_to_markdown`.
+    Synthesis emits structured output so the candidate-pool membership
+    constraint can be enforced mechanically. The populated
+    DiagnosisReport passes through pool-membership validation and is
+    rendered back to markdown for the recorder/scorer.
 
     `primary_suspect_nf` carries the typed root-cause NF. None iff
-    `verdict_kind == "inconclusive"`. The pool-membership guardrail
-    reads this field to validate Synthesis picked from the candidate
-    pool computed in Phase 6.5.
+    `verdict_kind == "inconclusive"`. The pool-membership check
+    validates that Synthesis picked from the candidate pool of
+    NOT_DISPROVEN suspects.
 
     `verdict_kind` distinguishes the three branches Synthesis can land
     on:
-      * `confirmed` — sole NOT_DISPROVEN survivor (Synthesis Case A) OR
-        Decision E re-investigation produced NOT_DISPROVEN.
+      * `confirmed` — a sole NOT_DISPROVEN survivor, or a bounded
+        re-investigation produced NOT_DISPROVEN.
       * `promoted` — diagnosis derived from `alternative_suspects`
-        cross-corroboration in an all-DISPROVEN tree (Synthesis Case D).
+        cross-corroboration in an all-DISPROVEN tree.
       * `inconclusive` — empty pool, or evidence too weak to commit.
     """
     summary: str
@@ -336,17 +329,16 @@ class DiagnosisReport(BaseModel):
         default=None,
         description=(
             "The NF Synthesis names as the root cause. MUST appear in "
-            "the candidate pool (Decision E) when verdict_kind is "
-            "'confirmed' or 'promoted'. None when verdict_kind is "
-            "'inconclusive'."
+            "the candidate pool when verdict_kind is 'confirmed' or "
+            "'promoted'. None when verdict_kind is 'inconclusive'."
         ),
     )
     verdict_kind: Literal["confirmed", "promoted", "inconclusive"] = Field(
         default="inconclusive",
         description=(
             "Which Synthesis branch the diagnosis came from. Drives "
-            "downstream confidence calibration (Decision F) and pool "
-            "membership validation (PR 5.5b)."
+            "downstream confidence calibration and pool membership "
+            "validation."
         ),
     )
     affected_components: list[dict] = Field(default_factory=list)

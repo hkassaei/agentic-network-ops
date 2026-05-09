@@ -108,11 +108,19 @@ def test_measure_rtt_returns_tool_unavailable_when_ping_missing(
 
 
 def test_measure_rtt_runs_ping_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Happy path: ping exists, the real RTT output reaches the LLM."""
+    """Happy path: ping exists, the real RTT output reaches the LLM.
+
+    Per the path-anchored ADR, sample size derives from `loss_threshold`
+    (default 0.10 → 66 packets). The exact count varies by threshold; we
+    just check the cmd uses `ping -c <int>` rather than `-c 3`.
+    """
+    seen_cmds: list[str] = []
+
     def responder(cmd: str) -> tuple[int, str]:
+        seen_cmds.append(cmd)
         if "command -v ping" in cmd:
             return (0, "")  # present
-        if "ping -c 3" in cmd:
+        if " ping -c " in cmd and "172.22.0.19" in cmd:
             return (0, "PING 172.22.0.19 ... rtt min/avg/max = 0.1/0.2/0.3 ms")
         raise AssertionError(f"unexpected shell call: {cmd}")
 
@@ -123,6 +131,12 @@ def test_measure_rtt_runs_ping_when_present(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert "rtt min/avg/max" in out
     assert PROBE_TOOL_UNAVAILABLE_PREFIX not in out
+    # Hard-fail if anyone ever reintroduces `-c 3` as the default.
+    ping_cmds = [c for c in seen_cmds if " ping -c " in c]
+    assert ping_cmds, "no ping invocation captured"
+    assert " -c 3 " not in ping_cmds[0], (
+        f"measure_rtt issued legacy -c 3 default: {ping_cmds[0]!r}"
+    )
 
 
 def test_measure_rtt_unknown_container_short_circuits(

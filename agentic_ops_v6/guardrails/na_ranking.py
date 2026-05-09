@@ -287,8 +287,8 @@ def _build_rejection_reason(
 ) -> str:
     """Assemble the per-finding rejection feedback NA sees on resample."""
     parts: list[str] = [
-        "Your previous NetworkAnalystReport was REJECTED by the post-NA "
-        "ranking-coverage linter (Decision H). The linter enforces:",
+        "Your previous NetworkAnalystReport was rejected for "
+        "ranking-coverage reasons:",
         "",
         "  Direct-measurement anomaly flags (metrics that measure the "
         "named NF's own state — e.g. `rtpengine_loss_ratio` is RTPEngine's "

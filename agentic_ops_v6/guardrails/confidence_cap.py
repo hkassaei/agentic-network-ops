@@ -252,9 +252,9 @@ def cap_synthesis_confidence(
     cap_note = (
         f"\n\n[Confidence cap applied: emitted '{emitted}' downgraded to "
         f"'{cap_value}' because evidence-strength is {strength} "
-        f"({rationale}). Decision F — the LLM's confidence claim was "
-        "deterministically corrected to match the underlying probe "
-        "evidence; the diagnosed NF stands.]"
+        f"({rationale}). The confidence claim was deterministically "
+        "corrected to match the underlying probe evidence; the "
+        "diagnosed NF stands.]"
     )
     repaired = report.model_copy(update={
         "root_cause_confidence": cap_value,

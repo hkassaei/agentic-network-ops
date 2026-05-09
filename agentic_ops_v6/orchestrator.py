@@ -91,6 +91,11 @@ from .guardrails.synthesis_pool import (
     compute_candidate_pool,
     lint_synthesis_pool_membership,
 )
+from .guardrails.llm_output_sanitizer import (
+    sanitize_diagnosis_report,
+    sanitize_na_report,
+    sanitize_plan_set,
+)
 from .guardrails.base import GuardrailVerdict
 from .models import (
     CorrelationAnalysis,
@@ -232,6 +237,26 @@ def _accumulate_phase_traces(state: dict, new_traces: list) -> None:
     for t in new_traces:
         current.append(t.model_dump(mode="json") if hasattr(t, "model_dump") else dict(t))
     state["phase_traces_so_far"] = current
+
+
+def _ig_combined_guardrail(plan_set):
+    """IG-side guardrail chain: substantive lint, then output sanitizer.
+
+    Substantive linter runs first so a real structural issue takes
+    precedence over a sanitizer hit (avoids double-rejection feedback
+    that confuses the LLM).
+    """
+    lint_result = lint_ig_plan(plan_set)
+    if lint_result.verdict is not GuardrailVerdict.PASS:
+        return lint_result
+
+    s_result = sanitize_plan_set(plan_set)
+    if s_result.verdict is not GuardrailVerdict.PASS:
+        log.info(
+            "IG output sanitizer REJECT: leaky_fields=%s",
+            (s_result.notes or {}).get("leaky_fields"),
+        )
+    return s_result
 
 
 # The output-key constants and the empty-output retry helpers were
@@ -830,7 +855,7 @@ async def _run_bounded_reinvestigation(
         phase_label="Phase 6.5 Reinvestigation IG",
         run_phase=_run_phase,
         parser=_parse_plan_set,
-        guardrail=lint_ig_plan,
+        guardrail=_ig_combined_guardrail,
         max_resamples=1,
         on_guardrail_exhausted="accept",
     )
@@ -1098,7 +1123,19 @@ async def investigate(
             (g_result.notes or {}).get("flagged_count", 0)
             if g_result.notes else 0,
         )
-        return g_result
+        if g_result.verdict is not GuardrailVerdict.PASS:
+            return g_result
+
+        # Output sanitizer — last in the chain. Catches any internal-
+        # taxonomy / implementation-phase / ADR references that the
+        # substantive linters above didn't flag.
+        s_result = sanitize_na_report(report)
+        if s_result.verdict is not GuardrailVerdict.PASS:
+            log.info(
+                "NA output sanitizer REJECT: leaky_fields=%s",
+                (s_result.notes or {}).get("leaky_fields"),
+            )
+        return s_result
 
     state, na_traces, na_success, na_report = await run_phase_with_guardrail(
         agent_factory=create_network_analyst,
@@ -1230,7 +1267,7 @@ async def investigate(
         phase_label="Phase 4 InstructionGenerator",
         run_phase=_run_phase,
         parser=_parse_plan_set,
-        guardrail=lint_ig_plan,
+        guardrail=_ig_combined_guardrail,
         max_resamples=1,
         on_guardrail_exhausted="accept",
     )
@@ -1374,12 +1411,27 @@ async def investigate(
         membership = lint_synthesis_pool_membership(report, pool)
         if membership.verdict is not GuardrailVerdict.PASS:
             return membership
-        return cap_synthesis_confidence(
+        cap = cap_synthesis_confidence(
             report,
             verdicts=verdicts,
             hypotheses=hypotheses,
             pool=pool,
         )
+        # The cap may REPAIR (silent rewrite of confidence). Run the
+        # output sanitizer over whatever shape the cap returned.
+        downstream_report = (
+            cap.output if cap.verdict is not GuardrailVerdict.REJECT else report
+        )
+        if cap.verdict is GuardrailVerdict.REJECT:
+            return cap
+        s_result = sanitize_diagnosis_report(downstream_report)
+        if s_result.verdict is not GuardrailVerdict.PASS:
+            log.info(
+                "Synthesis output sanitizer REJECT: leaky_fields=%s",
+                (s_result.notes or {}).get("leaky_fields"),
+            )
+            return s_result
+        return cap
 
     state, syn_traces, syn_success, diagnosis_report = await run_phase_with_guardrail(
         agent_factory=create_synthesis_agent,

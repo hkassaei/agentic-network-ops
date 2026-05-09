@@ -350,19 +350,18 @@ def _build_ig_rejection_reason(findings: list[_ProbeFinding]) -> str:
     quoted, the required shape stated, and a per-probe example
     correction grounded in the plan's primary_suspect_nf."""
     parts: list[str] = [
-        "Your previous FalsificationPlanSet was REJECTED by the post-IG "
-        "linter. The linter enforces two structural rules on every plan:",
+        "Your previous FalsificationPlanSet was rejected. Two structural "
+        "rules apply to every plan:",
         "",
-        "  (A1) Compositional probes (measure_rtt etc.) need a partner "
+        "  - Compositional probes (measure_rtt etc.) need a partner "
         "probe whose path differs in the hypothesis's primary suspect "
         "NF. Without one, the Investigator cannot localize which "
         "element owns any deviation seen by the first probe.",
-        "  (A2) Probe `expected_if_hypothesis_holds` and "
+        "  - Probe `expected_if_hypothesis_holds` and "
         "`falsifying_observation` text must NOT scope the mechanism. "
         "Phrases like `<NF>-internal fault`, `application-layer`, "
-        "`process-level`, etc. re-introduce the layer scope that the "
-        "NA-side linter (Decision D) shut down at the hypothesis-"
-        "statement stage. The Investigator interprets your "
+        "`process-level`, etc. re-introduce a layer scope that should "
+        "not appear in probe text. The Investigator interprets your "
         "expected/falsifying text literally, so layer scope here turns "
         "into a layer-mismatch DISPROVEN on what was the right NF.",
         "",
@@ -385,7 +384,7 @@ def _build_ig_rejection_reason(findings: list[_ProbeFinding]) -> str:
             )
             if f.missing_conflates_with:
                 parts.append(
-                    f"    [A1] Compositional tool `{f.probe.tool}` "
+                    f"    Compositional tool `{f.probe.tool}` "
                     f"with empty `conflates_with`. Either this probe's "
                     f"reading uniquely identifies {plan_nf} (in which "
                     f"case the tool isn't really compositional and you "
@@ -397,7 +396,7 @@ def _build_ig_rejection_reason(findings: list[_ProbeFinding]) -> str:
                 )
             if f.no_partner_probe:
                 parts.append(
-                    f"    [A1] Compositional tool with non-empty "
+                    f"    Compositional tool with non-empty "
                     f"`conflates_with` but no partner probe in the "
                     f"plan. Add a second compositional probe whose "
                     f"path shares some elements with this one and "
@@ -408,7 +407,7 @@ def _build_ig_rejection_reason(findings: list[_ProbeFinding]) -> str:
             if f.expected_hits:
                 hits = ", ".join(f"'{h}'" for h in f.expected_hits)
                 parts.append(
-                    f"    [A2] `expected_if_hypothesis_holds` "
+                    f"    `expected_if_hypothesis_holds` "
                     f"contained mechanism-scoping phrase(s): {hits}"
                 )
                 parts.append(
@@ -417,7 +416,7 @@ def _build_ig_rejection_reason(findings: list[_ProbeFinding]) -> str:
             if f.falsifying_hits:
                 hits = ", ".join(f"'{h}'" for h in f.falsifying_hits)
                 parts.append(
-                    f"    [A2] `falsifying_observation` "
+                    f"    `falsifying_observation` "
                     f"contained mechanism-scoping phrase(s): {hits}"
                 )
                 parts.append(
@@ -432,12 +431,14 @@ def _build_ig_rejection_reason(findings: list[_ProbeFinding]) -> str:
         parts.append("")
 
     parts.append(
-        "Resample with corrected probes. For A1: add the missing "
-        "partner probe or populate `conflates_with`. For A2: rewrite "
-        "the flagged text to name what the probe is OBSERVING (a "
-        "metric value, a counter rate, a packet count) without naming "
-        "WHICH LAYER of the NF the observation came from. The "
-        "Investigator will localize the layer; you don't need to."
+        "Resample with corrected probes. Where a compositional probe "
+        "lacks a partner: add the missing partner probe or populate "
+        "`conflates_with`. Where mechanism-scoping language was "
+        "flagged: rewrite the text to name what the probe is "
+        "OBSERVING (a metric value, a counter rate, a packet count) "
+        "without naming WHICH LAYER of the NF the observation came "
+        "from. The Investigator will localize the layer; you don't "
+        "need to."
     )
 
     return "\n".join(parts)

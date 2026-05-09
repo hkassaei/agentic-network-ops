@@ -73,8 +73,19 @@ class SymptomClassification:
     ambiguous_flags: list[FlagBucket] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        """Serializable form for episode-log persistence."""
+        """Serializable form for episode-log persistence.
+
+        `kb_metric_id` is included per flag so `_reconstruct_classification`
+        can rehydrate enough of `flag.kb_context` for the path resolver
+        to recover the canonical (nf, metric_short) pair. Without it,
+        the resolver falls back to (flag.component, flag.metric) which
+        is the screener's `derived` / `normalized` namespace prefix,
+        not an NF name — and every flow scores zero.
+        """
         def _flag_dict(fb: FlagBucket) -> dict:
+            kb_id = None
+            if fb.flag.kb_context is not None:
+                kb_id = fb.flag.kb_context.kb_metric_id
             return {
                 "metric": fb.flag.metric,
                 "component": fb.flag.component,
@@ -83,6 +94,7 @@ class SymptomClassification:
                 "direction": fb.flag.direction,
                 "severity": fb.flag.severity,
                 "anomaly_score": round(fb.flag.anomaly_score, 3),
+                "kb_metric_id": kb_id,
                 "bucket": fb.bucket,
                 "reason": fb.reason,
             }

@@ -332,3 +332,71 @@ def test_rtpengine_loss_metric_decisively_boosts_vonr_media():
         f"rtpengine fault; got vonr={vonr}, data_pdu={data_pdu}. "
         f"Candidates: {resolved.candidate_flows}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round-trip preservation — the orchestrator's serialize → state → reconstruct
+# path must preserve enough info for the resolver to keep working.
+# ---------------------------------------------------------------------------
+
+
+def test_classification_roundtrip_preserves_resolver_input():
+    """The orchestrator persists `classification.to_dict()` to state, then
+    `_reconstruct_classification` rehydrates a SymptomClassification
+    that the path resolver consumes. The round-trip must keep enough
+    information for the resolver to recover the canonical (nf, metric)
+    pair — otherwise it falls back to (flag.component, flag.metric)
+    which is the screener's `derived` / `normalized` namespace prefix
+    and every flow scores zero.
+
+    This is the bug found in run_20260509_135004_call_quality_degradation:
+    classifier returned `transport_layer` correctly, but the resolver
+    saw `{derived, normalized}` as load-bearing components after the
+    round-trip and returned None — Phase 0.6 never ran the walker.
+
+    The fix: `to_dict()` includes `kb_metric_id` per flag, and
+    `_reconstruct_classification` rebuilds `flag.kb_context` from it.
+    """
+    import json
+
+    from agentic_ops_v7.orchestrator import _reconstruct_classification
+
+    classification = _classify_real([
+        _flag("derived.rtpengine_loss_ratio",
+              current=10.0, learned_normal=0.0, direction="spike", score=2.0),
+        _flag("derived.upf_activity_during_calls",
+              current=0.0, learned_normal=1.0, direction="drop", score=2.0),
+        _flag("normalized.icscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=0.05, direction="drop", score=1.0),
+        _flag("normalized.scscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=0.05, direction="drop", score=1.0),
+    ])
+
+    # Round-trip via JSON to mirror what the orchestrator's session-state
+    # store does between Phase 0.5 and Phase 0.6.
+    rehydrated = _reconstruct_classification(
+        {"symptom_classification": json.loads(json.dumps(classification.to_dict()))}
+    )
+    assert rehydrated is not None
+
+    # Resolver must still pick the right flow.
+    resolved = resolve_path(rehydrated)
+    assert resolved is not None, (
+        "Resolver returned None after round-trip — `kb_metric_id` was "
+        "almost certainly dropped during reconstruction, leaving the "
+        "resolver with `derived` / `normalized` as the only NF names "
+        "to score against (none of which match any flow)."
+    )
+    assert resolved.flow_id == "vonr_media", (
+        f"Round-trip changed the resolver's pick. Pre-roundtrip went to "
+        f"vonr_media; got {resolved.flow_id} after. "
+        f"Candidates: {resolved.candidate_flows}"
+    )
+
+    # rtpengine must still be on the walk — that's what the walker
+    # needs to probe to localize the qdisc fault.
+    walked_nodes = {h.node for h in resolved.hops}
+    assert "rtpengine" in walked_nodes, (
+        f"rtpengine missing from walked hops after round-trip; "
+        f"walked: {walked_nodes}"
+    )

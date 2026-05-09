@@ -689,16 +689,21 @@ def _reconstruct_classification(state: dict):
 
     Phase 0.5 persists the classification as a serialised dict via
     `SymptomClassification.to_dict()`. The resolver and synthesis
-    consume the structured form, so we rebuild it here. We only need
-    the structural fields (label, rationale, the per-bucket FlagBucket
-    list); the metric-flag inner state is rehydrated from the persisted
-    component/metric fields.
+    consume the structured form, so we rebuild it here.
+
+    `flag.kb_context.kb_metric_id` is rehydrated from the persisted
+    `kb_metric_id` field — this is load-bearing for the resolver,
+    whose `_flag_nf_metric` helper walks `kb_context.kb_metric_id`
+    first to recover the canonical (nf, metric_short) pair. Without
+    it the resolver falls back to (flag.component, flag.metric)
+    which is the screener's `derived` / `normalized` namespace
+    prefix, not an NF name, and every flow scores zero.
     """
     from .symptom_classifier import (
         FlagBucket,
         SymptomClassification,
     )
-    from agentic_ops_common.anomaly.screener import AnomalyFlag
+    from agentic_ops_common.anomaly.screener import AnomalyFlag, FlagKBContext
 
     payload = state.get("symptom_classification")
     if not payload:
@@ -707,6 +712,10 @@ def _reconstruct_classification(state: dict):
         def _fb_list(key: str) -> list:
             out = []
             for f in payload.get(key, []) or []:
+                kb_id = f.get("kb_metric_id")
+                kb_context = (
+                    FlagKBContext(kb_metric_id=kb_id) if kb_id else None
+                )
                 flag = AnomalyFlag(
                     metric=f.get("metric", ""),
                     component=f.get("component", ""),
@@ -715,6 +724,7 @@ def _reconstruct_classification(state: dict):
                     anomaly_score=f.get("anomaly_score", 0.0),
                     severity=f.get("severity", "LOW"),
                     direction=f.get("direction", ""),
+                    kb_context=kb_context,
                 )
                 out.append(FlagBucket(
                     flag=flag,
@@ -2145,6 +2155,19 @@ def _build_result(
         # hypothesis-statement linter — Decision D / PR 2). Empty list
         # when every guardrail PASSED on first or second attempt.
         "guardrail_warnings": list(state.get("guardrail_warnings", [])),
+        # ─── v7 transport-layer pipeline outputs (Phase 0.5 + 0.6) ──────
+        # These four keys are the ADR-prescribed assertion targets for
+        # the live-stack contract test (`docs/runbooks/path_walk_phase4_live_contract_test.md`).
+        # Without surfacing them, a perfectly-running v7 produces an
+        # episode log nobody can verify against the ADR contract — and
+        # debug runs can't see why Phase 0.6 returned null localization.
+        # All four are None when the application-layer pipeline ran
+        # without engaging Phase 0.6 (label=application_layer or
+        # classifier failure).
+        "symptom_classification": state.get("symptom_classification"),
+        "resolved_path":          state.get("resolved_path"),
+        "path_walk_report":       state.get("path_walk_report"),
+        "diagnosis_report":       state.get("diagnosis_report"),
     }
 
 

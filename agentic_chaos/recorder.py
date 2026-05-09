@@ -688,6 +688,433 @@ def _render_v6_pipeline(challenge: dict) -> list[str]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# v7 pipeline rendering
+# ---------------------------------------------------------------------------
+
+
+def _render_v7_pipeline(challenge: dict) -> list[str]:
+    """v7 pipeline layout: v6's 8 phases plus the transport-layer route
+    (Phase 0.5 SymptomClassifier + Phase 0.6 PathResolver/PathWalker/
+    LocalizedSynthesis) inserted between Phase 0 and Phase 1.
+
+    Three execution paths produce different shapes in the markdown:
+
+      1. Path-walker localized -> Phase 0.5 + 0.6 fully populated, the
+         synthesis verdict is the agent's final diagnosis, and Phases
+         1-7 (the application-layer pipeline) did NOT run.
+
+      2. Path-walker null-localization (or classifier label =
+         application_layer) -> Phase 0.5 shows the verdict and Phase 0.6
+         shows what the resolver/walker found (or "skipped"), then Phases
+         1-7 ran as the v6-style fallback and produce the diagnosis.
+
+      3. Phase 0.5/0.6 skipped because Phase 0 found nothing
+         (application_layer default) -> Phase 0.5 says "no symptom",
+         Phase 0.6 says "skipped", Phases 1-7 ran.
+
+    Each section says explicitly which case applies so a human reading
+    the episode log can audit the routing decision.
+    """
+    out: list[str] = []
+
+    # ── Phase 0 — Anomaly Screener ────────────────────────────────────
+    anomaly_report = challenge.get("anomaly_report", "")
+    out.append("## Anomaly Screening (Phase 0)")
+    out.append("")
+    out.append(str(anomaly_report) if anomaly_report else "*No anomaly screening output.*")
+    out.append("")
+
+    # ── Phase 0.5 — Symptom Classifier ────────────────────────────────
+    out.append("## Symptom Classifier (Phase 0.5)")
+    out.append("")
+    out.extend(_format_symptom_classification(
+        challenge.get("symptom_classification")
+    ))
+    out.append("")
+
+    # ── Phase 0.6 — Transport-Layer Route ─────────────────────────────
+    out.append("## Transport-Layer Route (Phase 0.6)")
+    out.append("")
+    out.extend(_format_transport_layer_route(
+        symptom_classification=challenge.get("symptom_classification"),
+        resolved_path=challenge.get("resolved_path"),
+        path_walk_report=challenge.get("path_walk_report"),
+        diagnosis_report=challenge.get("diagnosis_report"),
+    ))
+    out.append("")
+
+    # ── Phase 1 — Event Aggregator (only runs on app-layer fall-through) ─
+    fired_events = challenge.get("fired_events", "")
+    out.append("## Event Aggregation (Phase 1)")
+    out.append("")
+    out.append(
+        str(fired_events) if fired_events
+        else "*No events aggregated — Phase 0.6 localized, app-layer pipeline did not run.*"
+    )
+    out.append("")
+
+    # ── Phase 2 — Correlation Analyzer ────────────────────────────────
+    correlation_analysis = challenge.get("correlation_analysis", "")
+    if not correlation_analysis:
+        correlation_analysis = challenge.get("pattern_match", "")
+    out.append("## Correlation Analysis (Phase 2)")
+    out.append("")
+    if correlation_analysis:
+        out.extend(_format_pattern_match(correlation_analysis))
+    else:
+        out.append(
+            "*No correlation analysis — Phase 0.6 localized, app-layer pipeline did not run.*"
+        )
+    out.append("")
+
+    # ── Phase 3 — Network Analyst ─────────────────────────────────────
+    network_analysis = challenge.get("network_analysis", "")
+    out.append("## Network Analysis (Phase 3)")
+    out.append("")
+    if network_analysis:
+        out.extend(_format_network_analysis(network_analysis))
+    else:
+        out.append(
+            "*No NA output — Phase 0.6 localized, app-layer pipeline did not run.*"
+        )
+    out.append("")
+
+    # ── Phase 4 — Falsification Plans ─────────────────────────────────
+    investigation_instruction = challenge.get("investigation_instruction", "")
+    out.append("## Falsification Plans (Phase 4)")
+    out.append("")
+    if investigation_instruction:
+        out.extend(_format_investigation_instruction(investigation_instruction))
+    else:
+        out.append(
+            "*No falsification plans — Phase 0.6 localized, app-layer pipeline did not run.*"
+        )
+    out.append("")
+
+    # ── Phase 5 — Parallel Investigators ──────────────────────────────
+    investigation = challenge.get("investigation", "")
+    out.append("## Parallel Investigators (Phase 5)")
+    out.append("")
+    if investigation:
+        out.extend(_format_investigation(investigation))
+    else:
+        out.append(
+            "*No sub-Investigator output — Phase 0.6 localized, app-layer pipeline did not run.*"
+        )
+    out.append("")
+
+    # ── Phase 6 — Evidence Validator ──────────────────────────────────
+    evidence_validation = challenge.get("evidence_validation", "")
+    out.append("## Evidence Validation (Phase 6)")
+    out.append("")
+    if evidence_validation:
+        out.extend(_format_evidence_validation(evidence_validation))
+    else:
+        out.append(
+            "*No evidence validation — Phase 0.6 localized, app-layer pipeline did not run.*"
+        )
+    out.append("")
+
+    # Phase 7 — Synthesis is rendered below as "Agent Diagnosis" in the
+    # shared section.
+    return out
+
+
+# ---------------------------------------------------------------------------
+# v7 Phase 0.5 formatter
+# ---------------------------------------------------------------------------
+
+
+def _format_symptom_classification(payload) -> list[str]:
+    """Render the SymptomClassifier verdict.
+
+    Shows the label, per-bucket counts, every flag with its KB-driven
+    bucket reason, and the full rationale paragraph. An operator
+    reading this should be able to audit the routing decision without
+    cross-referencing the JSON.
+    """
+    if not payload:
+        return ["*No symptom classification produced (Phase 0 found no symptoms, "
+                "or classifier failed). Routes through application-layer pipeline.*"]
+
+    label = payload.get("label", "?")
+    rationale = payload.get("rationale", "")
+    counts = payload.get("flag_counts", {}) or {}
+    n_t = counts.get("transport", 0)
+    n_a = counts.get("application", 0)
+    n_x = counts.get("ambiguous", 0)
+
+    out: list[str] = []
+    out.append(f"**Label:** `{label}`  ")
+    out.append(
+        f"**Flag counts:** transport={n_t}, application={n_a}, ambiguous={n_x}"
+    )
+    out.append("")
+
+    def _bucket_table(bucket_name: str, header: str, key: str) -> None:
+        flags = payload.get(key) or []
+        if not flags:
+            return
+        out.append(f"### {header} ({len(flags)})")
+        out.append("")
+        out.append("| Metric | Direction | Score | KB-driven reason |")
+        out.append("|---|---|---:|---|")
+        for fb in sorted(flags, key=lambda f: -float(f.get("anomaly_score", 0))):
+            metric = f"`{fb.get('component','?')}.{fb.get('metric','?')}`"
+            direction = fb.get("direction", "?")
+            score = fb.get("anomaly_score", 0)
+            reason = fb.get("reason", "").replace("|", "\\|")
+            out.append(f"| {metric} | {direction} | {score:.2f} | {reason} |")
+        out.append("")
+
+    _bucket_table("transport", "Transport-bucket flags", "transport_flags")
+    _bucket_table("application", "Application-bucket flags", "application_flags")
+    _bucket_table("ambiguous", "Ambiguous-bucket flags", "ambiguous_flags")
+
+    if rationale:
+        out.append("**Rationale:**")
+        out.append("")
+        out.append("```")
+        out.append(rationale)
+        out.append("```")
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# v7 Phase 0.6 formatter (resolver + walker + synthesis)
+# ---------------------------------------------------------------------------
+
+
+def _format_transport_layer_route(
+    *,
+    symptom_classification,
+    resolved_path,
+    path_walk_report,
+    diagnosis_report,
+) -> list[str]:
+    """Render the Phase 0.6 path-walk pipeline.
+
+    Three states:
+      * Skipped (classifier said application_layer) → one-line note.
+      * Engaged but null-localization → resolver + walker output, plus
+        a "fell through to app-layer pipeline" footer.
+      * Engaged and localized → resolver + walker + synthesis (which is
+        the agent's final diagnosis).
+    """
+    label = (symptom_classification or {}).get("label")
+    if label == "application_layer":
+        return [
+            "*Skipped — classifier label is `application_layer`. "
+            "Routes through the app-layer pipeline (Phases 1-7) below.*"
+        ]
+    if label is None:
+        return [
+            "*Skipped — Phase 0.5 produced no classification. "
+            "Routes through the app-layer pipeline (Phases 1-7) below.*"
+        ]
+
+    out: list[str] = []
+
+    # ── Resolver ──────────────────────────────────────────────────────
+    out.append("### Resolver")
+    out.append("")
+    if resolved_path:
+        flow_id = resolved_path.get("flow_id", "?")
+        flow_name = resolved_path.get("flow_name", flow_id)
+        direction = resolved_path.get("direction", "?")
+        hops = resolved_path.get("hops", []) or []
+        candidates = resolved_path.get("candidate_flows", []) or []
+        rationale = resolved_path.get("rationale", "")
+
+        out.append(
+            f"**Flow:** `{flow_id}` ({flow_name})  \n"
+            f"**Direction:** {direction}  \n"
+            f"**Hop count:** {len(hops)}"
+        )
+        out.append("")
+        if candidates:
+            out.append("**Candidates considered:**")
+            out.append("")
+            out.append("| Flow | Score |")
+            out.append("|---|---:|")
+            for c in candidates[:8]:
+                fid = c.get("flow_id", "?")
+                score = c.get("score", 0)
+                marker = " ← chosen" if fid == flow_id else ""
+                out.append(f"| `{fid}`{marker} | {score} |")
+            out.append("")
+        if rationale:
+            out.append("**Rationale:**")
+            out.append("")
+            out.append("```")
+            out.append(rationale)
+            out.append("```")
+            out.append("")
+    else:
+        out.append(
+            "*Resolver returned no path (no flow scored > 0, or all candidate "
+            "flows produced empty hop lists). Phase 0.6 returned None and the "
+            "orchestrator fell through to the application-layer pipeline.*"
+        )
+        out.append("")
+        return out
+
+    # ── Walker ────────────────────────────────────────────────────────
+    out.append("### Walker")
+    out.append("")
+    if not path_walk_report:
+        out.append(
+            "*Walker did not produce a report (likely raised an exception). "
+            "Phase 0.6 returned None and the orchestrator fell through to the "
+            "application-layer pipeline.*"
+        )
+        out.append("")
+        return out
+
+    is_localized = bool(path_walk_report.get("is_localized"))
+    first_hop = path_walk_report.get("first_attributed_hop")
+    walk_hops = path_walk_report.get("hops", []) or []
+    flow_id_walked = path_walk_report.get("flow_id", "?")
+    window_seconds = path_walk_report.get("window_seconds", 0)
+
+    status = "✅ **localized**" if is_localized else "⚠️ **null localization**"
+    out.append(f"**Status:** {status}")
+    if first_hop:
+        hop_obj = first_hop.get("hop", {}) if isinstance(first_hop, dict) else {}
+        out.append(
+            f"**First attributed hop:** `{hop_obj.get('node','?')}"
+            f"[{hop_obj.get('iface','?')}]`"
+        )
+    out.append(
+        f"**Window:** {window_seconds}s  \n"
+        f"**Walked flow:** `{flow_id_walked}`"
+    )
+    out.append("")
+
+    if walk_hops:
+        out.append("**Per-hop results:**")
+        out.append("")
+        out.append("| # | Node | Kind | Iface | Attribution | Detail |")
+        out.append("|---:|---|---|---|---|---|")
+        for i, rec in enumerate(walk_hops):
+            hop = rec.get("hop", {}) if isinstance(rec, dict) else {}
+            attr = rec.get("attribution", {}) if isinstance(rec, dict) else {}
+            kind = attr.get("kind") if isinstance(attr, dict) else "?"
+            marker = "🎯 " if (
+                first_hop
+                and isinstance(first_hop, dict)
+                and first_hop.get("hop", {}).get("node") == hop.get("node")
+                and first_hop.get("hop", {}).get("iface") == hop.get("iface")
+                and i == _first_attributed_index(walk_hops, first_hop)
+            ) else ""
+            detail = _format_hop_attribution_detail(attr)
+            out.append(
+                f"| {i} | {marker}`{hop.get('node','?')}` | "
+                f"{hop.get('kind','?')} | `{hop.get('iface','?')}` | "
+                f"`{kind}` | {detail} |"
+            )
+        out.append("")
+
+    # ── Synthesis ─────────────────────────────────────────────────────
+    out.append("### Localized Synthesis")
+    out.append("")
+    if not is_localized:
+        out.append(
+            "*Walker found no hop with attribution. Phase 0.6 returned "
+            "None and the orchestrator fell through to the application-"
+            "layer pipeline (Phases 1-7) below — the diagnosis you see "
+            "in `Agent Diagnosis` came from that fallback path, not from "
+            "Phase 0.6.*"
+        )
+        return out
+
+    if not diagnosis_report:
+        out.append(
+            "*Walker localized but synthesis returned None — defensive "
+            "fall-through to app-layer pipeline.*"
+        )
+        return out
+
+    verdict_kind = diagnosis_report.get("verdict_kind", "?")
+    primary_nf = diagnosis_report.get("primary_suspect_nf", "?")
+    confidence = diagnosis_report.get("root_cause_confidence", "?")
+    summary = diagnosis_report.get("summary", "")
+    recommendation = diagnosis_report.get("recommendation", "")
+
+    out.append(
+        f"**Verdict:** `{verdict_kind}`  \n"
+        f"**Primary suspect NF:** `{primary_nf}`  \n"
+        f"**Confidence:** {confidence}"
+    )
+    out.append("")
+    if summary:
+        out.append(f"**Summary:** {summary}")
+        out.append("")
+    if recommendation:
+        out.append(f"**Recommendation:** {recommendation}")
+        out.append("")
+    return out
+
+
+def _first_attributed_index(walk_hops, first_hop) -> int:
+    """Return the index of the first attributed hop (matching `first_hop`)
+    so we don't double-mark identical-(node,iface) records earlier on the
+    walk. Returns -1 if not found."""
+    if not isinstance(first_hop, dict):
+        return -1
+    target = first_hop.get("hop", {})
+    for i, rec in enumerate(walk_hops):
+        if not isinstance(rec, dict):
+            continue
+        hop = rec.get("hop", {})
+        attr = rec.get("attribution", {})
+        if (hop.get("node") == target.get("node")
+                and hop.get("iface") == target.get("iface")
+                and isinstance(attr, dict)
+                and attr.get("kind") in (
+                    "drops_attributed_here",
+                    "drops_attributed_to_inbound_link",
+                    "latency_at_hop",
+                )):
+            return i
+    return -1
+
+
+def _format_hop_attribution_detail(attr) -> str:
+    """Compact one-cell description of a hop's attribution for the table.
+
+    Captures the load-bearing field per attribution kind so an operator
+    can scan the walker output without consulting the JSON.
+    """
+    if not isinstance(attr, dict):
+        return "_unknown_"
+    kind = attr.get("kind")
+    if kind == "clean":
+        return "_clean_"
+    if kind == "drops_attributed_here":
+        ck = attr.get("counter_kind", "?")
+        dp = attr.get("dropped_pkts", "?")
+        pct = attr.get("dropped_pct")
+        pct_str = f", {pct*100:.1f}%" if isinstance(pct, (int, float)) else ""
+        return f"`{ck}`: {dp} dropped{pct_str}"
+    if kind == "drops_attributed_to_inbound_link":
+        pct = attr.get("observed_loss_pct")
+        pct_str = f"{pct*100:.1f}%" if isinstance(pct, (int, float)) else "?"
+        return f"link-rate-diff: {pct_str} loss"
+    if kind == "latency_at_hop":
+        delay = attr.get("observed_delay_ms")
+        ck = attr.get("counter_kind", "?")
+        return f"`{ck}`: delay {delay} ms"
+    if kind == "inconclusive":
+        reason = attr.get("reason", "?")
+        detail = attr.get("detail", "")
+        truncated = detail[:80].replace("|", "\\|") if detail else ""
+        return f"_{reason}_" + (f": {truncated}" if truncated else "")
+    return f"_{kind}_"
+
+
 def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     """Generate a plain-English markdown summary of the episode."""
     scenario = episode.get("scenario", {})
@@ -801,7 +1228,9 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     # and NA shifted to Phase 3). Branch on agent_version so each version
     # renders its own pipeline faithfully.
     challenge = episode.get("challenge_result") or {}
-    if agent_version == "v6":
+    if agent_version == "v7":
+        lines.extend(_render_v7_pipeline(challenge))
+    elif agent_version == "v6":
         lines.extend(_render_v6_pipeline(challenge))
     else:
         lines.extend(_render_v5_pipeline(challenge))

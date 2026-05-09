@@ -199,6 +199,13 @@ class ChallengeAgent(BaseAgent):
             "evidence_validation": diagnosis_dict.get("_evidence_validation", ""),
             "fired_events": diagnosis_dict.get("_fired_events", ""),
             "correlation_analysis": diagnosis_dict.get("_correlation_analysis", ""),
+            # v7 transport-layer pipeline outputs (Phase 0.5 + 0.6).
+            # Populated for v7 runs that engaged the path-walk route;
+            # None for application-layer v7 runs and for all v3-v6 runs.
+            "symptom_classification": diagnosis_dict.get("_symptom_classification"),
+            "resolved_path":          diagnosis_dict.get("_resolved_path"),
+            "path_walk_report":       diagnosis_dict.get("_path_walk_report"),
+            "diagnosis_report":       diagnosis_dict.get("_diagnosis_report"),
         }
 
         total = score.get("total_score", 0)
@@ -414,6 +421,15 @@ class ChallengeAgent(BaseAgent):
             # v6-native keys (populated by v6 orchestrator; empty for v5)
             "_fired_events": result.get("fired_events", ""),
             "_correlation_analysis": result.get("correlation_analysis", ""),
+            # v7-native keys (populated by v7's Phase 0.5 + 0.6; None when
+            # the application-layer pipeline ran without engaging the
+            # transport-layer route). Surfaced so the live-stack contract
+            # test runbook can verify them and so debug runs can see why
+            # Phase 0.6 returned null localization.
+            "_symptom_classification": result.get("symptom_classification"),
+            "_resolved_path":          result.get("resolved_path"),
+            "_path_walk_report":       result.get("path_walk_report"),
+            "_diagnosis_report":       result.get("diagnosis_report"),
         }
 
     async def _run_live_impl(self, ctx):

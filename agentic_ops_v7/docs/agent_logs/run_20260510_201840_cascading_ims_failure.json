@@ -1,0 +1,1251 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260510_201356_cascading_ims_failure",
+  "timestamp": "2026-05-10T20:13:57.497434+00:00",
+  "duration_seconds": 281.83353,
+  "scenario": {
+    "name": "Cascading IMS Failure",
+    "description": "Kill PyHSS AND add 2-second latency to the S-CSCF. This simulates a cascading failure: the HSS is gone (no Diameter auth) AND the S-CSCF is degraded (slow SIP processing). Total IMS outage.",
+    "category": "compound",
+    "blast_radius": "multi_nf",
+    "faults": [
+      {
+        "fault_type": "container_kill",
+        "target": "pyhss",
+        "params": {},
+        "ttl_seconds": 600
+      },
+      {
+        "fault_type": "network_latency",
+        "target": "scscf",
+        "params": {
+          "delay_ms": 2000
+        },
+        "ttl_seconds": 600
+      }
+    ],
+    "expected_symptoms": [
+      "Diameter completely down (HSS killed)",
+      "SIP transactions extremely slow (2s latency on S-CSCF)",
+      "Total IMS registration failure",
+      "No voice calls possible"
+    ],
+    "escalation": false,
+    "observation_traffic_seconds": 120,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 600
+  },
+  "baseline": {
+    "timestamp": "2026-05-10T20:13:57.497434+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 8.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 4723.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 2806.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 831751.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 650863.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "8 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 12.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 26.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 26.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 40.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 40.0
+        },
+        "badge": "12 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 14.0,
+          "core:rcv_requests_register": 8.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 15.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 4.0,
+          "script:register_time": 1254.0,
+          "sl:1xx_replies": 8.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 76.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 305.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 8.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 76.0,
+          "ims_icscf:uar_replies_received": 4.0,
+          "ims_icscf:uar_replies_response_time": 305.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "8 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 110.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 8.0,
+          "cdp:replies_response_time": 883.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 8.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 108.0,
+          "ims_auth:mar_replies_received": 4.0,
+          "ims_auth:mar_replies_response_time": 434.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 4.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 112.0,
+          "ims_registrar_scscf:sar_replies_received": 4.0,
+          "ims_registrar_scscf:sar_replies_response_time": 449.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 0.0,
+          "ims_usrloc_scscf:impu_collisions": 0.0,
+          "ims_usrloc_scscf:subscription_collisions": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 5.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 5.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 22.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 5.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 17.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 2177.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 115854.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 2177.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 115854.0,
+          "total_number_of_streams_with_no_relayed_packets": 5.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 445.9,
+          "sum_of_all_mos_square_values_sampled": 1890.43,
+          "total_number_of_mos_samples": 106.0,
+          "average_mos": 4.2,
+          "mos_standard_deviation": 0.03,
+          "sum_of_all_jitter_(reported)_values_sampled": 1242.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 257542.0,
+          "total_number_of_jitter_(reported)_samples": 130.0,
+          "average_jitter_(reported)": 9.0,
+          "jitter_(reported)_standard_deviation": 43.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 6841138.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 1321220967130.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 130.0,
+          "average_end_to_end_round_trip_time": 52624.0,
+          "end_to_end_round_trip_time_standard_deviation": 85988.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 3981458.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 383156360868.0,
+          "total_number_of_discrete_round_trip_time_samples": 130.0,
+          "average_discrete_round_trip_time": 30626.0,
+          "discrete_round_trip_time_standard_deviation": 44825.0,
+          "sum_of_all_packet_loss_values_sampled": 1330.0,
+          "sum_of_all_packet_loss_square_values_sampled": 62680.0,
+          "total_number_of_packet_loss_samples": 130.0,
+          "average_packet_loss": 10.0,
+          "packet_loss_standard_deviation": 19.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 1330.0,
+          "prom_packetloss_samples_total": 130.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_1db38815",
+      "fault_type": "container_kill",
+      "target": "pyhss",
+      "params": {},
+      "mechanism": "docker kill pyhss",
+      "heal_command": "docker start pyhss",
+      "injected_at": "2026-05-10T20:13:57.497996+00:00",
+      "ttl_seconds": 600,
+      "expires_at": "2026-05-10T20:23:57.497996+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "Expected 'exited', got 'exited'"
+    },
+    {
+      "fault_id": "f_c626cab1",
+      "fault_type": "network_latency",
+      "target": "scscf",
+      "params": {
+        "delay_ms": 2000
+      },
+      "mechanism": "sudo nsenter -t 457756 -n tc qdisc add dev eth0 root netem delay 2000ms",
+      "heal_command": "sudo nsenter -t 457756 -n tc qdisc del dev eth0 root",
+      "injected_at": "2026-05-10T20:13:57.932583+00:00",
+      "ttl_seconds": 600,
+      "expires_at": "2026-05-10T20:23:57.932583+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "qdisc netem 800b: root refcnt 9 limit 1000 delay 2s"
+    }
+  ],
+  "fault_verification": {
+    "verdict": "confirmed",
+    "wait_seconds": 0,
+    "elapsed_seconds": 0.0,
+    "verified_at": "2026-05-10T20:16:02.792668+00:00",
+    "filtered_deltas": {
+      "pcscf": {
+        "httpclient:connfail": {
+          "baseline": 15.0,
+          "current": 52.0,
+          "delta": 37.0
+        },
+        "core:rcv_requests_options": {
+          "baseline": 14.0,
+          "current": 39.0,
+          "delta": 25.0
+        },
+        "dialog_ng:processed": {
+          "baseline": 0.0,
+          "current": 3.0,
+          "delta": 3.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 0.0,
+          "current": 3.0,
+          "delta": 3.0
+        },
+        "sl:1xx_replies": {
+          "baseline": 8.0,
+          "current": 12.0,
+          "delta": 4.0
+        }
+      },
+      "scscf": {
+        "dialog_ng:processed": {
+          "baseline": 0.0,
+          "current": 3.0,
+          "delta": 3.0
+        },
+        "ims_usrloc_scscf:subscription_collisions": {
+          "baseline": 0.0,
+          "current": 1.0,
+          "delta": 1.0
+        },
+        "ims_usrloc_scscf:contact_collisions": {
+          "baseline": 0.0,
+          "current": 1.0,
+          "delta": 1.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 0.0,
+          "current": 10.0,
+          "delta": 10.0
+        },
+        "ims_usrloc_scscf:impu_collisions": {
+          "baseline": 0.0,
+          "current": 1.0,
+          "delta": 1.0
+        }
+      },
+      "rtpengine": {
+        "total_sessions": {
+          "baseline": 5.0,
+          "current": 8.0,
+          "delta": 3.0
+        },
+        "owned_sessions": {
+          "baseline": 5.0,
+          "current": 8.0,
+          "delta": 3.0
+        }
+      },
+      "icscf": {
+        "core:rcv_requests_invite": {
+          "baseline": 0.0,
+          "current": 9.0,
+          "delta": 9.0
+        }
+      }
+    },
+    "raw_delta_node_count": 5
+  },
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-10T20:16:02.792668+00:00",
+      "elapsed_seconds": 0.0,
+      "metrics_delta": {
+        "pcscf": {
+          "httpclient:connfail": {
+            "baseline": 15.0,
+            "current": 52.0,
+            "delta": 37.0
+          },
+          "core:rcv_requests_options": {
+            "baseline": 14.0,
+            "current": 39.0,
+            "delta": 25.0
+          },
+          "dialog_ng:processed": {
+            "baseline": 0.0,
+            "current": 3.0,
+            "delta": 3.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 0.0,
+            "current": 3.0,
+            "delta": 3.0
+          },
+          "sl:1xx_replies": {
+            "baseline": 8.0,
+            "current": 12.0,
+            "delta": 4.0
+          }
+        },
+        "scscf": {
+          "dialog_ng:processed": {
+            "baseline": 0.0,
+            "current": 3.0,
+            "delta": 3.0
+          },
+          "ims_usrloc_scscf:subscription_collisions": {
+            "baseline": 0.0,
+            "current": 1.0,
+            "delta": 1.0
+          },
+          "ims_usrloc_scscf:contact_collisions": {
+            "baseline": 0.0,
+            "current": 1.0,
+            "delta": 1.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 0.0,
+            "current": 10.0,
+            "delta": 10.0
+          },
+          "ims_usrloc_scscf:impu_collisions": {
+            "baseline": 0.0,
+            "current": 1.0,
+            "delta": 1.0
+          }
+        },
+        "rtpengine": {
+          "total_sessions": {
+            "baseline": 5.0,
+            "current": 8.0,
+            "delta": 3.0
+          },
+          "owned_sessions": {
+            "baseline": 5.0,
+            "current": 8.0,
+            "delta": 3.0
+          }
+        },
+        "icscf": {
+          "core:rcv_requests_invite": {
+            "baseline": 0.0,
+            "current": 9.0,
+            "delta": 9.0
+          }
+        }
+      },
+      "log_samples": {},
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-05-10T20:18:39.330964+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 8.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 4762.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 2816.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 841004.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 656107.0,
+          "_gauge_upf_kbps": 0.01
+        },
+        "badge": "0.0 KB/s",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 12.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 26.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 26.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 40.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 40.0
+        },
+        "badge": "12 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 3.0,
+          "core:rcv_requests_options": 71.0,
+          "core:rcv_requests_register": 10.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 3.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 84.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 4.0,
+          "script:register_time": 1254.0,
+          "sl:1xx_replies": 13.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 76.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 4.0,
+          "cdp:replies_response_time": 305.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 9.0,
+          "core:rcv_requests_register": 10.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 76.0,
+          "ims_icscf:uar_replies_received": 4.0,
+          "ims_icscf:uar_replies_response_time": 305.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "10 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 110.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 8.0,
+          "cdp:replies_response_time": 883.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 10.0,
+          "core:rcv_requests_register": 8.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 3.0,
+          "ims_auth:mar_avg_response_time": 108.0,
+          "ims_auth:mar_replies_received": 4.0,
+          "ims_auth:mar_replies_response_time": 434.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 4.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 112.0,
+          "ims_registrar_scscf:sar_replies_received": 4.0,
+          "ims_registrar_scscf:sar_replies_response_time": 449.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 8.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 8.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 22.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 5.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 17.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 2177.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 115854.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 2177.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 115854.0,
+          "total_number_of_streams_with_no_relayed_packets": 5.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 445.9,
+          "sum_of_all_mos_square_values_sampled": 1890.43,
+          "total_number_of_mos_samples": 106.0,
+          "average_mos": 4.2,
+          "mos_standard_deviation": 0.03,
+          "sum_of_all_jitter_(reported)_values_sampled": 1242.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 257542.0,
+          "total_number_of_jitter_(reported)_samples": 130.0,
+          "average_jitter_(reported)": 9.0,
+          "jitter_(reported)_standard_deviation": 43.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 6841138.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 1321220967130.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 130.0,
+          "average_end_to_end_round_trip_time": 52624.0,
+          "end_to_end_round_trip_time_standard_deviation": 85988.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 3981458.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 383156360868.0,
+          "total_number_of_discrete_round_trip_time_samples": 130.0,
+          "average_discrete_round_trip_time": 30626.0,
+          "discrete_round_trip_time_standard_deviation": 44825.0,
+          "sum_of_all_packet_loss_values_sampled": 1330.0,
+          "sum_of_all_packet_loss_square_values_sampled": 62680.0,
+          "total_number_of_packet_loss_samples": 130.0,
+          "average_packet_loss": 10.0,
+          "packet_loss_standard_deviation": 19.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 1330.0,
+          "prom_packetloss_samples_total": 130.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 281.832968,
+    "faults_healed": 2
+  },
+  "rca_label": {
+    "root_cause": "Kill PyHSS AND add 2-second latency to the S-CSCF. This simulates a cascading failure: the HSS is gone (no Diameter auth) AND the S-CSCF is degraded (slow SIP processing). Total IMS outage.",
+    "affected_components": [
+      "pyhss",
+      "scscf"
+    ],
+    "severity": "degraded",
+    "failure_domain": "ims_signaling",
+    "protocol_impact": "SIP"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v7-adk/gemini-2.5-flash+gemini-2.5-pro",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: The HSS (pyhss) container has exited, causing a complete failure of the IMS registration and authentication process, which has brought down the entire VoNR service.\n- **timeline**:\n    1. The pyhss container enters an 'exited' state.\n    2. Cx (Diameter) links from both I-CSCF and S-CSCF to the HSS become INACTIVE.\n    3. The I-CSCF stops receiving Diameter capabilities replies from the HSS, causing the 'normalized.icscf.cdp_replies_per_ue' metric to drop to 0.\n    4. The S-CSCF stops receiving Diameter capabilities replies from the HSS, causing the 'normalized.scscf.cdp_replies_per_ue' metric to drop to 0.\n    5. The S-CSCF stops receiving successful registration requests, causing the 'normalized.scscf.core:rcv_requests_register_per_ue' metric to drop to 0.\n    6. The IMS registration and authentication process fails for all users.\n- **root_cause**: The primary cause of the outage is that the HSS (pyhss) container has exited, breaking the IMS authentication and registration flow. (primary_suspect_nf: `pyhss`)\n- **affected_components**:\n    - `pyhss`: Root Cause\n    - `icscf`: Symptomatic\n    - `scscf`: Symptomatic\n- **recommendation**: Check the container logs for the 'pyhss' container to investigate the reason for its unexpected termination.\n- **confidence**: high\n- **verdict_kind**: confirmed\n- **explanation**: The diagnosis is confirmed with high confidence based on a single surviving hypothesis (h1). Investigation confirmed that the HSS component, pyhss, is in an 'exited' state. Probes executed by the Investigator verified this status and also confirmed that application-level queries to the HSS are failing with connection errors. This directly explains the inactive Diameter links and the drop to zero for multiple IMS registration and authentication metrics on the I-CSCF and S-CSCF. No contradictory evidence was found, and the evidence validation was clean.",
+    "score": {
+      "root_cause_correct": true,
+      "root_cause_rationale": "The agent correctly identified the HSS (pyhss) being down/exited as the primary root cause of the total IMS outage. While the S-CSCF also experienced latency, the HSS failure alone is sufficient to cause a complete IMS registration failure and total VoNR service outage, making it the most critical root cause.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent correctly identified 'pyhss' as the 'Root Cause' in its affected_components list. Although 'scscf' was also directly affected by a simulated latency, its role was labeled 'Symptomatic'. However, the HSS failure is the primary driver of the total outage, and the agent correctly prioritized it as the root cause. The prompt allows for 1.0 if the primary affected component is listed as 'Root Cause' and does not penalize for listing cascading components.",
+      "severity_correct": true,
+      "severity_rationale": "The agent's diagnosis of a 'complete failure of the IMS registration and authentication process' and 'brought down the entire VoNR service' accurately reflects the 'Total IMS outage' and 'No voice calls possible' described in the simulated failure.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent identified the HSS (pyhss) as being in an 'exited' state and 'application-level queries to the HSS are failing with connection errors', which correctly describes a 'component unreachable' or 'not responding' fault type. It did not explicitly mention the S-CSCF latency, but the primary fault type is correctly identified.",
+      "layer_accuracy": true,
+      "layer_accuracy_rationale": "The agent correctly attributed the failure to the 'ims' layer in its network analysis, with 'pyhss container has exited' and related IMS metrics as evidence. Both 'pyhss' and 'scscf' belong to the IMS layer.",
+      "confidence_calibrated": true,
+      "confidence_rationale": "The agent stated 'high' confidence, which is appropriate given its accurate identification of the primary root cause, severity, and supporting evidence for the total IMS outage.",
+      "ranking_position": 1,
+      "ranking_rationale": "The agent provided a single, correct root cause as its primary diagnosis.",
+      "total_score": 1.0,
+      "summary": "The agent provided an excellent diagnosis, correctly identifying the primary root cause, its severity, affected components, and fault type with high confidence, and accurately mapping it to the correct network layer."
+    },
+    "time_to_diagnosis_seconds": 142.8,
+    "token_usage": {
+      "input_tokens": 153158,
+      "output_tokens": 3222,
+      "thinking_tokens": 9800,
+      "total_tokens": 166180,
+      "per_phase": [
+        {
+          "agent": "AnomalyScreener",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SymptomClassifier",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "PathResolver",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "PathWalkInvestigator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EventAggregator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "CorrelationAnalyzer",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 24922,
+          "tool_calls": 3,
+          "llm_calls": 2
+        },
+        {
+          "agent": "Phase 3 NetworkAnalyst__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 35395,
+          "tool_calls": 2,
+          "llm_calls": 3
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 47281,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 51246,
+          "tool_calls": 3,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h1__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase5FanOutAudit",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase6.5CandidatePool",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EvidenceValidator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 7336,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 7 Synthesis__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        }
+      ]
+    },
+    "anomaly_report": "**ANOMALY DETECTED.** Overall anomaly score: 51.88 (per-bucket threshold: 26.31, context bucket (0, 1), trained on 323 healthy snapshots). The current metric pattern is statistically different from the learned healthy baseline. Something in the network has changed.\n\nThe following metrics deviate from their learned-healthy baseline. Treat each as a semantic observation (meaning + numbers), not a number alone \u2014 the KB's interpretation is the authoritative reading.\n\n- **`context.cx_active`** \u2014 current **0.00** vs learned baseline **0.59** (MEDIUM, drop). *(No KB context available \u2014 interpret from the metric name.)*\n\n- **`normalized.icscf.cdp_replies_per_ue`** (I-CSCF Diameter reply rate per UE) \u2014 current **0.00 replies_per_second_per_ue** vs learned baseline **0.03 replies_per_second_per_ue** (MEDIUM, drop)\n    - **What it measures:** Liveness of the I-CSCF\u2194HSS Cx path. Drops to 0 when HSS is unreachable OR when no signaling is occurring at the I-CSCF (idle or upstream P-CSCF partitioned).\n    - **Drop means:** No Cx replies in the window. Could be healthy idle OR a Cx-path fault.\n    - **Healthy typical range:** 0\u20131 replies_per_second_per_ue\n\n- **`normalized.icscf.core:rcv_requests_invite_per_ue`** (SIP INVITE rate per UE at I-CSCF) \u2014 current **0.06 requests_per_second** vs learned baseline **0.00 requests_per_second** (MEDIUM, spike)\n    - **What it measures:** Health of call-setup forwarding P-CSCF \u2192 I-CSCF. Partition signature\nsame as REGISTER rate.\n    - **Spike means:** Forwarding failure.\n    - **Healthy typical range:** 0\u20130.2 requests_per_second\n    - **Healthy invariant:** Per-UE rate. Tracks pcscf.invite rate.\n\n- **`normalized.icscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at I-CSCF) \u2014 current **0.01 requests_per_second** vs learned baseline **0.06 requests_per_second** (MEDIUM, drop)\n    - **What it measures:** Health of the P-CSCF \u2192 I-CSCF forwarding path (Mw interface). When\nthis drops to zero while P-CSCF REGISTER rate is still non-zero,\nit's the SIGNATURE of an IMS partition between P-CSCF and I-CSCF.\n    - **Drop means:** Either UEs not registering at all, or P-CSCF isolated from I-CSCF.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate. Should closely track ims.pcscf.rcv_requests_register_per_ue.\n\n- **`normalized.pcscf.core:rcv_requests_invite_per_ue`** (SIP INVITE rate per UE at P-CSCF) \u2014 current **0.02 requests_per_second** vs learned baseline **0.00 requests_per_second** (MEDIUM, spike)\n    - **What it measures:** Call attempt rate from registered UEs. Unlike REGISTER (periodic),\nINVITEs only fire when UEs place calls. Zero is normal during\nquiet periods; nonzero INVITE with zero dialogs is the signature\nof call setup failure.\n    - **Spike means:** Fewer call attempts.\n    - **Healthy typical range:** 0\u20130.2 requests_per_second\n    - **Healthy invariant:** Per-UE rate.\n\n- **`normalized.pcscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at P-CSCF) \u2014 current **0.01 requests_per_second** vs learned baseline **0.06 requests_per_second** (MEDIUM, drop)\n    - **What it measures:** How actively UEs are refreshing their IMS registrations with the\nP-CSCF. REGISTERs arrive periodically (re-registration timer) plus\nat attach. Sustained zero means UEs cannot reach P-CSCF OR the\nUE-to-network SIP path is broken.\n    - **Drop means:** No REGISTERs flowing. Unusual unless UEs are all deregistered.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate \u2014 same value at any deployment scale.\n\n- **`normalized.scscf.cdp_replies_per_ue`** (S-CSCF CDP Diameter replies per UE) \u2014 current **0.00 replies_per_second_per_ue** vs learned baseline **0.06 replies_per_second_per_ue** (MEDIUM, drop)\n    - **What it measures:** Active S-CSCF Diameter traffic with HSS. Near-zero when registrations idle OR HSS partition.\n    - **Drop means:** No active S-CSCF Diameter exchanges (idle or partitioned).\n    - **Healthy typical range:** 0\u20131 replies_per_second_per_ue\n    - **Healthy invariant:** Per-UE rate; varies with registration/auth load.\n\n- **`normalized.scscf.core:rcv_requests_invite_per_ue`** (SIP INVITE rate per UE at S-CSCF) \u2014 current **0.06 requests_per_second** vs learned baseline **0.00 requests_per_second** (MEDIUM, spike)\n    - **What it measures:** S-CSCF participation in call setup. Zero when calls aren't being\nplaced OR S-CSCF not receiving forwarded INVITEs.\n    - **Spike means:** Upstream forwarding issue.\n    - **Healthy typical range:** 0\u20130.2 requests_per_second\n    - **Healthy invariant:** Per-UE rate.\n\n- **`normalized.scscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at S-CSCF) \u2014 current **0.00 requests_per_second** vs learned baseline **0.06 requests_per_second** (MEDIUM, drop)\n    - **What it measures:** Health of the I-CSCF \u2192 S-CSCF forwarding path. Drop to zero while\nI-CSCF is receiving REGISTERs = S-CSCF-side issue (crashed, or\nI-CSCF \u2192 S-CSCF path broken).\n    - **Drop means:** S-CSCF isolated or not running.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate. Tracks icscf.register rate.\n\n- **`normalized.upf.gtp_outdatapktn3upf_per_ue`** (GTP-U downlink rate per UE (N3)) \u2014 current **0.05 packets_per_second** vs learned baseline **1.45 packets_per_second** (MEDIUM, drop)\n    - **What it measures:** Health of the downlink user-plane path UPF \u2192 gNB. Drops to\nnear-zero during a downlink-affecting RAN, N3, or UPF\noutage; stays nonzero during active calls or data sessions.\nDecoupled from SIP signaling. The cross-direction\nrelationship to uplink (gtp_indatapktn3upf_per_ue) reflects\ncurrent traffic profile, NOT data-plane health \u2014 voice\nwith NULL_AUDIO, signaling-only chatter, idle UEs, and\nasymmetric data sessions all produce persistent in/out\nimbalance under healthy operation. Use this metric for\nsame-direction collapse detection (a known-active downlink\ncollapsing toward zero); do NOT infer loss from\nuplink-vs-downlink asymmetry \u2014 see stack rule\nupf_counters_are_directional.\n    - **Drop means:** No traffic leaving UPF toward RAN.\n    - **Healthy typical range:** 0\u201310 packets_per_second\n    - **Healthy invariant:** Per-UE rate. Constant regardless of UE pool size. Uplink\n(gtp_indatapktn3upf_per_ue) and downlink are independent\ndirections whose ratio is determined entirely by the current\ntraffic profile \u2014 voice with NULL_AUDIO (this testbed),\nsignaling-only chatter, idle UEs, and asymmetric data\nsessions all produce persistent in/out imbalance under\nhealthy operation. Asymmetry between uplink and downlink\nrates is NEVER, by itself, evidence of packet loss \u2014 not\nat any magnitude, not under any traffic mix. To detect\nactual loss, use the methods listed in stack rule\n`upf_counters_are_directional` (same-direction rate\ncomparison, RTCP loss_ratio at RTPEngine, or tc qdisc drop\ncounters). Rate-based metrics like this one are usually\nMORE informative than the underlying lifetime cumulative\ncounter for current-state failure detection.\n",
+    "network_analysis": "{\n  \"summary\": \"The HSS container has exited, which has caused a complete failure of the IMS registration and authentication process, bringing down the entire VoNR service.\",\n  \"layer_status\": {\n    \"infrastructure\": {\n      \"rating\": \"green\",\n      \"evidence\": [\n        \"dns is running\",\n        \"mysql is running\",\n        \"mongo is running\"\n      ],\n      \"note\": \"Core infrastructure components are stable.\"\n    },\n    \"ran\": {\n      \"rating\": \"green\",\n      \"evidence\": [\n        \"Active link from RAN to AMF\"\n      ],\n      \"note\": \"RAN appears to be connected to the core.\"\n    },\n    \"core\": {\n      \"rating\": \"green\",\n      \"evidence\": [\n        \"amf is running\",\n        \"smf is running\",\n        \"upf is running\"\n      ],\n      \"note\": \"The 5G core components are operational.\"\n    },\n    \"ims\": {\n      \"rating\": \"red\",\n      \"evidence\": [\n        \"pyhss container has exited\",\n        \"Cx links from I-CSCF and S-CSCF to HSS are INACTIVE\",\n        \"normalized.icscf.cdp_replies_per_ue is 0\",\n        \"normalized.scscf.cdp_replies_per_ue is 0\",\n        \"normalized.pcscf.core:rcv_requests_register_per_ue has dropped\",\n        \"normalized.icscf.core:rcv_requests_register_per_ue has dropped\",\n        \"normalized.scscf.core:rcv_requests_register_per_ue is 0\"\n      ],\n      \"note\": \"The IMS layer is non-functional due to the HSS failure, preventing any user registrations or call setups.\"\n    }\n  },\n  \"hypotheses\": [\n    {\n      \"id\": \"h1\",\n      \"statement\": \"The primary cause of the outage is that the HSS (pyhss) container has exited, breaking the IMS authentication and registration flow.\",\n      \"primary_suspect_nf\": \"pyhss\",\n      \"supporting_events\": [\n        \"pyhss container status is 'exited'\",\n        \"Cx (Diameter) links from both I-CSCF and S-CSCF to HSS are INACTIVE\",\n        \"Metric 'normalized.icscf.cdp_replies_per_ue' dropped to 0\",\n        \"Metric 'normalized.scscf.cdp_replies_per_ue' dropped to 0\",\n        \"Metric 'normalized.scscf.core:rcv_requests_register_per_ue' dropped to 0\"\n      ],\n      \"explanatory_fit\": 1.0,\n      \"falsification_probes\": [\n        \"Check the container logs for pyhss to understand why it terminated.\",\n        \"Attempt to restart the pyhss container and observe if registration rates recover.\"\n      ],\n      \"specificity\": \"specific\"\n    }\n  ]\n}",
+    "pattern_match": "",
+    "investigation_instruction": "{\n  \"plans\": [\n    {\n      \"hypothesis_id\": \"h1\",\n      \"hypothesis_statement\": \"The primary cause of the outage is that the HSS (pyhss) container has exited, breaking the IMS authentication and registration flow.\",\n      \"primary_suspect_nf\": \"pyhss\",\n      \"probes\": [\n        {\n          \"tool\": \"get_network_status\",\n          \"args_hint\": \"Check status of all network functions.\",\n          \"expected_if_hypothesis_holds\": \"The 'pyhss' container is reported with a status of 'exited' or another non-running state.\",\n          \"falsifying_observation\": \"The 'pyhss' container is reported as 'running'.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"check_process_listeners\",\n          \"args_hint\": \"container='pyhss'\",\n          \"expected_if_hypothesis_holds\": \"The command fails or returns an empty list, as a container that has exited will have no active processes listening on network ports.\",\n          \"falsifying_observation\": \"The command returns a list of active listeners for the pyhss container, indicating that the HSS process is running and bound to its service ports (e.g., Diameter port 3868).\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"query_subscriber\",\n          \"args_hint\": \"imsi='<any_valid_imsi>'\",\n          \"expected_if_hypothesis_holds\": \"The tool fails to connect to the HSS and returns an error, as the service is down.\",\n          \"falsifying_observation\": \"The tool successfully retrieves subscriber information, proving the HSS is running, reachable, and functionally responding to requests.\",\n          \"conflates_with\": []\n        }\n      ],\n      \"notes\": \"The hypothesis points to a complete failure of the HSS. The selected probes aim to falsify this by checking three distinct aspects of the service: the container's reported status, the presence of a listening process, and the application-level functionality. The IMS registration flow ('ims_registration', steps 4, 6, 7) and Diameter authentication ('diameter_cx_authentication') depend entirely on the HSS being responsive. A successful result from any of these probes would strongly contradict the hypothesis.\"\n    }\n  ]\n}",
+    "investigation": "[\n  {\n    \"hypothesis_id\": \"h1\",\n    \"hypothesis_statement\": \"The primary cause of the outage is that the HSS (pyhss) container has exited, breaking the IMS authentication and registration flow.\",\n    \"verdict\": \"NOT_DISPROVEN\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 both shots returned NOT_DISPROVEN.]\\n\\nShot 1: All executed probes produced results consistent with the hypothesis. The 'pyhss' container is confirmed to be in an 'exited' state, and as a direct result, application-level queries to the HSS are failing with connection errors. No contradictory evidence was found.\\n\\nShot 2: The executed probes confirm the core claims of the hypothesis. The 'pyhss' container is reported as 'exited', and application-level queries to the HSS are failing with a connection error. No contradictory evidence was found.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check status of all network functions.\",\n        \"tool_call\": \"default_api.get_network_status()\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"'pyhss': 'exited'\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"The network status confirms that the pyhss container has an 'exited' status, which directly supports the hypothesis.\"\n      },\n      {\n        \"probe_description\": \"container='pyhss'\",\n        \"tool_call\": \"default_api.check_process_listeners(container='pyhss')\",\n        \"observation\": \"[EVIDENCE: check_process_listeners('pyhss') -> 'PROBE_TOOL_UNAVAILABLE: check_process_listeners cannot run on container `pyhss` \\u2014 required binary `ss/netstat` is not present.']\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"tool_unavailable\",\n        \"commentary\": \"The tool could not execute because the container is not running. This is the expected behavior for an exited container and is therefore consistent with the hypothesis.\"\n      },\n      {\n        \"probe_description\": \"imsi='<any_valid_imsi>'\",\n        \"tool_call\": \"default_api.query_subscriber(domain='ims', imsi='001011234567891')\",\n        \"observation\": \"[EVIDENCE: query_subscriber('001011234567891', 'ims') -> '{\\\"ims_error\\\": \\\"Cannot connect to PyHSS API at http://172.22.0.18:8080. Is the pyhss container running?\\\"}']\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"The query to the IMS subscriber database failed with a connection error. This confirms that the HSS service is unreachable, as stated in the hypothesis.\"\n      }\n    ],\n    \"alternative_suspects\": []\n  }\n]",
+    "evidence_validation": "{\n  \"overall_verdict\": \"clean\",\n  \"overall_confidence\": \"high\",\n  \"per_agent\": [\n    {\n      \"agent_name\": \"InvestigatorAgent_h1\",\n      \"tool_calls_made\": 6,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    }\n  ],\n  \"summary\": \"Evidence validation across 1 sub-Investigator(s): overall verdict=clean, confidence=high.\\n  - InvestigatorAgent_h1: 6 tool calls, 3/3 citations verified (clean, high)\"\n}",
+    "fired_events": "No events fired during this episode. Either no metric KB triggers matched, or the episode encountered no meaningful state transitions.",
+    "correlation_analysis": "No events fired \u2014 correlation engine had nothing to work with.",
+    "symptom_classification": {
+      "label": "transport_layer",
+      "rationale": "label=transport_layer. 1 transport-layer signal(s); no application-layer smoking guns. Routes to the deterministic path walk (see ADR path_anchored_probe_planning_for_transport_layer_faults.md).\n\nTransport signals: normalized.upf.gtp_outdatapktn3upf_per_ue (drop, score=4.59) \u2014 KB-labeled transport: core.upf.gtp_outdatapktn3upf_per_ue (drop, score=4.59)\n\nAmbiguous signals: context.cx_active (drop, score=4.59) \u2014 no KB entry for context.cx_active \u2014 classification ambiguous; normalized.icscf.cdp_replies_per_ue (drop, score=4.59) \u2014 KB-labeled mixed: ims.icscf.cdp_replies_per_ue (drop, score=4.59); normalized.icscf.core:rcv_requests_invite_per_ue (spike, score=4.59) \u2014 KB-labeled mixed: ims.icscf.rcv_requests_invite_per_ue (spike, score=4.59); normalized.icscf.core:rcv_requests_register_per_ue (drop, score=4.59) \u2014 KB-labeled mixed: ims.icscf.rcv_requests_register_per_ue (drop, score=4.59); normalized.pcscf.core:rcv_requests_invite_per_ue (spike, score=4.59) \u2014 KB-labeled mixed: ims.pcscf.rcv_requests_invite_per_ue (spike, score=4.59) [+4 more]",
+      "flag_counts": {
+        "transport": 1,
+        "application": 0,
+        "ambiguous": 9
+      },
+      "transport_flags": [
+        {
+          "metric": "upf.gtp_outdatapktn3upf_per_ue",
+          "component": "normalized",
+          "current": 0.052,
+          "learned_normal": 1.4541,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "core.upf.gtp_outdatapktn3upf_per_ue",
+          "bucket": "transport",
+          "reason": "KB-labeled transport: core.upf.gtp_outdatapktn3upf_per_ue (drop, score=4.59)"
+        }
+      ],
+      "application_flags": [],
+      "ambiguous_flags": [
+        {
+          "metric": "cx_active",
+          "component": "context",
+          "current": 0.0,
+          "learned_normal": 0.5882,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": null,
+          "bucket": "ambiguous",
+          "reason": "no KB entry for context.cx_active \u2014 classification ambiguous"
+        },
+        {
+          "metric": "icscf.cdp_replies_per_ue",
+          "component": "normalized",
+          "current": 0.0,
+          "learned_normal": 0.0319,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.icscf.cdp_replies_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.icscf.cdp_replies_per_ue (drop, score=4.59)"
+        },
+        {
+          "metric": "icscf.core:rcv_requests_invite_per_ue",
+          "component": "normalized",
+          "current": 0.0624,
+          "learned_normal": 0.0017,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.icscf.rcv_requests_invite_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.icscf.rcv_requests_invite_per_ue (spike, score=4.59)"
+        },
+        {
+          "metric": "icscf.core:rcv_requests_register_per_ue",
+          "component": "normalized",
+          "current": 0.0104,
+          "learned_normal": 0.0604,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.icscf.rcv_requests_register_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.icscf.rcv_requests_register_per_ue (drop, score=4.59)"
+        },
+        {
+          "metric": "pcscf.core:rcv_requests_invite_per_ue",
+          "component": "normalized",
+          "current": 0.0208,
+          "learned_normal": 0.0033,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.pcscf.rcv_requests_invite_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.pcscf.rcv_requests_invite_per_ue (spike, score=4.59)"
+        },
+        {
+          "metric": "pcscf.core:rcv_requests_register_per_ue",
+          "component": "normalized",
+          "current": 0.0104,
+          "learned_normal": 0.0604,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.pcscf.rcv_requests_register_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.pcscf.rcv_requests_register_per_ue (drop, score=4.59)"
+        },
+        {
+          "metric": "scscf.cdp_replies_per_ue",
+          "component": "normalized",
+          "current": 0.0,
+          "learned_normal": 0.0604,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.scscf.cdp_replies_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.scscf.cdp_replies_per_ue (drop, score=4.59)"
+        },
+        {
+          "metric": "scscf.core:rcv_requests_invite_per_ue",
+          "component": "normalized",
+          "current": 0.0624,
+          "learned_normal": 0.0033,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.scscf.rcv_requests_invite_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.scscf.rcv_requests_invite_per_ue (spike, score=4.59)"
+        },
+        {
+          "metric": "scscf.core:rcv_requests_register_per_ue",
+          "component": "normalized",
+          "current": 0.0,
+          "learned_normal": 0.0604,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.595,
+          "kb_metric_id": "ims.scscf.rcv_requests_register_per_ue",
+          "bucket": "ambiguous",
+          "reason": "KB-labeled mixed: ims.scscf.rcv_requests_register_per_ue (drop, score=4.59)"
+        }
+      ]
+    },
+    "resolved_path": {
+      "flow_id": "data_pdu_session_user_traffic",
+      "flow_name": "Data PDU Session \u2014 User Traffic",
+      "direction": "both",
+      "hops": [
+        {
+          "node": "e2e_ue1",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "nr_gnb",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "upf",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "internet",
+          "kind": "external_network",
+          "iface": "eth0"
+        },
+        {
+          "node": "upf",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "nr_gnb",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "e2e_ue1",
+          "kind": "container",
+          "iface": "eth0"
+        }
+      ],
+      "rationale": "Resolved transport path to flow `data_pdu_session_user_traffic` (score=7, 11 hops on the walk). Load-bearing components: ['context', 'icscf', 'pcscf', 'scscf', 'upf']. Other candidate flows considered: vonr_media=7, ims_registration=4, vonr_call_teardown=4, vonr_call_setup=4.",
+      "candidate_flows": [
+        {
+          "flow_id": "data_pdu_session_user_traffic",
+          "score": 7
+        },
+        {
+          "flow_id": "vonr_media",
+          "score": 7
+        },
+        {
+          "flow_id": "ims_registration",
+          "score": 4
+        },
+        {
+          "flow_id": "vonr_call_teardown",
+          "score": 4
+        },
+        {
+          "flow_id": "vonr_call_setup",
+          "score": 4
+        }
+      ]
+    },
+    "path_walk_report": {
+      "flow_id": "data_pdu_session_user_traffic",
+      "direction": "both",
+      "anchor_ts": 1778444129.1320307,
+      "window_seconds": 5,
+      "is_localized": false,
+      "first_attributed_hop": null,
+      "hops": [
+        {
+          "hop": {
+            "node": "e2e_ue1",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "e2e_ue1[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=251 rx_pkts=800 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: vethe001677@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n8: vethbefb3f7@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n9: veth794c636@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n13: veth8249535@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n14: veth613a637"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "nr_gnb",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "nr_gnb[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=1346 rx_pkts=2393 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: vethe001677@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n8: vethbefb3f7@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n9: veth794c636@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n13: veth8249535@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n14: veth613a637"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "upf",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "upf[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=27509 rx_pkts=68068 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "internet",
+            "kind": "external_network",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "inconclusive",
+            "reason": "no_prober_registered",
+            "detail": "\"no HopProber registered for kind='external_network'; registered kinds: ['container', 'docker_bridge']\""
+          },
+          "prober": "<unregistered>"
+        },
+        {
+          "hop": {
+            "node": "upf",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "upf[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=27509 rx_pkts=68068 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: vethe001677@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n8: vethbefb3f7@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n9: veth794c636@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n13: veth8249535@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n14: veth613a637"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "nr_gnb",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "nr_gnb[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=1348 rx_pkts=2397 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: vethe001677@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n8: vethbefb3f7@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n9: veth794c636@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n13: veth8249535@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n14: veth613a637"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "e2e_ue1",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "e2e_ue1[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=252 rx_pkts=805 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        }
+      ]
+    },
+    "diagnosis_report": null
+  }
+}

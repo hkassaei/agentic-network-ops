@@ -176,7 +176,7 @@ rtpengine_latency_injection = Scenario(
         "`latency_at_hop` — both are first-class HopAttribution variants. "
         "Operators see audio jitter / one-way audio rather than gappy "
         "audio. v7's `KernelHopProber` reads the qdisc's authored "
-        "`delay 100ms` parameter and v7's `LocalizedSynthesis` emits "
+        "`delay 100ms` parameter and v7's unified Synthesis LLM emits "
         "verdict_kind=localized with attribution_kind=latency_at_hop. "
         "v6's per-NF pipeline mis-diagnoses for the same reason it "
         "mis-diagnoses Call Quality Degradation: rtpengine.errors_per_second "

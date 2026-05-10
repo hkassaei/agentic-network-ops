@@ -1,4 +1,4 @@
-"""End-to-end transport-layer pipeline test (classify → resolve → walk → synthesize).
+"""End-to-end transport-layer pipeline test (classify → resolve → walk → bundle).
 
 Per Phase 4 of ADR `path_anchored_probe_planning_for_transport_layer_faults.md`.
 
@@ -8,8 +8,19 @@ Inputs are built in the SCREENER's actual emission format
 mocked probers — actually exercising tc-netem against a deployed
 stack is the live runbook
 `docs/runbooks/path_walk_phase4_live_contract_test.md`. This file
-covers the wiring (classifier → resolver → walker → synthesis) end
-to end against the same flag formats production sees.
+covers the deterministic wiring (classifier → resolver → walker → the
+markdown bundle the unified Synthesis LLM consumes) end to end against
+the same flag formats production sees.
+
+Synthesis is now the v6 LLM agent extended with a localized-verdict
+prompt branch (one Synthesis, four verdict_kinds — per the ADR's
+"Synthesis gains a `localized` verdict-kind" prescription). Asserting
+the LLM's structured output shape is a live-runbook concern, not a
+unit test; instead we assert the markdown bundle the LLM reads (via
+the `{path_walk_for_synthesis}` template substitution) contains the
+load-bearing facts it needs to emit a correct localized verdict:
+the attributed hop's name, its attribution kind, and the verbatim
+counter excerpt from the kernel's own words.
 """
 
 from __future__ import annotations
@@ -27,9 +38,9 @@ from agentic_ops_common.path_walk import (
     LatencyAtHop,
 )
 
+from agentic_ops_v7.orchestrator import _render_path_walk_for_synthesis
 from agentic_ops_v7.path_resolver import resolve_path
 from agentic_ops_v7.subagents import path_walk_investigator as walker_mod
-from agentic_ops_v7.subagents.localized_synthesis import synthesize_localized
 from agentic_ops_v7.subagents.path_walk_investigator import walk_path
 from agentic_ops_v7.symptom_classifier import classify, SymptomClassification
 
@@ -97,9 +108,9 @@ def _patch_probers_with_attribution_at(
 
 def test_rtpengine_30pct_loss_localizes_correctly(monkeypatch):
     """The originally-failing scenario: rtpengine 30% tc-netem loss must
-    produce a `localized` verdict naming rtpengine. Inputs are in
-    screener-actual format — the round-trip the broken classifier
-    silently mishandled in the previous v7 run."""
+    classify, resolve, walk to rtpengine, and produce a synthesis bundle
+    quoting the qdisc evidence so the LLM can emit a localized verdict
+    naming rtpengine."""
     classification = _classify_real([
         _flag("derived.rtpengine_loss_ratio",
               current=25.67, learned_normal=0.0, direction="spike", score=2.0),
@@ -108,14 +119,12 @@ def test_rtpengine_30pct_loss_localizes_correctly(monkeypatch):
         _flag("normalized.upf.gtp_outdatapktn3upf_per_ue",
               current=3.26, learned_normal=1.45, direction="spike", score=1.0),
     ])
-    # Routes through the path-walker (transport_layer or mixed).
     assert classification.label in ("transport_layer", "mixed")
 
     resolved = resolve_path(classification)
     assert resolved is not None
     assert resolved.flow_id == "vonr_media"
 
-    # Mock probers: rtpengine attributes 30% qdisc-netem drops.
     _patch_probers_with_attribution_at(
         monkeypatch, "rtpengine",
         DropsAttributedHere(
@@ -140,24 +149,18 @@ def test_rtpengine_30pct_loss_localizes_correctly(monkeypatch):
     assert walk_report.is_localized
     assert walk_report.first_attributed_hop.hop.node == "rtpengine"
 
-    diagnosis = synthesize_localized(walk_report, classification)
-    assert diagnosis is not None
-    assert diagnosis.verdict_kind == "localized"
-    assert diagnosis.primary_suspect_nf == "rtpengine"
-    assert diagnosis.root_cause_confidence == "high"
-
-    # Localization payload carries the verbatim qdisc evidence.
-    assert diagnosis.localization is not None
-    assert diagnosis.localization.hop_node == "rtpengine"
-    assert diagnosis.localization.counter_kind == "qdisc_netem"
-    assert diagnosis.localization.dropped_pkts == 300
-    assert "loss 30%" in diagnosis.localization.evidence
-    assert "tc -s qdisc show" in diagnosis.localization.evidence
-
-    # Walk-table shows in the explanation.
-    assert "Transport-layer path walk" in diagnosis.explanation
-    assert "rtpengine" in diagnosis.explanation
-    assert "🎯" in diagnosis.explanation  # marker on the attributed hop
+    # The LLM Synthesis consumes this bundle via `{path_walk_for_synthesis}`.
+    # Assert the load-bearing facts are present so the LLM has what it
+    # needs to emit verdict_kind=localized, primary_suspect_nf=rtpengine,
+    # and explanation containing the verbatim counter excerpt.
+    bundle = _render_path_walk_for_synthesis(walk_report, classification)
+    assert "rtpengine" in bundle
+    assert "qdisc_netem" in bundle
+    assert "drops_attributed_here" in bundle
+    assert "loss 30%" in bundle  # verbatim qdisc evidence
+    assert "tc -s qdisc show" in bundle
+    assert "🎯" in bundle  # marker on the attributed hop in the walk-table
+    assert "Path walk" in bundle  # section header
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +171,8 @@ def test_rtpengine_30pct_loss_localizes_correctly(monkeypatch):
 def test_pcscf_30pct_loss_localizes_correctly(monkeypatch):
     """P-CSCF tc-netem partition: signaling-rate drops downstream and a
     REGISTER-time spike. Walker probes the SIP-path flow, finds qdisc
-    drops at pcscf, synthesizes a `localized` verdict."""
+    drops at pcscf; the synthesis bundle names pcscf as the attributed
+    hop."""
     classification = _classify_real([
         _flag("derived.pcscf_avg_register_time_ms",
               current=2500.0, learned_normal=120.0, direction="spike", score=2.0),
@@ -204,11 +208,11 @@ def test_pcscf_30pct_loss_localizes_correctly(monkeypatch):
     assert walk_report.is_localized
     assert walk_report.first_attributed_hop.hop.node == "pcscf"
 
-    diagnosis = synthesize_localized(walk_report, classification)
-    assert diagnosis is not None
-    assert diagnosis.verdict_kind == "localized"
-    assert diagnosis.primary_suspect_nf == "pcscf"
-    assert diagnosis.root_cause_confidence == "high"
+    bundle = _render_path_walk_for_synthesis(walk_report, classification)
+    assert "pcscf" in bundle
+    assert "qdisc_netem" in bundle
+    assert "loss 30%" in bundle
+    assert "🎯" in bundle
 
 
 # ---------------------------------------------------------------------------
@@ -254,20 +258,16 @@ def test_upf_bandwidth_cap_localizes_via_qdisc_tbf(monkeypatch):
     assert walk_report.is_localized
     assert walk_report.first_attributed_hop.hop.node == "upf"
 
-    diagnosis = synthesize_localized(walk_report, classification)
-    assert diagnosis is not None
-    assert diagnosis.verdict_kind == "localized"
-    assert diagnosis.primary_suspect_nf == "upf"
-    assert diagnosis.root_cause_confidence == "high"
-    assert diagnosis.localization is not None
-    assert diagnosis.localization.counter_kind == "qdisc_tbf"
-    assert "tc" in diagnosis.recommendation.lower()
+    bundle = _render_path_walk_for_synthesis(walk_report, classification)
+    assert "qdisc_tbf" in bundle
+    assert "rate 100Kbit" in bundle  # verbatim tc-tbf evidence excerpt
+    assert "upf" in bundle
 
 
 def test_rtpengine_latency_injection_localizes_via_latency_at_hop(monkeypatch):
-    """netem delay 100ms produces LatencyAtHop, not drops. Synthesis
-    still names rtpengine and reports high confidence (qdisc_netem_delay
-    reads the authored delay value directly).
+    """netem delay 100ms produces LatencyAtHop, not drops. The bundle
+    surfaces the authored delay so the LLM emits high-confidence
+    latency-attribution localized verdict.
 
     The screener's only derived rtpengine feature is
     `derived.rtpengine_loss_ratio` — the closed feature set is in
@@ -276,9 +276,6 @@ def test_rtpengine_latency_injection_localizes_via_latency_at_hop(monkeypatch):
     receiver jitter buffers underrun, so loss_ratio is a plausible
     load-bearing signal even for a delay scenario; combined with the
     UPF rate shifts it gives the resolver enough to pick vonr_media.
-    The walker stage is mocked, so the exact metric pattern isn't
-    load-bearing for what this test verifies (the LatencyAtHop ->
-    synthesis path).
     """
     classification = _classify_real([
         _flag("derived.rtpengine_loss_ratio",
@@ -312,15 +309,14 @@ def test_rtpengine_latency_injection_localizes_via_latency_at_hop(monkeypatch):
     walk_report = asyncio.run(walk_path(
         flow_id=resolved.flow_id, hops=resolved.hops,
     ))
-    diagnosis = synthesize_localized(walk_report, classification)
-    assert diagnosis is not None
-    assert diagnosis.verdict_kind == "localized"
-    assert diagnosis.primary_suspect_nf == "rtpengine"
-    assert diagnosis.root_cause_confidence == "high"
-    assert diagnosis.localization is not None
-    assert diagnosis.localization.attribution_kind == "latency_at_hop"
-    assert diagnosis.localization.observed_delay_ms == 100.0
-    assert "tc" in diagnosis.recommendation.lower()
+    assert walk_report.is_localized
+    assert walk_report.first_attributed_hop.hop.node == "rtpengine"
+
+    bundle = _render_path_walk_for_synthesis(walk_report, classification)
+    assert "latency_at_hop" in bundle
+    assert "qdisc_netem_delay" in bundle
+    assert "100" in bundle  # the delay value
+    assert "delay 100.0ms" in bundle  # verbatim evidence
 
 
 # ---------------------------------------------------------------------------
@@ -328,11 +324,12 @@ def test_rtpengine_latency_injection_localizes_via_latency_at_hop(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_null_localization_returns_none_for_synthesis(monkeypatch):
+def test_null_localization_does_not_engage_synthesis(monkeypatch):
     """When no hop attributes a fault (e.g. an HSS-unresponsive scenario
     where the fault is application-layer at the peer rather than a
-    kernel/network drop), synthesize_localized returns None so the
-    orchestrator falls through to the application-layer pipeline."""
+    kernel/network drop), the walker returns is_localized=False and the
+    orchestrator falls through to the application-layer pipeline. No
+    synthesis bundle is produced for the localized branch."""
     classification = _classify_real([
         _flag("normalized.icscf.uar_timeout_ratio",
               current=0.7, learned_normal=0.0, direction="spike", score=2.0),
@@ -358,9 +355,12 @@ def test_null_localization_returns_none_for_synthesis(monkeypatch):
         flow_id=resolved.flow_id, hops=resolved.hops,
     ))
     assert not walk_report.is_localized
-
-    diagnosis = synthesize_localized(walk_report, classification)
-    assert diagnosis is None  # caller falls through to app-layer pipeline
+    # Under the unified Synthesis flow, the orchestrator skips Phase 7
+    # entirely on the null-localization branch and falls through to
+    # the application-layer pipeline. The bundle helper would still
+    # produce a "no hop attributed" string if invoked, but the
+    # orchestrator's `_phase06_transport_layer_route` returns None
+    # before populating `state["path_walk_for_synthesis"]`.
 
 
 # ---------------------------------------------------------------------------

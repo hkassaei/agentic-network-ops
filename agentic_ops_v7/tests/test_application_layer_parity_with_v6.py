@@ -14,11 +14,23 @@ GCP/Vertex credentials; that runs as a nightly CI batch (Phase 7).
 This test runs in plain pytest and covers the structural shape:
 imports, model fields, prompt files, guardrail files, deliberate diffs.
 
-Allowed deliberate diffs at v7 creation:
+Allowed deliberate diffs (Phase 2 + Phase 3 unified-Synthesis rework):
   - models.py: `verdict_kind` literal gains "localized";
                 `localization` field added;
                 new `Localization` Pydantic model.
-  - prompts/synthesis.md: gains a `localized`-verdict paragraph at the end.
+  - prompts/synthesis.md: rewritten with branch-select directive at
+                top routing the LLM to either application-layer rules
+                or the localized-verdict rules per a populated
+                `{path_walk_for_synthesis}` placeholder. (Phase 2
+                started as an append-only edit; Phase 3 reshapes the
+                prompt's structure when the unified Synthesis flow
+                landed — the localized-verdict section was no longer
+                a tail-appended afterthought but a co-equal branch.)
+  - guardrails/synthesis_pool.py + guardrails/confidence_cap.py:
+                gain explicit `verdict_kind == "localized"` PASS
+                short-circuits at function entry. ADR-mandated:
+                "downstream guardrails recognize the verdict_kind
+                and short-circuit" (line 111 of the ADR).
   - __main__.py: CLI usage strings say v7 instead of v6.
   - __init__.py: replaced with the v7 module docstring.
 
@@ -106,8 +118,13 @@ _INTENTIONALLY_DIVERGENT = {
     "__init__.py",            # replaced with v7 module docstring
     "__main__.py",            # CLI string says v7 instead of v6
     "models.py",              # adds Localization, `localized` literal
-    "prompts/synthesis.md",   # adds `localized`-verdict paragraph
+    "prompts/synthesis.md",   # branch-select directive + localized-verdict rules
     "orchestrator.py",        # Phase 3: invokes _phase05_symptom_classifier
+    # Phase 3 unified-Synthesis rework — the ADR mandates that
+    # downstream guardrails recognize `verdict_kind == "localized"`
+    # and short-circuit. Pinned by deliberate-divergence tests below.
+    "guardrails/synthesis_pool.py",
+    "guardrails/confidence_cap.py",
 }
 
 
@@ -242,20 +259,87 @@ def test_v7_orchestrator_wires_phase05_symptom_classifier():
     )
 
 
-def test_v7_synthesis_prompt_appends_to_v6():
-    """The localized-verdict paragraph is APPENDED to v6's prompt;
-    the existing v6 content must still be present byte-for-byte at
-    the start. This guards against accidental rewrites."""
-    v6_text = (_V6_ROOT / "prompts" / "synthesis.md").read_text()
+def test_v7_synthesis_prompt_carries_load_bearing_v6_content():
+    """The Phase-3 rework reshapes the prompt's structure (branch-select
+    directive at top, path-walk placeholder, localized-verdict section
+    rewritten as a co-equal branch). The strict "starts-with v6
+    byte-for-byte" check from Phase 2 no longer applies, but the
+    application-layer rules v6 carries must still be present — the
+    LLM still emits `confirmed`/`promoted`/`inconclusive` verdicts on
+    the app-layer branch unchanged.
+
+    This test pins the load-bearing v6 content (template substitution
+    placeholders, verdict-aggregation rule headers, evidence-validation
+    cap, observation-only constraint, output-format schema rules) so
+    accidental rewrites of the application-layer rules still fail CI.
+    """
     v7_text = (_V7_ROOT / "prompts" / "synthesis.md").read_text()
-    assert v7_text.startswith(v6_text), (
-        "v7's synthesis.md must start with v6's content verbatim and "
-        "only append additional content. Detected an in-place edit "
-        "to the inherited v6 portion."
+    # ADK template-substitution placeholders the orchestrator populates
+    # for the app-layer branch — every one must remain.
+    for placeholder in (
+        "{network_analysis}", "{correlation_analysis}",
+        "{investigator_verdicts}", "{evidence_validation}",
+        "{candidate_pool}",
+    ):
+        assert placeholder in v7_text, (
+            f"v7's synthesis.md missing app-layer placeholder {placeholder} "
+            "— the application-layer branch can no longer substitute its "
+            "input bundle."
+        )
+    # Load-bearing v6 rule headers — these drive application-layer verdict
+    # aggregation and must survive the Phase-3 rework.
+    for marker in (
+        "Verdict aggregation rule",
+        "Evidence validation cap",
+        "Observation-only constraint",
+        "Output format",
+        "Pool membership",
+    ):
+        assert marker in v7_text, (
+            f"v7's synthesis.md missing load-bearing v6 section "
+            f"`{marker}` — the application-layer rules must still be "
+            "intact."
+        )
+
+
+def test_v7_synthesis_prompt_has_path_walk_placeholder():
+    """Phase-3 unified-Synthesis rework: the prompt reads the path-walk
+    bundle via the new `{path_walk_for_synthesis}` placeholder. The
+    orchestrator populates it on the localized branch and leaves it
+    empty on the app-layer branch. Without this placeholder the LLM
+    has no way to consume the path-walk report."""
+    v7_text = (_V7_ROOT / "prompts" / "synthesis.md").read_text()
+    assert "{path_walk_for_synthesis}" in v7_text, (
+        "v7's synthesis.md must declare the `{path_walk_for_synthesis}` "
+        "template substitution — this is how the orchestrator hands the "
+        "path-walk report to the unified Synthesis LLM."
     )
-    assert len(v7_text) > len(v6_text), (
-        "v7's synthesis.md is the same length as v6's — the "
-        "localized-verdict paragraph wasn't appended."
+
+
+def test_v7_synthesis_pool_guardrail_short_circuits_localized():
+    """Phase-3 unified-Synthesis rework: pool-membership doesn't apply
+    to localized verdicts (the candidate pool is a per-NF construct
+    from the app-layer pipeline; the localized branch names a hop, not
+    an NF from a pool). The ADR mandates that this guardrail recognize
+    the verdict_kind and short-circuit."""
+    text = (_V7_ROOT / "guardrails" / "synthesis_pool.py").read_text()
+    assert 'report.verdict_kind == "localized"' in text, (
+        "v7's synthesis_pool.py must short-circuit on "
+        "`verdict_kind == \"localized\"` per ADR "
+        "path_anchored_probe_planning_for_transport_layer_faults.md."
+    )
+
+
+def test_v7_confidence_cap_guardrail_short_circuits_localized():
+    """Phase-3 unified-Synthesis rework: the confidence-cap evidence-
+    strength computation reads InvestigatorVerdict probe-result counts,
+    which the path walk doesn't produce. The ADR mandates that this
+    guardrail recognize the verdict_kind and short-circuit."""
+    text = (_V7_ROOT / "guardrails" / "confidence_cap.py").read_text()
+    assert 'report.verdict_kind == "localized"' in text, (
+        "v7's confidence_cap.py must short-circuit on "
+        "`verdict_kind == \"localized\"` per ADR "
+        "path_anchored_probe_planning_for_transport_layer_faults.md."
     )
 
 

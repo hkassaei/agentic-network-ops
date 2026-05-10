@@ -276,6 +276,17 @@ def lint_synthesis_pool_membership(
     the runner asks for a fresh judgment rather than us silently
     rewriting).
     """
+    # Localized verdict short-circuit — the candidate pool is a per-NF
+    # construct from the application-layer pipeline; on the transport-layer
+    # path-walk branch the pool is empty by design and the diagnosis names
+    # the hop where the kernel/element-level counter fired, not a pool
+    # member. ADR `path_anchored_probe_planning_for_transport_layer_faults.md`
+    # mandates that downstream guardrails recognize this verdict_kind and
+    # short-circuit; without this branch the empty-pool check below would
+    # REJECT a legitimate localized verdict.
+    if report.verdict_kind == "localized":
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
     pool_nfs = [m.nf for m in pool.members]
     pool_nfs_set = set(pool_nfs)
 

@@ -695,8 +695,12 @@ def _render_v6_pipeline(challenge: dict) -> list[str]:
 
 def _render_v7_pipeline(challenge: dict) -> list[str]:
     """v7 pipeline layout: v6's 8 phases plus the transport-layer route
-    (Phase 0.5 SymptomClassifier + Phase 0.6 PathResolver/PathWalker/
-    LocalizedSynthesis) inserted between Phase 0 and Phase 1.
+    (Phase 0.5 SymptomClassifier + Phase 0.6 PathResolver/PathWalker)
+    inserted between Phase 0 and Phase 1; on path-walker localization
+    Phase 7 Synthesis is invoked directly via the unified Synthesis
+    LLM agent (the deterministic LocalizedSynthesis was deleted per
+    ADR `path_anchored_probe_planning_for_transport_layer_faults.md` —
+    one Synthesis agent, four verdict_kinds).
 
     Three execution paths produce different shapes in the markdown:
 

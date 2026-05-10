@@ -181,6 +181,16 @@ def cap_synthesis_confidence(
     if report.verdict_kind == "inconclusive":
         return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
 
+    # Localized verdict short-circuit — the cap is computed from
+    # InvestigatorVerdict probe-result counts, which the path walk does
+    # not produce. ADR `path_anchored_probe_planning_for_transport_layer_faults.md`
+    # mandates that downstream guardrails recognize this verdict_kind and
+    # short-circuit. Confidence on the localized branch comes from the
+    # attribution kind (exact-counter → high, rate-diff → medium), set by
+    # the LLM under the prompt's localized-verdict rules; we trust it.
+    if report.verdict_kind == "localized":
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
     # Compute evidence-strength for the verdict supporting the diagnosis.
     strength: EvidenceStrength
     rationale: str

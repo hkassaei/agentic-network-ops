@@ -549,9 +549,27 @@ async def _phase06_transport_layer_route(
     state: dict,
     all_phases: list,
     run_start: float,
+    *,
+    question: str,
+    session_service: InMemorySessionService,
+    on_event=None,
 ) -> Optional[dict]:
-    """Run the deterministic transport-layer pipeline for transport_layer
-    and mixed symptoms.
+    """Run the transport-layer pipeline for transport_layer / mixed symptoms.
+
+    Resolver -> walker -> Phase 7 Synthesis (LLM, with `verdict_kind="localized"`).
+
+    On successful walker localization, this routes the path-walk report
+    into the same `create_synthesis_agent` LLM that handles the
+    application-layer branch — one Synthesis agent, four verdict_kinds —
+    per ADR `path_anchored_probe_planning_for_transport_layer_faults.md`:
+    "Synthesis gains a `localized` verdict-kind. For transport-layer
+    paths it consumes the `PathWalkReport` directly and emits a
+    hop-attributed diagnosis with kernel/network-element evidence
+    inlined." The `synthesize_localized` deterministic Python path that
+    previously lived here was a parallel synthesizer that produced
+    branch-dependent output formatting; deleted in favor of this unified
+    flow so localized and confirmed/promoted/inconclusive verdicts share
+    the same DiagnosisReport rendering and downstream guardrails.
 
     Returns:
         A fully-built result dict when the walker produced an attribution
@@ -562,7 +580,6 @@ async def _phase06_transport_layer_route(
     from .path_resolver import resolve_path
     from .symptom_classifier import SymptomClassification, FlagBucket
     from .subagents.path_walk_investigator import walk_path
-    from .subagents.localized_synthesis import synthesize_localized
 
     phase_start = time.time()
 
@@ -656,30 +673,64 @@ async def _phase06_transport_layer_route(
     if not walk_report.is_localized:
         return None
 
-    # ---- Synthesize localized ----
-    synth_start = time.time()
-    diagnosis = synthesize_localized(walk_report, classification)
-    if diagnosis is None:
-        log.warning(
-            "Phase 0.6 localized synthesis returned None despite walker "
-            "is_localized=True — defensive fall-through.",
+    # ---- Phase 7 Synthesis (LLM, `localized` verdict) ----
+    # Render the path-walk report into the markdown bundle the
+    # Synthesis prompt reads via `{path_walk_for_synthesis}`. The
+    # prompt's branch-select directive at the top sees a non-empty
+    # bundle and switches to the localized-verdict rules.
+    state["path_walk_for_synthesis"] = _render_path_walk_for_synthesis(
+        walk_report, classification,
+    )
+
+    # Localized-branch guardrail closure. Pool-membership and
+    # confidence-cap guardrails recognize `verdict_kind == "localized"`
+    # and short-circuit (per ADR — and explicitly enforced in
+    # synthesis_pool.lint_synthesis_pool_membership and
+    # confidence_cap.cap_synthesis_confidence). On this branch they have
+    # nothing to compute against (empty pool, no InvestigatorVerdicts),
+    # so we skip them and only run the output sanitizer.
+    def _localized_synthesis_guardrail(report):
+        s_result = sanitize_diagnosis_report(report)
+        if s_result.verdict is not GuardrailVerdict.PASS:
+            log.info(
+                "Synthesis output sanitizer REJECT (localized branch): "
+                "leaky_fields=%s",
+                (s_result.notes or {}).get("leaky_fields"),
+            )
+        return s_result
+
+    state, syn_traces, syn_success, diagnosis_report = await run_phase_with_guardrail(
+        agent_factory=create_synthesis_agent,
+        state=state,
+        question=question,
+        session_service=session_service,
+        on_event=on_event,
+        output_key=_SYNTHESIS_OUTPUT_KEY,
+        phase_label="Phase 7 Synthesis (localized)",
+        run_phase=_run_phase,
+        parser=_parse_diagnosis_report,
+        guardrail=_localized_synthesis_guardrail,
+        max_resamples=1,
+        on_guardrail_exhausted="accept",
+    )
+    all_phases.extend(syn_traces)
+    _accumulate_phase_traces(state, syn_traces)
+
+    if not syn_success or diagnosis_report is None:
+        diagnosis_report = _empty_diagnosis_report(
+            "Synthesis produced empty output on the localized branch on "
+            "two consecutive attempts. The path-walk report is in the "
+            "input bundle; manual escalation required."
         )
-        return None
 
-    all_phases.append(PhaseTrace(
-        agent_name="LocalizedSynthesis",
-        started_at=synth_start,
-        finished_at=time.time(),
-        duration_ms=int((time.time() - synth_start) * 1000),
-        output_summary=(
-            f"verdict_kind=localized, primary_suspect_nf="
-            f"{diagnosis.primary_suspect_nf}, "
-            f"confidence={diagnosis.root_cause_confidence}"
-        ),
-    ))
-
-    state["diagnosis_report"] = diagnosis.model_dump(mode="json")
-    state["diagnosis"] = diagnosis.explanation  # markdown walk-table
+    # Render the structured DiagnosisReport into the markdown form the
+    # chaos EpisodeRecorder and score_diagnosis read; preserve the
+    # structured form separately for typed downstream consumers.
+    state[_SYNTHESIS_OUTPUT_KEY] = _render_diagnosis_report_to_markdown(
+        diagnosis_report,
+    )
+    state["diagnosis_structured"] = diagnosis_report.model_dump(mode="json")
+    state["diagnosis_report"] = diagnosis_report.model_dump(mode="json")
 
     return _build_result(state, all_phases, run_start)
 
@@ -792,6 +843,109 @@ def _path_walk_report_to_dict(report) -> dict:
             for rec in report.hops
         ],
     }
+
+
+def _render_path_walk_for_synthesis(report, classification) -> str:
+    """Render a PathWalkReport as the markdown bundle the unified
+    Synthesis prompt reads via `{path_walk_for_synthesis}`.
+
+    The Synthesis prompt's branch-select directive treats a non-empty
+    bundle here as the trigger for the localized-verdict rules. The
+    rendering is a *bisection report* — the walk-table in topology
+    order, the verbatim transport-layer counter excerpt for the
+    attributed hop, and the classifier rationale that motivated the
+    walk. The LLM re-emits this shape into `DiagnosisReport.explanation`
+    per the localized-verdict rules; the structured `localization`
+    field is populated from the same hop's attribution variant.
+    """
+    from agentic_ops_common.path_walk import (
+        DropsAttributedHere,
+        DropsAttributedToInboundLink,
+        InconclusiveHop,
+        LatencyAtHop,
+    )
+
+    def _pct(value):
+        if value is None:
+            return "n/a"
+        return f"{value * 100:.1f}%"
+
+    attributed = report.first_attributed_hop
+    lines: list[str] = []
+    lines.append(f"### Path walk — flow `{report.flow_id}`")
+    lines.append("")
+    if attributed is not None:
+        lines.append(
+            f"Walked {len(report.hops)} hop(s) in topology order. "
+            f"First-attributed hop: **{attributed.hop.node}"
+            f"[{attributed.hop.iface}]** ({attributed.attribution.kind})."
+        )
+    else:
+        lines.append(
+            f"Walked {len(report.hops)} hop(s) in topology order; "
+            "no hop attributed a fault."
+        )
+    lines.append("")
+
+    lines.append("| # | hop | kind | iface | prober | attribution |")
+    lines.append("|---|-----|------|-------|--------|-------------|")
+    for i, rec in enumerate(report.hops):
+        marker = " 🎯" if rec is attributed else ""
+        a = rec.attribution
+        if isinstance(a, DropsAttributedHere):
+            attr_summary = (
+                f"{a.kind} ({a.counter_kind}, {a.dropped_pkts} dropped"
+                + (f", {_pct(a.dropped_pct)})" if a.dropped_pct is not None else ")")
+            )
+        elif isinstance(a, DropsAttributedToInboundLink):
+            attr_summary = f"{a.kind} (~{_pct(a.observed_loss_pct)} loss)"
+        elif isinstance(a, LatencyAtHop):
+            attr_summary = f"{a.kind} ({a.observed_delay_ms:.0f}ms, {a.counter_kind})"
+        elif isinstance(a, InconclusiveHop):
+            attr_summary = f"{a.kind} ({a.reason})"
+        else:
+            attr_summary = a.kind
+        lines.append(
+            f"| {i + 1} | {rec.hop.node} | {rec.hop.kind} | "
+            f"{rec.hop.iface} | {rec.prober} | {attr_summary}{marker} |"
+        )
+
+    if attributed is not None:
+        lines.append("")
+        lines.append("### Attribution (verbatim transport-layer counter excerpt)")
+        lines.append("")
+        a = attributed.attribution
+        lines.append(
+            f"- `attribution_kind`: `{a.kind}`  "
+        )
+        if isinstance(a, DropsAttributedHere):
+            lines.append(
+                f"- `counter_kind`: `{a.counter_kind}`  "
+                f"  `dropped_pkts`: {a.dropped_pkts}  "
+                f"  `dropped_pct`: {a.dropped_pct}"
+            )
+        elif isinstance(a, DropsAttributedToInboundLink):
+            lines.append(
+                f"- `tx_rate`: {a.tx_rate}  `rx_rate`: {a.rx_rate}  "
+                f"`observed_loss_pct`: {a.observed_loss_pct}"
+            )
+        elif isinstance(a, LatencyAtHop):
+            lines.append(
+                f"- `counter_kind`: `{a.counter_kind}`  "
+                f"`observed_delay_ms`: {a.observed_delay_ms}"
+            )
+        evidence = getattr(a, "evidence", "(no evidence available)")
+        lines.append("")
+        lines.append("```")
+        lines.append(evidence)
+        lines.append("```")
+
+    lines.append("")
+    lines.append("### Classifier rationale")
+    lines.append("")
+    lines.append(classification.rationale or "(no rationale recorded)")
+
+    return "\n".join(lines)
 
 
 # ============================================================================
@@ -1355,6 +1509,18 @@ async def investigate(
         # here so the IG prompt's `{probe_candidates}` template always
         # resolves.
         "probe_candidates": "",
+        # ── Synthesis prompt substitutions ─────────────────────────────
+        # The unified Synthesis agent reads one prompt with two branches.
+        # Application-layer-only keys are populated by Phases 3–6 in the
+        # app-layer branch; the path-walk key is populated by Phase 0.6
+        # in the localized branch. Whichever branch runs, the OTHER
+        # branch's keys must already exist as "" so ADK template
+        # substitution resolves cleanly. Initialized here for both.
+        "network_analysis": "",
+        "correlation_analysis": "",
+        "investigator_verdicts": "",
+        "evidence_validation": "",
+        "path_walk_for_synthesis": "",
     }
 
     all_phases: list[PhaseTrace] = []
@@ -1388,6 +1554,9 @@ async def investigate(
     if classifier_label in ("transport_layer", "mixed"):
         localized_result = await _phase06_transport_layer_route(
             state, all_phases, run_start,
+            question=question,
+            session_service=session_service,
+            on_event=on_event,
         )
         if localized_result is not None:
             return localized_result

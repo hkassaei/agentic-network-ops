@@ -262,7 +262,7 @@ A working implementation of `suppress_in_range_flags` was added to `agentic_ops_
 
 The original list (1-6 below) was written before the Apr-28 analysis re-framed the problem. Items 1, 2, and 4 are still relevant; items 3, 5, 6 are superseded by the Option 1 plan in "Update 2026-04-28: re-framing the fix space" above.
 
-1. **Survey** the 30 trained features and tabulate which have `healthy.typical_range` declared in `metric_kb`. Note features where the range is context-dependent (per question 2 above). — **Done** as `docs/ADR/model_feature_range_survey.md`.
+1. **Survey** the 30 trained features and tabulate which have `healthy.typical_range` declared in `metric_kb`. Note features where the range is context-dependent (per question 2 above). — **Done** as `docs/ADR/model_feature_state_revision_A.md` (originally `model_feature_range_survey.md`); current state is described in `docs/ADR/model_feature_state_revision_B.md`.
 2. **Build offline replay harness** using saved Apr-24 and Apr-28 anomaly snapshots. Feed each through (a) current model, (b) candidate model variants from the Option 1 plan. Compare flag sets and Phase 0 narratives. — **Still needed**, will use this to validate Option 1.
 3. ~~Address `derived.upf_activity_during_calls` first~~ — **superseded**. Idle suppression on this single feature is a special case of what Option 1's `calls_active` context feature handles uniformly.
 4. **Add DNS-direct features to the KB** alongside the screener fixes. Without them, no amount of screener tuning will let the agent diagnose DNS failure correctly. — **Still needed**, bundled into the Option 1 work package as step 6.

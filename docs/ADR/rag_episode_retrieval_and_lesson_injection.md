@@ -32,7 +32,7 @@ Concretely, five coordinated changes shipped as R1-R5:
 | Step | What | Where |
 |---|---|---|
 | **R1** | `RetrievedCase` / `FlagSummary` Pydantic schemas + episode parser (`parse_episode`, `parse_corpus`) handling v5/v6/v7 JSON + markdown fallback | `agentic_ops_common/rag/{schema.py, parser.py}` |
-| **R2** | TF-IDF `Embedder` protocol + `CaseIndex` (build/save/load/search) + `scripts/build_rag_index.py` CLI | `agentic_ops_common/rag/{embedder.py, index.py}`, `scripts/build_rag_index.py` |
+| **R2** | TF-IDF `Embedder` protocol + `CaseIndex` (build/save/load/search) + `rag_indexer/` top-level invokable module (`python -m rag_indexer`) | `agentic_ops_common/rag/{embedder.py, index.py}`, `rag_indexer/{__init__.py, __main__.py}` |
 | **R3** | `EpisodeRetriever` runtime API with `try_from_path` graceful loader + `retrieve_for_flags` multi-shape ingestion + `render_hits_for_prompt` provenance-citing markdown renderer + module-level cache | `agentic_ops_common/rag/retriever.py` |
 | **R4** | `{prior_similar_episodes}` placeholder + `_phase25_rag_inject_prior_episodes` orchestrator helper + `RAG_INDEX_DIR` / `RAG_MIN_SIMILARITY` env-var config | `agentic_ops_v7/orchestrator.py`, `agentic_ops_v7/prompts/network_analyst.md` |
 | **R5** | `Lesson` schema + 15-lesson `lessons.yaml` corpus + `_phase25_inject_operational_lessons` orchestrator helper + `LESSONS_YAML_PATH` env var + `{operational_lessons}` NA-prompt placeholder | `agentic_ops_common/rag/{lessons.py, lessons.yaml}`, `agentic_ops_v7/orchestrator.py`, `agentic_ops_v7/prompts/network_analyst.md` |
@@ -249,7 +249,7 @@ The transformational batch is the one *after* B4 (screener over-flagging) is als
 - **Lesson retrieval / triggers.** When the lesson corpus crosses ~30 entries, gate injection by an `applies_when`-based retrieval pass. The schema already has the field; only the orchestrator helper changes. The current always-inject approach is fine until then.
 - **Embedder upgrade path.** When/if the case corpus grows past ~5K units, swap the `TfidfEmbedder` for `GeminiEmbedder` (semantic, via `google.genai`'s `text-embedding-004`). The `Embedder` Protocol absorbs the change without touching index callers.
 - **Cross-version case sharing.** v8 will inherit the same RAG infrastructure. The case corpus is version-tagged but otherwise version-neutral; a v7 case is still useful context for a v8 NA. The lesson corpus is unambiguously shared.
-- **Index lifecycle automation.** Right now the index is built manually via `scripts/build_rag_index.py`. A nightly batch step (or a post-chaos-run hook) that rebuilds the index would close the loop so the latest episodes are always retrievable.
+- **Index lifecycle automation.** Right now the index is built manually via `python -m rag_indexer`. A nightly batch step (or a post-chaos-run hook) that rebuilds the index would close the loop so the latest episodes are always retrievable.
 
 ---
 
@@ -267,7 +267,8 @@ agentic_ops_common/rag/retriever.py             # EpisodeRetriever, get_default_
 agentic_ops_common/rag/lessons.py               # Lesson schema, load_lessons, render_lessons_for_prompt
 agentic_ops_common/rag/lessons.yaml             # 15 hand-authored operational rules
 
-scripts/build_rag_index.py                      # CLI for one-shot index rebuild
+rag_indexer/__init__.py                         # top-level invokable module
+rag_indexer/__main__.py                         # `python -m rag_indexer` entry point
 
 agentic_ops_common/tests/rag/test_parser.py     # R1 tests (17)
 agentic_ops_common/tests/rag/test_embedder.py   # R2 tests — embedder (6)
@@ -301,12 +302,10 @@ The 3 xfailed remain the documented resolver-side cases that need a separate fix
 ## How to run with RAG
 
 ```bash
-# Build the index (one-shot; rebuild after each chaos batch)
-uv run python scripts/build_rag_index.py \
-    agentic_ops_v5/docs/agent_logs \
-    agentic_ops_v6/docs/agent_logs \
-    agentic_ops_v7/docs/agent_logs \
-    --output-dir rag_index/
+# Build the index (one-shot; rebuild after each chaos batch).
+# Defaults: sources = agentic_ops_v{5,6,7}/docs/agent_logs,
+#           output = <repo>/rag_index/, score_threshold = 80.
+uv run python -m rag_indexer
 
 # Run chaos as usual — RAG auto-discovers rag_index/ at repo root.
 # Lessons load from the shipped lessons.yaml by default.

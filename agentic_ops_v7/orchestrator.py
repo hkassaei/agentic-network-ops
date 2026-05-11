@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from google.adk.agents.base_agent import BaseAgent
@@ -970,6 +971,363 @@ def _render_path_walk_for_synthesis(report, classification) -> str:
 
 
 # ============================================================================
+# Phase 2.5 — RAG injection of prior similar episodes into NA's input bundle
+#
+# Loads the persisted RAG index (built by `scripts/build_rag_index.py`)
+# and retrieves prior chaos-episode cases whose anomaly-screener
+# signatures resemble the live anomaly report. The rendered markdown
+# block is written to `state["prior_similar_episodes"]`, which Phase 3
+# NA's prompt template substitutes into a `### Prior similar episodes`
+# section. NA's prompt rules teach it how to read prior cases without
+# copying them blindly.
+#
+# Graceful degradation:
+#   - RAG index missing on disk → silently disabled, state key stays "".
+#   - No flags in the screener output → nothing to retrieve, state stays "".
+#   - Retrieved hits all below the similarity floor → state stays "".
+#
+# Config:
+#   - Env var `RAG_INDEX_DIR` overrides the default index path.
+#   - Default path: `<repo_root>/rag_index/`.
+#   - Env var value of "off" or "none" disables RAG even if an index exists
+#     — useful for A/B comparisons against a no-RAG baseline.
+# ============================================================================
+
+
+# Module-level constants — exposed for tests to patch / introspect.
+_RAG_INDEX_ENV_VAR = "RAG_INDEX_DIR"
+_RAG_MIN_SIMILARITY_ENV_VAR = "RAG_MIN_SIMILARITY"
+_RAG_INDEX_DEFAULT_RELATIVE = "rag_index"
+_RAG_DISABLED_SENTINELS = frozenset({"off", "none", "disabled"})
+_RAG_TOP_K = 5
+# Empirical baseline from the 2026-05-10 corpus: realistic queries
+# (live AnomalyFlag list + optional classifier label) produce
+# top-similarities of 0.45-0.55 against the indexed corpus. The
+# default is set just under that range so a typical query retrieves
+# 1-3 hits; the env var lets operators tighten or loosen the floor
+# for experimentation without a code change.
+_RAG_MIN_SIMILARITY_DEFAULT = 0.40
+
+# Lessons (R5) — always-inject corpus of hand-authored operational
+# rules. The default lives next to the loader; env var override lets
+# operators swap in alternate lesson sets for A/B comparison.
+_LESSONS_PATH_ENV_VAR = "LESSONS_YAML_PATH"
+
+
+def _resolve_rag_min_similarity() -> float:
+    """Resolve the cosine-similarity floor for prior-case retrieval.
+
+    `RAG_MIN_SIMILARITY` env var overrides; otherwise the empirical
+    default (0.40) applies. Values outside [0.0, 1.0] are ignored.
+    """
+    raw = os.environ.get(_RAG_MIN_SIMILARITY_ENV_VAR, "").strip()
+    if not raw:
+        return _RAG_MIN_SIMILARITY_DEFAULT
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning(
+            "Phase 2.5: %s=%r is not a number; using default %.2f",
+            _RAG_MIN_SIMILARITY_ENV_VAR, raw, _RAG_MIN_SIMILARITY_DEFAULT,
+        )
+        return _RAG_MIN_SIMILARITY_DEFAULT
+    if not (0.0 <= value <= 1.0):
+        log.warning(
+            "Phase 2.5: %s=%.2f is out of [0,1]; using default %.2f",
+            _RAG_MIN_SIMILARITY_ENV_VAR, value, _RAG_MIN_SIMILARITY_DEFAULT,
+        )
+        return _RAG_MIN_SIMILARITY_DEFAULT
+    return value
+
+
+def _resolve_rag_index_dir() -> Optional[Path]:
+    """Return the configured RAG index directory, or None when disabled.
+
+    Resolution order:
+      1. `RAG_INDEX_DIR` env var, if set to a non-sentinel value.
+      2. `<repo_root>/rag_index` if it exists on disk.
+      3. None — RAG is opt-in; absent index disables retrieval silently.
+
+    `Path` returned does NOT guarantee existence; the retriever's
+    `try_from_path` handles missing directories.
+    """
+    env = os.environ.get(_RAG_INDEX_ENV_VAR, "").strip()
+    if env:
+        if env.lower() in _RAG_DISABLED_SENTINELS:
+            return None
+        return Path(env)
+    default = Path(__file__).resolve().parents[1] / _RAG_INDEX_DEFAULT_RELATIVE
+    if default.exists():
+        return default
+    return None
+
+
+def _phase25_rag_inject_prior_episodes(
+    state: dict, all_phases: list,
+) -> None:
+    """Phase 2.5 — retrieve prior similar episodes into the NA bundle.
+
+    Reads `state["anomaly_flags"]` (set by Phase 0) plus the optional
+    classifier label from `state["symptom_classification"]` (set by
+    Phase 0.5). Writes the rendered markdown block to
+    `state["prior_similar_episodes"]` and records a `PhaseTrace` so
+    operators can see what was retrieved.
+
+    Three exits:
+
+      - **RAG disabled / index missing**  → trace `output_summary='rag_disabled'`,
+        state stays at the initial empty string.
+      - **No flags / no hits**            → trace `output_summary='no_hits'`,
+        state stays empty.
+      - **Hits retrieved**                → trace shows count + top similarity,
+        state gets the rendered block.
+
+    Importantly this is **best-effort** — any exception is caught,
+    logged, and treated as "RAG unavailable for this run." The
+    downstream NA prompt's substitution of an empty placeholder is
+    a no-op the prompt template handles correctly.
+    """
+    phase_start = time.time()
+
+    # Lazy imports keep RAG entirely optional. If the import fails
+    # (e.g. someone removed sklearn from the venv), we degrade
+    # gracefully instead of crashing the orchestrator.
+    try:
+        from agentic_ops_common.rag import (
+            EpisodeRetriever,
+            get_default_retriever,
+        )
+    except ImportError as e:
+        log.info("Phase 2.5: RAG module unavailable (%s); skipping.", e)
+        all_phases.append(PhaseTrace(
+            agent_name="RAGRetriever",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary="rag_module_unavailable",
+        ))
+        return
+
+    index_dir = _resolve_rag_index_dir()
+    if index_dir is None:
+        all_phases.append(PhaseTrace(
+            agent_name="RAGRetriever",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary="rag_disabled",
+        ))
+        return
+
+    try:
+        retriever = get_default_retriever(index_dir)
+    except Exception as e:
+        log.warning("Phase 2.5: retriever load raised: %s", e, exc_info=True)
+        retriever = None
+
+    if retriever is None:
+        all_phases.append(PhaseTrace(
+            agent_name="RAGRetriever",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=f"index_not_loaded:{index_dir}",
+        ))
+        return
+
+    flags = state.get("anomaly_flags") or []
+    if not flags:
+        all_phases.append(PhaseTrace(
+            agent_name="RAGRetriever",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=f"no_flags (corpus_size={retriever.case_count})",
+        ))
+        return
+
+    classifier_label: Optional[str] = None
+    sc = state.get("symptom_classification")
+    if isinstance(sc, dict):
+        label = sc.get("label")
+        if label in ("transport_layer", "application_layer", "mixed"):
+            classifier_label = label
+
+    min_similarity = _resolve_rag_min_similarity()
+    try:
+        hits = retriever.retrieve_for_flags(
+            flags,
+            k=_RAG_TOP_K,
+            min_similarity=min_similarity,
+            classifier_label=classifier_label,
+        )
+    except Exception as e:
+        log.warning("Phase 2.5: retrieve raised: %s", e, exc_info=True)
+        all_phases.append(PhaseTrace(
+            agent_name="RAGRetriever",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=f"retrieve_raised:{type(e).__name__}",
+        ))
+        return
+
+    if not hits:
+        all_phases.append(PhaseTrace(
+            agent_name="RAGRetriever",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=(
+                f"no_hits (k={_RAG_TOP_K}, "
+                f"min_sim={min_similarity}, "
+                f"corpus_size={retriever.case_count})"
+            ),
+        ))
+        return
+
+    block = retriever.render_hits_for_prompt(hits, verbosity="default")
+    state["prior_similar_episodes"] = block
+
+    top_sim = hits[0].similarity
+    log.info(
+        "Phase 2.5: injected %d prior episodes "
+        "(top_sim=%.3f, top_case=%s)",
+        len(hits), top_sim, hits[0].case.case_id,
+    )
+    all_phases.append(PhaseTrace(
+        agent_name="RAGRetriever",
+        started_at=phase_start,
+        finished_at=time.time(),
+        duration_ms=int((time.time() - phase_start) * 1000),
+        output_summary=(
+            f"hits={len(hits)}, top_sim={top_sim:.2f}, "
+            f"top_case={hits[0].case.case_id}"
+        ),
+    ))
+
+
+# ── Operational lessons injection (R5) ─────────────────────────────
+#
+# Always-inject from a curated YAML corpus. Renders once per process
+# and caches the rendered block — the lessons don't change between
+# investigations, so re-rendering on every call would be wasted work.
+# Env var `LESSONS_YAML_PATH` overrides the default location; setting
+# it to one of `_RAG_DISABLED_SENTINELS` disables lesson injection
+# (useful for A/B comparison against a no-lessons baseline).
+
+_LESSONS_CACHE: dict[str, str] = {}
+
+
+def _resolve_lessons_path() -> Optional[Path]:
+    """Resolve the lessons YAML path, or None if lessons are disabled."""
+    env = os.environ.get(_LESSONS_PATH_ENV_VAR, "").strip()
+    if env:
+        if env.lower() in _RAG_DISABLED_SENTINELS:
+            return None
+        return Path(env)
+    # Default from the agentic_ops_common.rag package.
+    try:
+        from agentic_ops_common.rag import DEFAULT_LESSONS_PATH
+        return DEFAULT_LESSONS_PATH
+    except ImportError:
+        return None
+
+
+def _phase25_inject_operational_lessons(
+    state: dict, all_phases: list,
+) -> None:
+    """Phase 2.5b — load + render the operational lessons corpus.
+
+    Always-inject: every lesson in the corpus is concatenated into a
+    single markdown block and written to `state["operational_lessons"]`.
+    The block is cached at module scope (per path), so the YAML is
+    parsed once per process even across many investigations.
+
+    Records a `PhaseTrace` so operators can see whether lessons were
+    injected and how many.
+
+    Graceful degradation: missing YAML, parse failure, or sentinel
+    env var → state stays empty, trace records the reason. The
+    orchestrator continues without operational lessons.
+    """
+    phase_start = time.time()
+
+    path = _resolve_lessons_path()
+    if path is None:
+        all_phases.append(PhaseTrace(
+            agent_name="OperationalLessons",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary="lessons_disabled",
+        ))
+        return
+
+    cache_key = str(path)
+    if cache_key in _LESSONS_CACHE:
+        block = _LESSONS_CACHE[cache_key]
+        state["operational_lessons"] = block
+        all_phases.append(PhaseTrace(
+            agent_name="OperationalLessons",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=f"injected_from_cache (chars={len(block)})",
+        ))
+        return
+
+    try:
+        from agentic_ops_common.rag import (
+            render_lessons_for_prompt,
+            try_load_lessons,
+        )
+    except ImportError as e:
+        log.info("Phase 2.5b: lessons module unavailable (%s); skipping.", e)
+        all_phases.append(PhaseTrace(
+            agent_name="OperationalLessons",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary="lessons_module_unavailable",
+        ))
+        return
+
+    lessons = try_load_lessons(path)
+    if lessons is None:
+        all_phases.append(PhaseTrace(
+            agent_name="OperationalLessons",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=f"yaml_unreadable:{path}",
+        ))
+        return
+
+    block = render_lessons_for_prompt(lessons)
+    _LESSONS_CACHE[cache_key] = block
+    state["operational_lessons"] = block
+
+    log.info(
+        "Phase 2.5b: injected %d operational lessons (chars=%d)",
+        len(lessons), len(block),
+    )
+    all_phases.append(PhaseTrace(
+        agent_name="OperationalLessons",
+        started_at=phase_start,
+        finished_at=time.time(),
+        duration_ms=int((time.time() - phase_start) * 1000),
+        output_summary=f"lessons={len(lessons)}, chars={len(block)}",
+    ))
+
+
+def _reset_lessons_cache() -> None:
+    """Test hook — clear the lesson-rendering cache between tests so
+    each test sees a fresh load."""
+    _LESSONS_CACHE.clear()
+
+
+# ============================================================================
 # Phase 1 + 3 — Events + Correlation (Python only, no LLM)
 # ============================================================================
 
@@ -1542,6 +1900,20 @@ async def investigate(
         "investigator_verdicts": "",
         "evidence_validation": "",
         "path_walk_for_synthesis": "",
+        # ── RAG prior-episode injection (R4) ───────────────────────────
+        # Populated by `_phase3_rag_inject_prior_episodes` immediately
+        # before Phase 3 NA runs, when a RAG index is available on disk.
+        # Empty by default so the NA prompt's {prior_similar_episodes}
+        # substitution always resolves — the prompt's own template tells
+        # the NA to ignore the section when it's empty.
+        "prior_similar_episodes": "",
+        # ── Operational lessons (R5) ───────────────────────────────────
+        # Populated by `_phase25_inject_operational_lessons` before
+        # Phase 3 NA runs. The lessons are always-injected from
+        # `agentic_ops_common/rag/lessons.yaml` (override via env
+        # var LESSONS_YAML_PATH). Empty when the lessons file is
+        # missing or `LESSONS_YAML_PATH=off`.
+        "operational_lessons": "",
     }
 
     all_phases: list[PhaseTrace] = []
@@ -1596,6 +1968,23 @@ async def investigate(
     # -------- Phase 2: CorrelationAnalyzer (Python, feeds NA) --------
     correlation = _phase2_correlation_analyzer(events, episode_id, all_phases)
     state["correlation_analysis"] = correlation.hypotheses_text
+
+    # -------- Phase 2.5: RAG inject prior similar episodes --------
+    # Best-effort retrieval of past chaos-episode cases with similar
+    # screener signatures. Populates state["prior_similar_episodes"]
+    # for the NA prompt. Silently no-ops when no RAG index is
+    # configured. See `_phase25_rag_inject_prior_episodes` for the
+    # full graceful-degradation contract.
+    _phase25_rag_inject_prior_episodes(state, all_phases)
+
+    # -------- Phase 2.5b: Inject operational lessons --------
+    # Always-inject a hand-authored corpus of operational rules into
+    # state["operational_lessons"]. Rendered once per process and
+    # cached. The lessons distill the load-bearing failure-mode
+    # principles from past chaos batches (B3 direction-reading, B4
+    # over-flagging, etc.) plus stack rules. See
+    # `_phase25_inject_operational_lessons` for the contract.
+    _phase25_inject_operational_lessons(state, all_phases)
 
     # -------- Phase 3: NetworkAnalyst --------
     # Two layered guards run on NA's output:

@@ -1,0 +1,349 @@
+# Operational lessons — hand-authored rules for the NetworkAnalyst.
+#
+# Each lesson distills one piece of operator knowledge that the LLM
+# should apply during reasoning. The corpus is curated, not generated;
+# every entry traces back to either a stack rule, an ADR principle,
+# a metric-KB note, or a documented failure mode from a past chaos
+# batch. Citations under `sources` make the chain auditable.
+#
+# R5 ships these as always-inject — every NA prompt receives every
+# lesson via the {operational_lessons} placeholder. If the corpus
+# grows past ~30 entries we'll add similarity-based retrieval; for
+# now the full list is small enough to inject in full.
+#
+# Editing this file:
+#   - Use `id: L<NN>` with a stable two-digit number. Do not renumber
+#     existing entries when adding new ones — the id is a citation key.
+#   - `rule:` is the imperative the LLM should follow. Keep it 1-3 sentences.
+#   - `applies_when:` tells the LLM when to fire the rule.
+#   - `rationale:` is the why — important so the LLM can apply the rule
+#     to edge cases instead of rote-matching the trigger.
+#   - `sources:` cite at least one ADR / stack rule / run log per lesson.
+
+lessons:
+
+  # ── Reading the screener correctly ────────────────────────────────
+
+  - id: L01
+    title: Read screener direction literally; never invert it
+    rule: >
+      The screener emits a `direction` field per flag (`spike`, `drop`,
+      `shift`, `zero`). Treat this value as authoritative. Do not write
+      "spike" in your hypothesis statement, summary, or layer note when
+      the screener said `direction=drop` — and vice versa. The value
+      pair (current, learned_normal) is consistent with the direction;
+      do not infer the opposite from it.
+    applies_when: >
+      Any time you reference a screener flag in your hypothesis or
+      summary text.
+    rationale: >
+      Past batches have repeatedly observed the NA invert direction
+      (most notably in run_20260510_121231_p_cscf_latency, where a
+      `direction=drop, current=0.06, learned=1.45` flag was written
+      up as an "extreme spike in UPF's ingress traffic rate"). This
+      drives the entire downstream pipeline toward the wrong NF.
+    sources:
+      - docs/work-plan-may-11.md (B3 — NetworkAnalyst misreads direction)
+      - agentic_ops_v7/docs/agent_logs/run_20260510_121231_p_cscf_latency.md
+
+  - id: L02
+    title: UPF in/out N3 asymmetry is NEVER evidence of packet loss
+    rule: >
+      The ratio of `core.upf.gtp_indatapktn3upf_per_ue` to
+      `core.upf.gtp_outdatapktn3upf_per_ue` reflects the current traffic
+      profile (voice with NULL_AUDIO, signaling-only chatter, asymmetric
+      data sessions), not data-plane health. Persistent in/out imbalance
+      under healthy operation is expected. To detect actual loss, use
+      same-direction collapse, RTCP `rtpengine.loss_ratio`, or kernel
+      qdisc drop counters — not asymmetry.
+    applies_when: >
+      Any hypothesis you're forming that names UPF or "data plane" as
+      the suspect based on uplink-vs-downlink rate difference.
+    rationale: >
+      Authored as a stack rule (`upf_counters_are_directional`) because
+      this is one of the most common misreads. RTPEngine relays media
+      with intentional asymmetry; SIP-only signaling produces uplink
+      bursts with no downlink reply data. Neither is loss.
+    sources:
+      - network_ontology/data/stack_rules.yaml (upf_counters_are_directional)
+      - docs/ADR/upf_directional_rates_in_dp_quality_gauges.md
+
+  - id: L03
+    title: UPF GTP drops in registration-only state may be over-flagged
+    rule: >
+      In screener state-bucket (0, 1) ("no calls active, registration in
+      progress"), the learned baseline for UPF GTP per-UE rates is
+      currently ~1.45 pps even though true idle is ~0. When you see
+      `normalized.upf.gtp_indatapktn3upf_per_ue` and
+      `normalized.upf.gtp_outdatapktn3upf_per_ue` BOTH flagged as `drop`
+      to ~0 in this state, treat them as low-confidence — the screener's
+      bucket-(0,1) corpus has GTP-active samples bleeding into a
+      registration-only baseline. Confirm with UPF-internal error counters
+      or PFCP-session state before implicating UPF.
+    applies_when: >
+      `context.calls_active=0` AND `context.registration_in_progress=1`,
+      with the bucket header in the anomaly report showing `(0, 1)`,
+      AND both UPF GTP flags appearing as `drop`.
+    rationale: >
+      Known issue (B4 in the work plan). The state-bucketing training
+      corpus mixed call-active samples into the registration-only
+      bucket; the model thinks 0 pps is anomalously low when the
+      stack is genuinely idle.
+    sources:
+      - docs/work-plan-may-11.md (B4 — Anomaly screener over-flags UPF data-plane in bucket (0,1))
+
+  # ── What specific metrics CANNOT see ──────────────────────────────
+
+  - id: L04
+    title: rtpengine.errors_per_second is structurally blind to kernel drops
+    rule: >
+      `rtpengine.errors_per_second` counts user-space relay-loop errors
+      only (malformed RTP, session-not-found, etc.). It cannot see
+      kernel-level packet drops on rtpengine's egress interface (`netem`
+      loss, qdisc drops, interface ring overruns). A reading of 0 does
+      NOT rule out rtpengine as the fault source when the symptom is
+      RTCP-reported loss or audio quality degradation.
+    applies_when: >
+      A `derived.rtpengine_loss_ratio` spike is present in the screener
+      output, and you're tempted to demote rtpengine because
+      `rtpengine.errors_per_second` looks fine.
+    rationale: >
+      RTPEngine hands packets to `sendto()`, the kernel acks the queue,
+      then the qdisc drops them — invisible to rtpengine's accounting.
+      This is documented in the rtpengine.loss_ratio KB entry's
+      `direction_meaning` and surfaces as a known misdiagnosis pattern
+      across v6 batches.
+    sources:
+      - network_ontology/data/metrics.yaml (ims.rtpengine.errors_per_second)
+      - docs/ADR/path_anchored_probe_planning_for_transport_layer_faults.md (worked example 1)
+
+  - id: L05
+    title: P-CSCF SCP HTTP failures are baseline noise (~84%)
+    rule: >
+      The P-CSCF's Rx/SCP connection has a deployment-baseline failure
+      rate around 84% (SCP timeouts on Rx AAR). Calls work without
+      dedicated QoS bearers. Do NOT implicate P-CSCF as the root cause
+      based on P-CSCF SCP HTTP error counts alone — they are not in
+      the model's feature set precisely because they're pre-existing
+      noise.
+    applies_when: >
+      Any time you're considering P-CSCF as primary suspect and the
+      evidence is HTTP / SCP-related error counters rather than SIP
+      signaling rates or processing latency.
+    rationale: >
+      Documented as pre-existing noise in the preprocessor's exclusion
+      list — `derived.pcscf_http_failure_ratio` is intentionally NOT
+      a model feature.
+    sources:
+      - agentic_ops_common/anomaly/preprocessor.py (Category 2 comment)
+
+  - id: L06
+    title: Cx response times of 0 ms during idle is healthy, not a fault
+    rule: >
+      The Cx response-time gauges (`icscf.cdp:average_response_time`,
+      `*.uar/lir/mar/sar_avg_response_time`) are per-event meaningful
+      but per-snapshot ambiguous. A reading of 0 ms during a window
+      where no Cx exchanges occurred is N/A, not a fault. The
+      preprocessor's temporal pre-filter already drops these features
+      when their gating counter didn't advance — if you see a Cx
+      response-time flag, the underlying exchanges DID happen, and
+      the deviation is meaningful.
+    applies_when: >
+      A Cx response-time metric is in the screener output. The flag's
+      presence already implies activity; reason about the deviation
+      magnitude, not the activity itself.
+    rationale: >
+      Without this gate the model used to over-flag idle response-time
+      gauges (anomaly_training_zero_pollution.md). The fix shipped;
+      this lesson is for the LLM-side reasoning to match.
+    sources:
+      - docs/ADR/anomaly_training_zero_pollution.md
+      - agentic_ops_common/anomaly/preprocessor.py (temporal pre-filter)
+
+  - id: L07
+    title: DNS failures manifest at P-CSCF, not as a DNS metric
+    rule: >
+      The model has NO direct DNS feature — `dns_resolution_failures`
+      and friends aren't in `EXPECTED_FEATURE_KEYS`. A DNS outage in
+      the chaos suite manifests downstream: P-CSCF's SIP error ratio
+      spikes (because peer resolution times out), I-CSCF and S-CSCF
+      see register-rate drops (because P-CSCF can't forward).
+      Consider DNS when SIP error spikes appear without obvious
+      P-CSCF / CSCF process-side faults.
+    applies_when: >
+      `derived.pcscf_sip_error_ratio` is elevated AND there is no
+      direct P-CSCF process or config evidence of failure.
+    rationale: >
+      DNS is a deployment-time dependency the screener cannot observe
+      directly; recognizing the downstream signature is the only way
+      the agent can land on the right root cause.
+    sources:
+      - docs/work-plan-may-11.md (open work — DNS-direct features)
+      - agentic_chaos/scenarios/library.py (DNS Failure scenario description)
+
+  # ── Probe-and-investigation principles ────────────────────────────
+
+  - id: L08
+    title: A 3-ping measure_rtt is statistically too small for loss detection
+    rule: >
+      `measure_rtt` with `-c 3` has P(0 drops at 30% loss) = 0.343 — a
+      coin flip. A 3-ping probe that returns "0% loss" does NOT rule out
+      30% packet loss on the path. Use ≥30 pings to reliably detect
+      loss in the 20-30% range, or use a direct kernel-counter probe
+      (qdisc drop counter via `tc -s qdisc show`).
+    applies_when: >
+      You are recommending an Investigator probe to confirm or rule
+      out packet loss on a transport path.
+    rationale: >
+      Repeated v6 failure: a 3-ping `measure_rtt(rtpengine, upf)` returned
+      clean while a `tc -s qdisc show dev eth0` would have shown 30% loss
+      authoritatively. The IG's default probe sample size is now larger
+      but historic plans still assume 3.
+    sources:
+      - docs/ADR/path_anchored_probe_planning_for_transport_layer_faults.md (Decision 6)
+
+  - id: L09
+    title: Upstream silent vs downstream noisy is a partition signature
+    rule: >
+      In signaling chains (UE → P-CSCF → I-CSCF → S-CSCF → HSS), the
+      component REPORTING the symptom is not the component CAUSING it.
+      A silent upstream component (e.g. zero REGISTERs arriving at
+      I-CSCF while P-CSCF still receives them from the UE) typically
+      points to a partition or fault between the two, even when the
+      downstream component's symptoms deviate more dramatically. Locate
+      the LOWEST point in the chain where signal still flows — the
+      fault is immediately above it.
+    applies_when: >
+      Multiple components in an IMS signaling chain show register- or
+      response-rate drops, and you are tempted to implicate the most
+      symptomatic one.
+    rationale: >
+      Encoded as a principle in the NA prompt's existing reasoning
+      guidance; restated as a lesson so the LLM can cite it back.
+    sources:
+      - agentic_ops_v7/prompts/network_analyst.md (existing principle)
+
+  # ── Verdict shape rules ───────────────────────────────────────────
+
+  - id: L10
+    title: Container "exited" status is a direct fault locus
+    rule: >
+      When `get_network_status()` lists a container as `exited` (or
+      absent from the `running` list), that NF is the direct fault
+      locus with very high prior. Investigate why it exited, not
+      what's around it. Other components' degradations are downstream
+      consequences.
+    applies_when: >
+      A `get_network_status` probe result shows an NF in the `exited`
+      list or omitted from the `running` list.
+    rationale: >
+      Every NF-crash chaos scenario in v6/v7 (S-CSCF Crash, AMF Restart,
+      Cascading IMS Failure, MongoDB Gone, HSS Unresponsive) is solved
+      by directly naming the exited NF. The Investigator probes are
+      essentially confirmation.
+    sources:
+      - agentic_chaos/scenarios/library.py (container_kill scenarios)
+
+  - id: L11
+    title: verdict_kind=localized requires a populated PathWalkReport
+    rule: >
+      Do not (under any circumstances) emit `verdict_kind: "localized"`
+      unless the Synthesis input bundle contains a non-empty Path-Walk
+      Report with `is_localized=True` and a populated
+      `first_attributed_hop`. Fabricating kernel-counter evidence
+      (qdisc identifiers, packet counts, percentages) for a localized
+      verdict when no walker attribution exists is a hallucination —
+      and is mechanically rejected by the downstream consistency
+      guardrail.
+    applies_when: >
+      You are the Synthesis agent (Phase 7) and tempted to emit
+      `verdict_kind=localized` because the screener flags include a
+      transport-layer indicator. The walker, not the screener, is
+      what licenses a localized verdict.
+    rationale: >
+      Direct outcome of the 2026-05-10 121231_p_cscf_latency and
+      185152_p_cscf_packet_loss hallucination failures. The Synthesis
+      prompt and the `lint_localized_verdict_consistency` guardrail
+      already encode this; the lesson restates it for the NA's
+      hypothesis-formation step.
+    sources:
+      - docs/work-plan-may-11.md (B2 — Synthesis hallucinates verdict_kind=localized)
+      - agentic_ops_v7/guardrails/synthesis_localized_consistency.py
+
+  - id: L12
+    title: Walker null-localization means the fault is application-layer
+    rule: >
+      If Phase 0.6's walker returned `is_localized=False` after walking
+      the implicated flow, the fault is NOT at any probed transport
+      hop. Do not try to localize it further at the transport layer —
+      reason at the NF application level (process state, config,
+      database, signaling logic). The orchestrator's fall-through to
+      Phase 1-7 is the right path; supply NF-application hypotheses.
+    applies_when: >
+      The walker output in your input bundle shows null-localization
+      after a complete walk (all hops `clean` or `inconclusive` with
+      no `drops_attributed_here` / `latency_at_hop` / `drops_attributed_to_inbound_link`).
+    rationale: >
+      Tells the NA not to waste hypothesis slots on "more transport
+      probes" when the walker has already ruled that out.
+    sources:
+      - docs/ADR/path_anchored_probe_planning_for_transport_layer_faults.md
+
+  # ── Multi-NF / multi-flag patterns ────────────────────────────────
+
+  - id: L13
+    title: smf.bearers_per_ue increment during VoNR calls is expected
+    rule: >
+      `normalized.smf.bearers_per_ue` increments by ~1 per active
+      VoNR call (the dedicated 5QI=1 voice bearer). A reading of 3.0
+      vs a learned baseline of 2.5 during call activity is healthy,
+      NOT a deviation worth ranking. The same metric AT REST (no
+      active calls) should equal the configured default bearer count.
+    applies_when: >
+      `normalized.smf.bearers_per_ue` is flagged as `shift` and the
+      current value is higher than the learned baseline.
+    rationale: >
+      Documented in the metric's `direction_meaning`; restated here
+      so the NA doesn't elevate this flag to a primary hypothesis.
+    sources:
+      - network_ontology/data/metrics.yaml (core.smf.bearers_per_ue)
+
+  - id: L14
+    title: HSS unresponsive shows as Cx timeouts at BOTH I-CSCF and S-CSCF
+    rule: >
+      An HSS / pyhss failure presents as simultaneous timeout-ratio
+      flags from both `icscf.uar_timeout_ratio` (UAR over Cx) and
+      `scscf.mar_timeout_ratio` (MAR over Cx). Either flag alone is
+      ambiguous; together they almost always point at the HSS or the
+      Cx interface in front of it. If you see both, pyhss is the
+      strongest single-NF prior.
+    applies_when: >
+      `derived.icscf_uar_timeout_ratio` AND `derived.scscf_mar_timeout_ratio`
+      are both flagged with non-zero values.
+    rationale: >
+      Direct stack signature documented across multiple
+      `HSS Unresponsive` and `Cascading IMS Failure` runs.
+    sources:
+      - agentic_chaos/scenarios/library.py (HSS Unresponsive scenario)
+
+  - id: L15
+    title: Many CSCF register-rate drops in the ambiguous bucket may be downstream consequence
+    rule: >
+      When the symptom classifier puts several CSCF rate flags
+      (`*.rcv_requests_register_per_ue` drops, `*.cdp_replies_per_ue`
+      drops, `pcscf.dialogs_per_ue` drops) into the ambiguous bucket
+      simultaneously, that pattern is often a downstream consequence
+      of a single upstream fault (HSS unresponsive, IMS network
+      partition, AMF restart) rather than a multi-NF failure.
+      Apply L09 (upstream silent ≠ downstream noisy) and look for the
+      lowest still-active component in the chain.
+    applies_when: >
+      The classifier's ambiguous bucket contains ≥3 distinct CSCF
+      flag rows.
+    rationale: >
+      Pattern observed across multiple ims_partition, hss_unresponsive,
+      and cascading_ims_failure batch runs. The LLM tends to enumerate
+      many low-fit hypotheses when this happens; the lesson is to
+      converge on the upstream cause.
+    sources:
+      - docs/work-plan-may-11.md (batch failure analysis)

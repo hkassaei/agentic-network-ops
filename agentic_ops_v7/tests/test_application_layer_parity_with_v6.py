@@ -125,6 +125,11 @@ _INTENTIONALLY_DIVERGENT = {
     # and short-circuit. Pinned by deliberate-divergence tests below.
     "guardrails/synthesis_pool.py",
     "guardrails/confidence_cap.py",
+    # R4 — RAG injection of prior similar episodes into NA's input
+    # bundle. The prompt gains a `{prior_similar_episodes}` placeholder
+    # plus guidance on how to read prior cases. Pinned by deliberate-
+    # divergence test below.
+    "prompts/network_analyst.md",
 }
 
 
@@ -328,6 +333,23 @@ def test_v7_synthesis_pool_guardrail_short_circuits_localized():
         "`verdict_kind == \"localized\"` per ADR "
         "path_anchored_probe_planning_for_transport_layer_faults.md."
     )
+
+
+def test_v7_na_prompt_has_prior_similar_episodes_placeholder():
+    """R4 — RAG injection adds a `{prior_similar_episodes}` placeholder
+    + guidance section to the NA prompt. The orchestrator's
+    `_phase25_rag_inject_prior_episodes` populates the state key the
+    placeholder reads. Without this placeholder the injection is dead."""
+    text = (_V7_ROOT / "prompts" / "network_analyst.md").read_text()
+    assert "{prior_similar_episodes}" in text, (
+        "v7's network_analyst.md must declare the "
+        "`{prior_similar_episodes}` template substitution — this is "
+        "how the orchestrator hands retrieved prior cases to the NA."
+    )
+    # Carry the guidance section that teaches the NA how to read
+    # prior cases without copying them blindly. Without this the
+    # placeholder is just dangling text.
+    assert "Prior similar episodes" in text
 
 
 def test_v7_confidence_cap_guardrail_short_circuits_localized():

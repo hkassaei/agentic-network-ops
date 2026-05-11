@@ -96,6 +96,9 @@ from .guardrails.llm_output_sanitizer import (
     sanitize_na_report,
     sanitize_plan_set,
 )
+from .guardrails.synthesis_localized_consistency import (
+    lint_localized_verdict_consistency,
+)
 from .guardrails.base import GuardrailVerdict
 from .models import (
     CorrelationAnalysis,
@@ -687,9 +690,27 @@ async def _phase06_transport_layer_route(
     # and short-circuit (per ADR — and explicitly enforced in
     # synthesis_pool.lint_synthesis_pool_membership and
     # confidence_cap.cap_synthesis_confidence). On this branch they have
-    # nothing to compute against (empty pool, no InvestigatorVerdicts),
-    # so we skip them and only run the output sanitizer.
+    # nothing to compute against (empty pool, no InvestigatorVerdicts).
+    # What we DO run:
+    #   1. `lint_localized_verdict_consistency` — defensive check that
+    #      if the LLM emits verdict_kind=localized, the walker actually
+    #      localized. Should never fire on this branch (we got here
+    #      because is_localized=True) but pinned for safety.
+    #   2. `sanitize_diagnosis_report` — strips any leaky internal
+    #      taxonomy / ADR references from the LLM output.
+    _captured_path_walk_report = state.get("path_walk_report")
+
     def _localized_synthesis_guardrail(report):
+        consistency = lint_localized_verdict_consistency(
+            report, _captured_path_walk_report,
+        )
+        if consistency.verdict is not GuardrailVerdict.PASS:
+            log.warning(
+                "Synthesis localized-verdict consistency REJECT (localized "
+                "branch — should never fire here): %s",
+                consistency.reason[:200],
+            )
+            return consistency
         s_result = sanitize_diagnosis_report(report)
         if s_result.verdict is not GuardrailVerdict.PASS:
             log.info(
@@ -1950,7 +1971,31 @@ async def investigate(
     #       corrected.
     # The composed guardrail closure runs (b) first; on PASS it runs
     # (c); on REJECT it returns the membership rejection.
+    # Capture the (possibly-None) path_walk_report once. The app-layer
+    # Synthesis runs when Phase 0.6 either didn't engage (application_layer
+    # classifier label) or null-localized (mixed label with the walker
+    # finding no kernel-level attribution). Either way, the LLM is NOT
+    # entitled to emit verdict_kind=localized here — there's no walker
+    # attribution backing it.
+    _captured_path_walk_report_app = state.get("path_walk_report")
+
     def _synthesis_combined_guardrail(report):
+        # (a) Localized-verdict consistency — fires FIRST because
+        # verdict_kind=localized on the app-layer branch is a pure
+        # hallucination (the LLM is inventing kernel-counter evidence
+        # that the walker never produced). Reject before the
+        # pool-membership / cap guardrails get involved.
+        consistency = lint_localized_verdict_consistency(
+            report, _captured_path_walk_report_app,
+        )
+        if consistency.verdict is not GuardrailVerdict.PASS:
+            log.info(
+                "Synthesis localized-verdict consistency REJECT "
+                "(app-layer branch): %s",
+                consistency.reason[:200],
+            )
+            return consistency
+
         membership = lint_synthesis_pool_membership(report, pool)
         if membership.verdict is not GuardrailVerdict.PASS:
             return membership

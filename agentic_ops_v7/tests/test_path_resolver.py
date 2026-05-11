@@ -400,3 +400,256 @@ def test_classification_roundtrip_preserves_resolver_input():
         f"rtpengine missing from walked hops after round-trip; "
         f"walked: {walked_nodes}"
     )
+
+
+# ---------------------------------------------------------------------------
+# F1.3 — Resolver regression tests for the 4 batch-broken cases.
+#
+# Per docs/work-plan-may-11.md ("Fix (1) — Implementation steps"), these
+# four scenarios from the 2026-05-10 batch were mis-routed by the resolver
+# (picking `data_pdu_session_user_traffic` instead of the implicated
+# signaling / media flow). Each test loads the saved episode's
+# symptom_classification, rehydrates it the way the orchestrator does,
+# runs the real resolver, and asserts the right flow gets picked.
+#
+# These tests pin the F1 fix in place. If the resolver regresses on any
+# of these scenarios, the test breaks loudly with which flow it picked
+# instead.
+# ---------------------------------------------------------------------------
+
+
+import json
+from pathlib import Path
+
+from agentic_ops_common.anomaly.screener import FlagKBContext
+from agentic_ops_v7.symptom_classifier import FlagBucket
+
+
+def _rehydrate_classification(payload: dict) -> SymptomClassification:
+    """Rehydrate a SymptomClassification from a saved episode's payload.
+
+    Mirrors `agentic_ops_v7/orchestrator.py:_reconstruct_classification`
+    — the round-trip the orchestrator runs in production. Critically
+    preserves `flag.kb_context.kb_metric_id`, which is what
+    `_flag_nf_metric` reads to recover the canonical (nf, metric) pair.
+    """
+    def _fb_list(key: str) -> list:
+        out = []
+        for f in payload.get(key, []) or []:
+            kb_id = f.get("kb_metric_id")
+            kb_context = (
+                FlagKBContext(kb_metric_id=kb_id) if kb_id else None
+            )
+            flag = AnomalyFlag(
+                metric=f.get("metric", ""),
+                component=f.get("component", ""),
+                current=f.get("current", 0.0),
+                learned_normal=f.get("learned_normal", 0.0),
+                anomaly_score=f.get("anomaly_score", 0.0),
+                severity=f.get("severity", "LOW"),
+                direction=f.get("direction", ""),
+                kb_context=kb_context,
+            )
+            out.append(FlagBucket(
+                flag=flag,
+                bucket=f.get("bucket", "ambiguous"),
+                reason=f.get("reason", ""),
+            ))
+        return out
+
+    return SymptomClassification(
+        label=payload["label"],
+        rationale=payload.get("rationale", ""),
+        transport_flags=_fb_list("transport_flags"),
+        application_flags=_fb_list("application_flags"),
+        ambiguous_flags=_fb_list("ambiguous_flags"),
+    )
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_classification_from_episode(episode_rel_path: str) -> SymptomClassification:
+    """Load symptom_classification from a saved chaos episode JSON."""
+    episode_path = _REPO_ROOT / episode_rel_path
+    data = json.loads(episode_path.read_text())
+    payload = data["challenge_result"]["symptom_classification"]
+    return _rehydrate_classification(payload)
+
+
+# F1.3 — Resolver regression cases from the 2026-05-10 batch.
+#
+# Each tuple: (scenario_name, episode_relative_path, expected_flow_id,
+#              xfail_reason_or_None).
+#
+# Three of the four "broken" batch cases are NOT fixable by resolver
+# scoring alone — they're symptoms of B4 (screener over-flagging of UPF
+# GTP metrics in registration-only state). When the screener emits two
+# UPF GTP transport-bucket flags, both `data_pdu_session_user_traffic`
+# and `vonr_media` get +10 from matching them in observable_metrics —
+# the right signaling flow (`ims_registration`) has no UPF GTP in its
+# observable_metrics and can't catch up. F1 cleans up the per-flag
+# dedup and the bucket-affinity tie-break; the residual mis-routing
+# is a screener-side problem.
+_F1_BROKEN_CASES = [
+    (
+        "p_cscf_packet_loss",
+        "agentic_ops_v7/docs/agent_logs/run_20260510_185152_p_cscf_packet_loss.json",
+        "ims_registration",
+        None,  # FIXED by F1 — only 1 UPF GTP transport flag, so the right
+               # flow's 4-component overlap wins decisively.
+    ),
+    (
+        "rtpengine_latency_injection",
+        "agentic_ops_v7/docs/agent_logs/run_20260510_191148_rtpengine_latency_injection.json",
+        "vonr_media",
+        "Unfixable by F1 alone: rtpengine_loss_ratio was NOT flagged in "
+        "this episode (the screener doesn't surface rtpengine signals "
+        "under delay-only injection). With only over-flagged UPF GTP in "
+        "the transport bucket, neither data_pdu nor vonr_media can be "
+        "differentiated from each other on this resolver — both match "
+        "the same UPF GTP observable_metrics. Needs B4 (screener over-"
+        "flagging fix) or a rtpengine-specific delay feature.",
+    ),
+    (
+        "p_cscf_latency",
+        "agentic_ops_v7/docs/agent_logs/run_20260510_130115_p_cscf_latency.json",
+        "ims_registration",
+        "Unfixable by F1 alone: 2 UPF GTP transport flags give data_pdu "
+        "and vonr_media +10 each via observable_metrics match. The right "
+        "flow ims_registration has no UPF GTP in its observable_metrics "
+        "and scores only on component overlap (8 with weight=2). "
+        "Bumping component weight to 4+ would let ims_registration win "
+        "BUT regresses the rtpengine-loss roundtrip test (vonr_call_teardown "
+        "would then beat vonr_media on its CSCF component overlap). "
+        "Needs B4 — when the screener stops over-flagging UPF GTP, the "
+        "data_pdu transport boost goes away and ims_registration wins.",
+    ),
+    (
+        "ims_network_partition",
+        "agentic_ops_v7/docs/agent_logs/run_20260510_195908_ims_network_partition.json",
+        "ims_registration",
+        "Unfixable by F1 alone: same root cause as p_cscf_latency. 2 UPF "
+        "GTP transport flags dominate; ims_registration scores only via "
+        "component overlap and loses 8 vs 12.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "scenario,episode_path,expected_flow_id,xfail_reason",
+    _F1_BROKEN_CASES,
+    ids=[t[0] for t in _F1_BROKEN_CASES],
+)
+def test_f1_resolver_picks_right_flow_for_broken_batch_case(
+    scenario: str, episode_path: str,
+    expected_flow_id: str, xfail_reason,
+    request,
+):
+    """F1 regression: after the resolver scoring + tie-break rework,
+    each batch-broken case must route to its implicated flow rather
+    than to `data_pdu_session_user_traffic`.
+
+    The cases marked `xfail_reason` are documented as not-fixable by
+    F1 alone (the resolver-scoring layer). Their xfail status flips
+    to `xpassed` (which pytest reports loudly) once the underlying
+    screener issue (B4) is fixed and the resolver can finally do its
+    job — at which point remove the xfail mark.
+
+    Running this test against the saved batch's symptom_classification
+    is the operational answer to "would re-running the chaos batch
+    produce a different resolver pick now that F1 has landed?"
+    """
+    if xfail_reason is not None:
+        request.applymarker(pytest.mark.xfail(reason=xfail_reason, strict=True))
+
+    classification = _load_classification_from_episode(episode_path)
+    resolved = resolve_path(classification)
+
+    assert resolved is not None, (
+        f"{scenario}: resolver returned None — no flow scored above zero. "
+        f"Investigate the load_bearing_components / metrics_by_bucket."
+    )
+    assert resolved.flow_id == expected_flow_id, (
+        f"{scenario}: resolver picked `{resolved.flow_id}` instead of "
+        f"`{expected_flow_id}`.\n"
+        f"Candidates considered:\n"
+        + "\n".join(
+            f"  {fid}: {score}" for fid, score in resolved.candidate_flows[:5]
+        )
+        + f"\n\nF1 broke or hasn't landed yet. See "
+        f"docs/work-plan-may-11.md → 'Fix (1) — Implementation steps'."
+    )
+
+
+# ---------------------------------------------------------------------------
+# F1.5 — Regression tests for currently-passing scenarios.
+#
+# F1's scoring change could in principle regress the scenarios that
+# CURRENTLY pass at 100%. The load-bearing regressions are the
+# walker-localized cases — if F1 changes which flow the resolver
+# picks, the walker walks the wrong flow and won't localize the fault.
+#
+# The null-localized cases (gnb_radio, amf_restart, cascading_ims_failure)
+# get their 100% from the app-layer fall-through. Their resolver pick is
+# operationally irrelevant; F1 is allowed to change it.
+# ---------------------------------------------------------------------------
+
+
+_F1_PASSING_LOCALIZED_CASES = [
+    (
+        "data_plane_degradation",
+        "agentic_ops_v7/docs/agent_logs/run_20260510_183452_data_plane_degradation.json",
+        "vonr_media",
+    ),
+    (
+        "call_quality_degradation",
+        "agentic_ops_v7/docs/agent_logs/run_20260510_190041_call_quality_degradation.json",
+        "vonr_media",
+    ),
+    (
+        "upf_bandwidth_cap",
+        "agentic_ops_v7/docs/agent_logs/run_20260510_192948_upf_bandwidth_cap.json",
+        "data_pdu_session_user_traffic",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "scenario,episode_path,expected_flow_id",
+    _F1_PASSING_LOCALIZED_CASES,
+    ids=[t[0] for t in _F1_PASSING_LOCALIZED_CASES],
+)
+def test_f1_does_not_regress_currently_passing_localized_scenario(
+    scenario: str, episode_path: str, expected_flow_id: str,
+):
+    """F1 regression: the walker-localized scenarios that scored 100% in
+    the 2026-05-10 batch MUST keep their resolver pick. If F1 changes
+    the chosen flow for one of these, the walker walks the wrong flow
+    on the next run and the localization fails — i.e., the score drops.
+
+    The 3 cases here are the scenarios where Phase 0.6's walker
+    actually attributed a hop (`is_localized = True`). Their resolver
+    pick is load-bearing for that attribution. The other 4 currently-
+    passing scenarios (s_cscf_crash, gnb_radio, amf_restart,
+    cascading_ims_failure) null-localized either by skipping Phase 0.6
+    entirely or by falling through to the app-layer pipeline; F1 may
+    change their resolver pick without affecting the score.
+    """
+    classification = _load_classification_from_episode(episode_path)
+    resolved = resolve_path(classification)
+
+    assert resolved is not None, (
+        f"{scenario}: resolver returned None for a previously-passing "
+        f"localized scenario — F1 has regressed."
+    )
+    assert resolved.flow_id == expected_flow_id, (
+        f"{scenario}: F1 changed resolver pick from `{expected_flow_id}` "
+        f"to `{resolved.flow_id}` — the walker won't reach the hop "
+        f"where the fault is, and the 100% score for this scenario "
+        f"will drop on the next batch run.\n"
+        f"Candidates considered:\n"
+        + "\n".join(
+            f"  {fid}: {score}" for fid, score in resolved.candidate_flows[:5]
+        )
+    )

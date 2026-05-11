@@ -128,11 +128,11 @@ def resolve_path(
     default_bridge_id = topology_doc.get("default_inter_container_bridge")
 
     load_bearing = _load_bearing_components(classification)
-    load_bearing_metrics = _load_bearing_metrics(classification)
+    metrics_by_bucket = _load_bearing_metrics_by_bucket(classification)
     if not load_bearing:
         return None
 
-    candidates = _score_flows(flows, load_bearing, load_bearing_metrics)
+    candidates = _score_flows(flows, load_bearing, metrics_by_bucket)
     if not candidates:
         return None
 
@@ -221,30 +221,67 @@ def _load_bearing_components(c: SymptomClassification) -> set[str]:
     return components
 
 
-def _load_bearing_metrics(c: SymptomClassification) -> set[str]:
-    """Metric tokens for matching against flow `observable_metrics`.
+def _metrics_from_bucket(flag_buckets) -> list[set[str]]:
+    """Per-flag list of searchable metric tokens.
 
-    Each flagged metric contributes both the short name (`loss_ratio`)
-    AND the dotted `nf.metric` form (`rtpengine.loss_ratio`). The dotted
-    form is what `network_ontology/data/flows.yaml` uses in its
-    `observable_metrics` blobs — e.g. `rtpengine.loss_ratio (RTCP-reported)`.
-    Without it, the substring matcher in `_score_flows` misses the
-    decisive flow-vs-flow boost (the failure mode that made the v7
-    resolver tie between `vonr_media` and `data_pdu_session_user_traffic`
-    on the rtpengine episode and pick the wrong one).
+    Returns one set per flag in the bucket. Each set carries the
+    flag's short metric name (`loss_ratio`) AND its dotted
+    `nf.metric` form (`rtpengine.loss_ratio`). The dotted form is
+    what `network_ontology/data/flows.yaml` uses in its
+    `observable_metrics` blobs; the short form catches flow specs
+    that prefix the NF differently.
+
+    Returning per-flag sets (not a flat union) is load-bearing for
+    `_count_unique_flag_hits`: we want to count *unique flags*
+    whose tokens matched the flow blob, not total token hits. Both
+    token forms for the same flag matching the same blob shouldn't
+    inflate the score by 2× — that artifact is what made the
+    resolver pick `data_pdu_session_user_traffic` over
+    `ims_registration` on the 2026-05-10 batch.
     """
-    metrics: set[str] = set()
-    for fb in (
-        list(c.transport_flags)
-        + list(c.application_flags)
-        + list(c.ambiguous_flags)
-    ):
+    per_flag: list[set[str]] = []
+    for fb in flag_buckets:
         nf, metric_short = _flag_nf_metric(fb)
-        if metric_short:
-            metrics.add(metric_short.lower())
-            if nf:
-                metrics.add(f"{nf}.{metric_short}".lower())
-    return metrics
+        if not metric_short:
+            continue
+        tokens = {metric_short.lower()}
+        if nf:
+            tokens.add(f"{nf}.{metric_short}".lower())
+        per_flag.append(tokens)
+    return per_flag
+
+
+def _load_bearing_metrics_by_bucket(
+    c: SymptomClassification,
+) -> dict[str, list[set[str]]]:
+    """Per-bucket, per-flag metric-token sets for flow scoring.
+
+    Returns a dict with keys `"transport"`, `"application"`,
+    `"ambiguous"` mapped to a *list of per-flag token sets*. The list
+    shape preserves the "one entry per flag" count that
+    `_count_unique_flag_hits` reads — see `_metrics_from_bucket` for
+    why per-flag dedup is load-bearing.
+    """
+    return {
+        "transport": _metrics_from_bucket(c.transport_flags),
+        "application": _metrics_from_bucket(c.application_flags),
+        "ambiguous": _metrics_from_bucket(c.ambiguous_flags),
+    }
+
+
+def _load_bearing_metrics(c: SymptomClassification) -> set[str]:
+    """Flat union of metric tokens across all three buckets.
+
+    Kept as a thin compatibility wrapper. New code that scores flows
+    should call `_load_bearing_metrics_by_bucket` and pass the
+    per-flag structure to `_count_unique_flag_hits`.
+    """
+    flat: set[str] = set()
+    per_bucket = _load_bearing_metrics_by_bucket(c)
+    for flags in per_bucket.values():
+        for tokens in flags:
+            flat |= tokens
+    return flat
 
 
 # ---------------------------------------------------------------------------
@@ -255,54 +292,140 @@ def _load_bearing_metrics(c: SymptomClassification) -> set[str]:
 def _score_flows(
     flows: dict,
     load_bearing: set[str],
-    load_bearing_metrics: set[str],
+    metrics_by_bucket: dict[str, list[set[str]]],
 ) -> list[tuple[str, int]]:
-    """Score every flow against the symptom.
+    """Score every flow against the symptom (F1.2 + F1.4).
 
-    Score components (additive):
-      +1 per load-bearing component matched in flow steps (from/to/via).
-      +3 per load-bearing metric named in flow's `outcome.observable_metrics`.
+    Score formula (additive):
+      `score = 2 * component_score
+             + 5 * transport_flag_hits
+             + 3 * application_flag_hits
+             + 1 * ambiguous_flag_hits`
 
-    The 3:1 ratio reflects that an explicit metric callout in the flow
-    spec is much stronger evidence than a generic component overlap.
-    Component-only matches happen for almost every NF in every flow
-    (the IMS pipeline touches a lot of CSCFs); metric-named matches
-    are specific to the flow's declared diagnostic surface.
+    Where:
+      - `component_score` = count of load-bearing NFs whose name
+        appears in the flow's hop list.
+      - `<bucket>_flag_hits` = count of UNIQUE flagged metrics from
+        that bucket whose token (short or dotted form) appears in
+        the flow's `observable_metrics` blob. Per-flag dedup — see
+        `_count_unique_flag_hits`.
 
-    Tie-break: smaller total component count first (more specific flows
-    win), then `display_order` ascending. This prefers `vonr_media`
-    (5 components) over `vonr_call_setup` (11 components) when their
-    base scores are otherwise comparable.
+    Why each weight is what it is:
+
+      Component weight bumped from 1 to 2. The pre-F1 weighting
+      treated each metric-token hit as 3× a component match, which
+      collapsed under per-flag token duplication: two flagged UPF
+      GTP metrics produced 4 token hits (each appears in both short
+      and dotted form) × 3 = 12 metric points, vs. 4 component
+      matches × 1 = 4 component points. The right flow lost. After
+      per-flag dedup *and* doubling the component weight, the
+      signal-to-noise ratio of "this flow covers the implicated
+      NFs" is restored.
+
+      Per-bucket metric weights — transport (5) > application (3)
+      > ambiguous (1). A metric KB-labeled transport is a stronger
+      transport-fault locator than an ambiguous-bucket metric whose
+      bucket assignment is "the screener flagged it but the KB
+      can't unambiguously say transport or application." The
+      classifier already produced this stratification; the scorer
+      should respect it.
+
+    Tie-break order (F1.2 — bucket affinity, kept as a backstop for
+    flows that tie even after the weighted scoring):
+      1. score DESC
+      2. transport-bucket flag matched (any) DESC
+      3. application-bucket flag matched (any) DESC
+      4. total component count ASC (more specific flows win when
+         scoring is otherwise tied)
+      5. display_order ASC
 
     Flows scoring 0 are filtered out.
     """
-    scored: list[tuple[str, int, int, int]] = []  # (id, score, total, display_order)
+    # Weights chosen against the 2026-05-10 batch:
+    #   _COMPONENT_WEIGHT = 2 — bumped from the pre-F1 value of 1.
+    #     Restores component-match signal relative to metric-match signal
+    #     after per-flag dedup removed the artificial 2× inflation that
+    #     used to make data_pdu_session_user_traffic win on its UPF GTP
+    #     observable_metrics callout. Stronger values (4+) regress the
+    #     rtpengine-loss roundtrip test by letting many-component flows
+    #     like vonr_call_teardown win over vonr_media on ambiguous-bucket
+    #     CSCF component overlap.
+    #   _BUCKET_WEIGHTS — transport (5) > application (3) > ambiguous (1).
+    #     A metric KB-labeled `transport` is the strongest indicator of
+    #     transport-fault locus; ambiguous flags get dampened because
+    #     they're often downstream-consequence signals (e.g. a CSCF's
+    #     register-rate drop under a media fault) that pollute the
+    #     load-bearing set.
+    #
+    # Cases the current weighting CANNOT fix (documented in the F1.3
+    # tests' xfail marks): when the screener emits ≥2 UPF GTP transport
+    # flags, those alone produce +10 (5×2) for any flow with UPF GTP in
+    # its observable_metrics. The right flow for signaling-layer faults
+    # (`ims_registration`) has no UPF GTP in its observable_metrics, so
+    # it can never match that boost. Fix is at the screener level (B4
+    # in the work plan), not here.
+    _COMPONENT_WEIGHT = 2
+    _BUCKET_WEIGHTS = {"transport": 5, "application": 3, "ambiguous": 1}
+
+    # Tuple shape: (id, score, transport_matched, application_matched,
+    #               total_components, display_order)
+    scored: list[tuple[str, int, int, int, int, int]] = []
     for flow_id, flow_def in flows.items():
         components = _flow_components(flow_def)
         component_score = len(components & load_bearing)
 
-        # Metric-name match against the flow's observable_metrics text.
-        # The text is free-form ("rtpengine.loss_ratio (RTCP-reported)"),
-        # so we substring-match each load-bearing metric. The boost is
-        # 3x to make a metric callout decisive over generic component
-        # overlap.
-        metric_score = 0
         observable = _flow_observable_metrics_blob(flow_def).lower()
-        if observable:
-            for metric in load_bearing_metrics:
-                if metric and metric in observable:
-                    metric_score += 1
+        transport_hits = _count_unique_flag_hits(
+            observable, metrics_by_bucket["transport"],
+        )
+        application_hits = _count_unique_flag_hits(
+            observable, metrics_by_bucket["application"],
+        )
+        ambiguous_hits = _count_unique_flag_hits(
+            observable, metrics_by_bucket["ambiguous"],
+        )
 
-        score = component_score + 3 * metric_score
+        score = (
+            _COMPONENT_WEIGHT * component_score
+            + _BUCKET_WEIGHTS["transport"] * transport_hits
+            + _BUCKET_WEIGHTS["application"] * application_hits
+            + _BUCKET_WEIGHTS["ambiguous"] * ambiguous_hits
+        )
         if score == 0:
             continue
         display_order = flow_def.get("display_order", 999)
-        scored.append((flow_id, score, len(components), display_order))
+        scored.append((
+            flow_id, score,
+            1 if transport_hits > 0 else 0,
+            1 if application_hits > 0 else 0,
+            len(components), display_order,
+        ))
 
-    # Sort: score DESC, total_components ASC (smaller = more specific),
-    # display_order ASC.
-    scored.sort(key=lambda t: (-t[1], t[2], t[3]))
+    # Sort by tuple priorities above. Negation on the DESC fields.
+    scored.sort(key=lambda t: (-t[1], -t[2], -t[3], t[4], t[5]))
     return [(t[0], t[1]) for t in scored]
+
+
+def _count_unique_flag_hits(
+    observable_blob: str,
+    per_flag_token_sets: list[set[str]],
+) -> int:
+    """Count flags (not tokens) whose any-of-its-tokens appears in
+    the observable_metrics blob.
+
+    Each flagged metric contributes at most one hit to a given flow,
+    regardless of whether both its short form AND its dotted form
+    appear in the blob. This is the deduplication that prevents
+    per-flag double-counting from inflating metric_score relative
+    to component_score.
+    """
+    if not observable_blob:
+        return 0
+    hits = 0
+    for tokens in per_flag_token_sets:
+        if any(tok and tok in observable_blob for tok in tokens):
+            hits += 1
+    return hits
 
 
 def _flow_observable_metrics_blob(flow_def: dict) -> str:

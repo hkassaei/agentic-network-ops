@@ -130,6 +130,11 @@ _INTENTIONALLY_DIVERGENT = {
     # plus guidance on how to read prior cases. Pinned by deliberate-
     # divergence test below.
     "prompts/network_analyst.md",
+    # ADR `agent_tool_args_must_be_names_not_ips.md` — the prompt now
+    # carries a names-only rule for tool args + updated example showing
+    # `measure_rtt(\"pcscf\", \"icscf\")` instead of an IP literal.
+    # Pinned by deliberate-divergence test below.
+    "prompts/investigator.md",
 }
 
 
@@ -350,6 +355,27 @@ def test_v7_na_prompt_has_prior_similar_episodes_placeholder():
     # prior cases without copying them blindly. Without this the
     # placeholder is just dangling text.
     assert "Prior similar episodes" in text
+
+
+def test_v7_investigator_prompt_uses_names_not_ips_for_tool_args():
+    """ADR `agent_tool_args_must_be_names_not_ips.md` — the Investigator
+    prompt must teach the names-only rule and use a name-shaped example
+    for `measure_rtt`. An IP-shaped example primes the LLM to fabricate
+    plausible-looking IPs (observed failure mode: run_20260512_082224
+    hallucinated 172.22.0.8 as pyhss's IP)."""
+    text = (_V7_ROOT / "prompts" / "investigator.md").read_text()
+    # The prompt carries an explicit names-only directive somewhere.
+    assert "container NAME" in text or "container name" in text and "not an IP" in text, (
+        "v7's investigator.md must teach the names-only rule explicitly. "
+        "See ADR agent_tool_args_must_be_names_not_ips.md."
+    )
+    # The example invocation does not contain a 172.22.0.* IP literal.
+    import re as _re
+    assert not _re.search(r"measure_rtt\([^)]*172\.22\.\d+\.\d+", text), (
+        "v7's investigator.md still has an IP-shaped example for "
+        "measure_rtt. Replace with a container name (e.g. "
+        "measure_rtt(\"pcscf\", \"icscf\"))."
+    )
 
 
 def test_v7_confidence_cap_guardrail_short_circuits_localized():

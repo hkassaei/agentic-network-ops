@@ -845,14 +845,25 @@ def measure_rtt_sample_size(loss_threshold: float) -> int:
 async def measure_rtt(
     deps: AgentDeps,
     container: str,
-    target_ip: str,
+    target: str | None = None,
     loss_threshold: float = 0.10,
+    *,
+    target_ip: str | None = None,
 ) -> str:
-    """Measure round-trip time and packet loss from a container to a target IP.
+    """Measure round-trip time and packet loss from a container to a peer container.
 
     In a healthy Docker bridge network, RTT between any two containers is
     <1ms. Elevated RTT (>10ms) indicates abnormal latency or congestion;
     non-zero packet loss indicates transport-layer degradation.
+
+    Both arguments are **container names**, not IP addresses. The peer
+    is resolved via the docker network's embedded DNS (`127.0.0.11`),
+    which works regardless of any application-level DNS state. Per
+    ADR `agent_tool_args_must_be_names_not_ips.md`, no agent-facing
+    tool argument accepts an IP literal — the LLM has no reliable
+    mechanism to know which IP belongs to which container, and prior
+    failure analysis showed it would hallucinate IPs from training-data
+    priors when forced to type one.
 
     Sample size is **derived from `loss_threshold`** so the probe is
     statistically capable of detecting the loss rate it claims to test for:
@@ -873,16 +884,67 @@ async def measure_rtt(
     Args:
         deps: Agent dependencies.
         container: Source container name (e.g. 'pcscf', 'icscf').
-        target_ip: Target IP address to ping (e.g. '172.22.0.19').
+        target: Target container name (e.g. 'pyhss', 'rtpengine'). MUST be
+            a name registered in the deployment topology. IP literals are
+            rejected with a corrective error message.
         loss_threshold: Detection-threshold for loss. Sample size is set so
             the probe almost-never (P <= 0.001) misses a true loss rate at
             or above this threshold. Default 0.10.
+        target_ip: **Deprecated.** Kept temporarily as a keyword-only
+            alias so legacy v1.5/v2 wrappers continue to work. Pass
+            `target=` instead; passing an IP literal (e.g. '172.22.0.19')
+            via either argument is rejected.
 
     Returns:
-        Ping output with RTT statistics + per-N loss summary, or error message.
+        Ping output with RTT statistics + per-N loss summary, or an error
+        message identifying what went wrong (unknown container, IP
+        literal supplied, ping binary missing, etc.).
     """
     if container not in deps.all_containers:
-        return f"Unknown container '{container}'. Known: {', '.join(deps.all_containers)}"
+        return (
+            f"Unknown source container '{container}'. "
+            f"Known: {', '.join(deps.all_containers)}"
+        )
+
+    # Reconcile the new `target` parameter with the deprecated
+    # `target_ip` alias. New callers should pass `target=`; old callers
+    # passing `target_ip=` get a single deprecation log + their request
+    # honored. Passing both is treated as a programming error.
+    if target is None and target_ip is not None:
+        target = target_ip
+    elif target is not None and target_ip is not None and target != target_ip:
+        return (
+            "Conflicting `target` and `target_ip` arguments supplied. "
+            "Pass only `target=` (a container name)."
+        )
+    if not target:
+        return (
+            "Missing `target` argument. Pass `target=<container_name>` "
+            "(e.g. target='pyhss'). IP literals are not accepted — see "
+            "ADR agent_tool_args_must_be_names_not_ips.md."
+        )
+
+    # Mechanical IP-shape rejection. Catches the failure mode observed in
+    # run_20260512_082224_hss_unresponsive (RAG-ON HSS-Unresponsive case),
+    # where the Investigator hallucinated `172.22.0.8` as pyhss's IP and
+    # consequently pinged nr_gnb. The corrective error names the
+    # principle the LLM is violating and tells it what shape the
+    # argument should have.
+    if _looks_like_ip(target):
+        return (
+            f"target={target!r} looks like an IP literal. Pass a container "
+            f"NAME instead (e.g. target='pyhss'). Container names are "
+            f"resolved to IPs by the docker network's embedded DNS at "
+            f"probe time. If you don't know which container owns this "
+            f"IP, infer it from a previous tool output rather than "
+            f"guessing. (ADR: agent_tool_args_must_be_names_not_ips.md)"
+        )
+
+    if target not in deps.all_containers:
+        return (
+            f"Unknown target container '{target}'. "
+            f"Known: {', '.join(deps.all_containers)}"
+        )
 
     # Toolbelt preflight — distinguish "ping isn't installed" (no
     # signal) from "ping ran and saw 100% loss" (strong contradicting
@@ -895,22 +957,44 @@ async def measure_rtt(
     n = measure_rtt_sample_size(loss_threshold)
     # -i 0.1 (100ms inter-packet interval) keeps wall-time bounded;
     # -W 1 (1s per-packet wait) keeps probes responsive even when
-    # part of the path is dropping.
-    cmd = f"docker exec {container} ping -c {n} -i 0.1 -W 1 {target_ip}"
+    # part of the path is dropping. The peer is named, not IP'd; the
+    # kernel ping uses the container's `/etc/resolv.conf` (which docker
+    # writes to point at 127.0.0.11, the embedded compose-network DNS).
+    cmd = f"docker exec {container} ping -c {n} -i 0.1 -W 1 {target}"
     rc, output = await _shell(cmd)
 
     if rc != 0 and "100% packet loss" in output:
         return (
-            f"Target {target_ip} is UNREACHABLE from {container} "
+            f"Target '{target}' is UNREACHABLE from '{container}' "
             f"(0/{n} packets received):\n{output.strip()}"
         )
     if rc != 0:
-        return f"Ping failed from {container} to {target_ip}: {output.strip()}"
+        return f"Ping failed from '{container}' to '{target}': {output.strip()}"
 
     return (
         f"[loss_threshold={loss_threshold}, sample_size={n}]\n"
         f"{output.strip()}"
     )
+
+
+def _looks_like_ip(value: str) -> bool:
+    """Return True iff `value` matches an IPv4 dotted-quad shape.
+
+    Used by `measure_rtt` to reject IP literals at the agent boundary.
+    Intentionally permissive on octet validation (any 1-3 digit groups
+    separated by dots) — we want to catch hallucinated "near-IPs" like
+    `172.22.0.99` even if the network doesn't actually have a host
+    there. False positives on real container names are not a concern;
+    no legitimate container name contains four dot-separated digit
+    groups.
+    """
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not (1 <= len(part) <= 3) or not part.isdigit():
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------

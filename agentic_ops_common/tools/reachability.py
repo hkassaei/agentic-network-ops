@@ -6,13 +6,20 @@ from ._common import _t, _get_deps
 
 async def measure_rtt(
     container: str,
-    target_ip: str,
+    target: str,
     loss_threshold: float = 0.10,
 ) -> str:
-    """Measure round-trip time and packet loss from a container to a target IP.
+    """Measure round-trip time and packet loss from a container to a peer container.
 
     Normal Docker bridge RTT is <1ms. Elevated RTT (>10ms) indicates
     abnormal latency or congestion.
+
+    Both arguments are **container names** (not IP addresses). The peer
+    name is resolved via the docker network's embedded DNS at probe
+    time — no agent-facing tool argument here accepts an IP literal.
+    Passing an IP-shaped string is rejected with a corrective error.
+    Rationale and design discussion in ADR
+    `agent_tool_args_must_be_names_not_ips.md`.
 
     Sample size is **derived from `loss_threshold`** so the probe is
     statistically capable of detecting the loss rate it claims to test for.
@@ -45,13 +52,15 @@ async def measure_rtt(
 
     Args:
         container: Source container name (e.g. 'pcscf', 'icscf').
-        target_ip: Target IP address to ping (e.g. '172.22.0.19').
+        target: Target container name (e.g. 'pyhss', 'rtpengine'). MUST
+            be a known container name. Passing an IP literal is rejected
+            with a corrective error message.
         loss_threshold: Detection-threshold for loss in (0, 1). Sample size
             is set so the probe almost-never (P <= 0.001) misses a true
             loss rate at or above this threshold. Default 0.10.
     """
     return await _t.measure_rtt(
-        _get_deps(), container, target_ip, loss_threshold=loss_threshold,
+        _get_deps(), container, target, loss_threshold=loss_threshold,
     )
 
 

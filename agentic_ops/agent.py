@@ -229,18 +229,22 @@ async def _tool_check_tc_rules(
 async def _tool_measure_rtt(
     ctx: RunContext[AgentDeps],
     container: str,
-    target_ip: str,
+    target: str,
 ) -> str:
-    """Measure round-trip time (RTT) from a container to a target IP.
+    """Measure round-trip time (RTT) from a container to a peer container.
 
     Normal Docker bridge RTT is <1ms. Elevated RTT (>10ms) indicates injected
     latency or congestion. Use to confirm tc netem faults or measure impact.
 
+    Both arguments are container names. The peer is resolved via the
+    docker network's embedded DNS. IP literals are rejected — see ADR
+    `agent_tool_args_must_be_names_not_ips.md`.
+
     Args:
         container: Source container name (e.g. 'pcscf', 'icscf').
-        target_ip: Target IP address to ping (e.g. '172.22.0.19').
+        target: Target container name (e.g. 'pyhss', 'rtpengine').
     """
-    return await t.measure_rtt(ctx.deps, container, target_ip)
+    return await t.measure_rtt(ctx.deps, container, target)
 
 
 # ---------------------------------------------------------------------------

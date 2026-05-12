@@ -1104,9 +1104,50 @@ def _parse_netem_loss_pct(raw: str) -> float | None:
 
 
 def _parse_netem_delay_ms(raw: str) -> float | None:
-    """Extract the authored `delay Nms` parameter from a netem qdisc, if any."""
-    m = _re.search(r"delay\s+([\d.]+)\s*ms", raw)
-    return float(m.group(1)) if m else None
+    """Extract the authored `delay X<unit>` parameter from a netem qdisc.
+
+    `tc -s qdisc show` auto-scales the time unit based on the delay
+    magnitude (see iproute2's `__print_size_str` in lib/utils.c):
+
+      sub-millisecond  → `us`  (microseconds, occasionally `ns` / `ps`)
+      sub-second       → `ms`
+      second and above → `s`
+
+    So `tc qdisc add ... netem delay 60000ms` is shown as
+    `delay 60.0s`, NOT `delay 60000.0ms`. A regex that hard-codes the
+    `ms` suffix silently misses every delay >= 1 second. This was the
+    HSS-Unresponsive walker failure observed in
+    `run_20260512_121509_hss_unresponsive`: a 60-second injection on
+    `pyhss` was correctly shown by `tc` as `delay 60.0s`, the
+    `ms`-only regex returned None, and the prober emitted CleanHop
+    instead of `LatencyAtHop(observed_delay_ms=60000)`.
+
+    Returns the delay normalized to milliseconds. None when no
+    `delay` parameter is present.
+    """
+    # Two-character units are tried before the single-char `s` so that
+    # `ms`, `us`, `ns`, `ps` are not split. Python's regex tries
+    # alternatives left-to-right.
+    m = _re.search(
+        r"delay\s+([\d.]+)\s*(us|ms|ns|ps|s)\b",
+        raw,
+    )
+    if not m:
+        return None
+    value = float(m.group(1))
+    unit = m.group(2)
+    # Conversion to milliseconds:
+    if unit == "ms":
+        return value
+    if unit == "s":
+        return value * 1000.0
+    if unit == "us":
+        return value / 1000.0
+    if unit == "ns":
+        return value / 1_000_000.0
+    if unit == "ps":
+        return value / 1_000_000_000.0
+    return None  # unreachable — regex constrains the alternative set
 
 
 async def get_interface_drops(container: str, iface: str = "eth0") -> dict:

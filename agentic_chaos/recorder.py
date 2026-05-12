@@ -772,6 +772,16 @@ def _render_v7_pipeline(challenge: dict) -> list[str]:
         )
     out.append("")
 
+    # ── Phase 2.5 — RAG retrieval + Operational lessons injection ────
+    out.append("## RAG & Operational Lessons (Phase 2.5)")
+    out.append("")
+    out.extend(_format_rag_observability(
+        rag_metadata=challenge.get("rag_retrieval_metadata"),
+        lessons_metadata=challenge.get("lessons_injection_metadata"),
+        na_citations=challenge.get("rag_na_citations"),
+    ))
+    out.append("")
+
     # ── Phase 3 — Network Analyst ─────────────────────────────────────
     network_analysis = challenge.get("network_analysis", "")
     out.append("## Network Analysis (Phase 3)")
@@ -828,6 +838,277 @@ def _render_v7_pipeline(challenge: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 # v7 Phase 0.5 formatter
 # ---------------------------------------------------------------------------
+
+
+def _format_rag_observability(
+    rag_metadata: dict | None,
+    lessons_metadata: dict | None,
+    na_citations: dict | None,
+) -> list[str]:
+    """Render Phase 2.5's RAG retrieval + operational-lessons injection,
+    plus the post-Phase-3 citation scan, into an audit-friendly section.
+
+    Three distinct things go into one section because they're all about
+    "what did the system tell the NA that the NA might have leveraged":
+
+      - **RAG retrieval** (`rag_metadata`): index state, hits retrieved
+        from the corpus, each hit's case_id + similarity + ground truth.
+        The hits are the actual content the NA prompt's
+        `{prior_similar_episodes}` placeholder substituted.
+      - **Operational lessons** (`lessons_metadata`): the lesson corpus
+        path, the lesson IDs injected, the rendered block size.
+      - **NA citations** (`na_citations`): after Phase 3 ran, which of
+        the injected case_ids and lesson_ids did the NA's free-text
+        output actually reference. Answers "did the NA use what RAG
+        retrieved, or ignore it?" — this is the operator-facing signal
+        for whether RAG / lessons paid off on this run.
+
+    Each subsection is rendered with explicit "disabled" / "no hits" /
+    "did not run" placeholders so an operator can always tell which
+    state the run landed in. The localized-branch case (Phase 0.6
+    short-circuited; Phases 1-7 didn't run) produces all-None metadata,
+    and the section makes that explicit.
+    """
+    out: list[str] = []
+
+    # ── RAG retrieval ────────────────────────────────────────────────
+    out.append("### RAG retrieval — prior similar episodes")
+    out.append("")
+    if rag_metadata is None:
+        out.append(
+            "*Phase 2.5 did not run for this episode — typically because "
+            "Phase 0.6's walker localized the fault and the orchestrator "
+            "short-circuited to Phase 7 Synthesis, bypassing the "
+            "application-layer pipeline.*"
+        )
+    else:
+        out.extend(_format_rag_retrieval(rag_metadata))
+    out.append("")
+
+    # ── Operational lessons ──────────────────────────────────────────
+    out.append("### Operational lessons — hand-authored rules corpus")
+    out.append("")
+    if lessons_metadata is None:
+        out.append(
+            "*Phase 2.5b did not run for this episode — same reason as "
+            "RAG retrieval above (localized branch).*"
+        )
+    else:
+        out.extend(_format_lessons_injection(lessons_metadata))
+    out.append("")
+
+    # ── NA citations ─────────────────────────────────────────────────
+    out.append("### NA citations of the injected content")
+    out.append("")
+    if na_citations is None:
+        out.append(
+            "*Phase 3 NetworkAnalyst did not run for this episode "
+            "(localized branch). No citation scan was performed.*"
+        )
+    else:
+        out.extend(_format_na_citations(na_citations))
+
+    return out
+
+
+def _format_rag_retrieval(meta: dict) -> list[str]:
+    status = meta.get("status", "?")
+    summary = meta.get("summary", "?")
+    out: list[str] = []
+    out.append(f"**Status:** `{status}` — {summary}")
+
+    if status in ("rag_module_unavailable", "rag_disabled"):
+        out.append("")
+        if status == "rag_disabled":
+            out.append(
+                "*RAG was disabled for this run — `RAG_INDEX_DIR` was unset "
+                "or set to a sentinel value (`off` / `none` / `disabled`). "
+                "No prior cases were injected into the NA's prompt.*"
+            )
+        else:
+            err = meta.get("error", "")
+            out.append(
+                f"*The RAG module failed to import; investigation continued "
+                f"without prior-case context.*  "
+                + (f"\n\n```\n{err}\n```" if err else "")
+            )
+        return out
+
+    if status == "index_not_loaded":
+        out.append("")
+        out.append(
+            f"*The configured index directory `{meta.get('index_dir', '?')}` "
+            f"could not be loaded. RAG silently disabled for this run.*"
+        )
+        return out
+
+    # Status from here on implies the retriever was loaded — surface the
+    # corpus + query context.
+    out.append(
+        f"**Index:** `{meta.get('index_dir', '?')}`  "
+        f"**Corpus size:** {meta.get('corpus_size', '?')} cases"
+    )
+    classifier = meta.get("classifier_label")
+    if classifier:
+        out.append(f"**Classifier label used in retrieval:** `{classifier}`")
+    k = meta.get("k")
+    sim = meta.get("min_similarity")
+    if k is not None or sim is not None:
+        out.append(
+            f"**Retrieval params:** k={k}, min_similarity={sim}"
+        )
+
+    if status == "no_flags":
+        out.append("")
+        out.append(
+            "*Phase 0 produced no anomaly flags, so the query couldn't be "
+            "built — no retrieval ran. Likely a clean stack with a "
+            "transient symptom that subsided.*"
+        )
+        return out
+
+    if status == "retrieve_raised":
+        out.append("")
+        out.append(
+            f"*Retrieval raised an exception: `{meta.get('error', '?')}`. "
+            f"RAG disabled for this run; investigation proceeded without "
+            f"prior-case context.*"
+        )
+        return out
+
+    if status == "no_hits":
+        out.append("")
+        out.append(
+            "*No prior case crossed the similarity threshold. The NA was "
+            "asked to reason from the live evidence alone for this "
+            "anomaly pattern.*"
+        )
+        return out
+
+    # status == "hits"
+    hits = meta.get("hits", []) or []
+    if not hits:
+        out.append("")
+        out.append(
+            "*Status `hits` recorded but no hit payload found — "
+            "metadata anomaly.*"
+        )
+        return out
+
+    out.append(f"**Hits ({len(hits)}):**")
+    out.append("")
+    out.append("| Rank | Sim | Case ID | Scenario | Ground truth | Primary suspect | Score |")
+    out.append("|---:|---:|---|---|---|---|---:|")
+    for h in hits:
+        sim_pct = (
+            f"{int(round(float(h.get('similarity', 0)) * 100))}%"
+            if h.get("similarity") is not None else "?"
+        )
+        case_id = h.get("case_id", "?")
+        scenario = h.get("scenario_name", "?")
+        gt = ", ".join(h.get("ground_truth_affected_components") or []) or "?"
+        suspect = h.get("diagnosis_primary_suspect_nf") or "?"
+        score = h.get("score_pct", "?")
+        out.append(
+            f"| {h.get('rank', '?')} | {sim_pct} | `{case_id}` | "
+            f"{scenario} | `{gt}` | `{suspect}` | {score}% |"
+        )
+
+    block_chars = meta.get("block_chars")
+    if block_chars is not None:
+        out.append("")
+        out.append(
+            f"*Rendered block injected into the NA prompt's "
+            f"`{{prior_similar_episodes}}` placeholder: {block_chars} chars. "
+            f"Source paths are inlined in the block so the EvidenceValidator "
+            f"can audit any case the NA cites.*"
+        )
+    return out
+
+
+def _format_lessons_injection(meta: dict) -> list[str]:
+    status = meta.get("status", "?")
+    summary = meta.get("summary", "?")
+    out: list[str] = []
+    out.append(f"**Status:** `{status}` — {summary}")
+
+    if status == "lessons_disabled":
+        out.append("")
+        out.append(
+            "*Lessons disabled (`LESSONS_YAML_PATH` set to a sentinel "
+            "value, or default lessons.yaml not on disk). No operational "
+            "rules were injected into the NA's prompt.*"
+        )
+        return out
+    if status == "lessons_module_unavailable":
+        out.append("")
+        out.append(
+            "*The lessons module failed to import; investigation "
+            "continued without operational-rules context.*"
+        )
+        return out
+    if status == "yaml_unreadable":
+        out.append("")
+        out.append(
+            f"*Configured lessons YAML at `{meta.get('path', '?')}` could "
+            f"not be parsed. Lessons disabled for this run.*"
+        )
+        return out
+
+    lesson_ids = meta.get("lesson_ids") or []
+    out.append(
+        f"**Path:** `{meta.get('path', '?')}`  "
+        f"**Count:** {meta.get('lesson_count', len(lesson_ids))}  "
+        f"**Block size:** {meta.get('block_chars', '?')} chars"
+    )
+    if lesson_ids:
+        ids_str = ", ".join(f"`{lid}`" for lid in lesson_ids)
+        out.append(f"**Injected lesson IDs:** {ids_str}")
+    if status == "injected_from_cache":
+        out.append("")
+        out.append(
+            "*Lessons block hit the per-process cache (parsed once at "
+            "first call, re-used since). Same content the NA saw on "
+            "every prior investigation in this run.*"
+        )
+    return out
+
+
+def _format_na_citations(citations: dict) -> list[str]:
+    cited_cases = citations.get("cited_case_ids") or []
+    cited_lessons = citations.get("cited_lesson_ids") or []
+    any_cite = citations.get("any_citation", False)
+
+    out: list[str] = []
+    if not any_cite:
+        out.append(
+            "**No verbatim citations.** The NA's output text did not "
+            "reference any retrieved case_id or any injected lesson_id "
+            "verbatim. This does NOT prove the NA ignored the injected "
+            "content — the model may have absorbed the patterns "
+            "implicitly — but it does mean no audit trail links the NA's "
+            "reasoning back to a specific case or lesson."
+        )
+        return out
+
+    if cited_cases:
+        out.append("**Cited case IDs:**")
+        for cid in cited_cases:
+            out.append(f"- `{cid}`")
+        out.append("")
+    if cited_lessons:
+        out.append("**Cited lesson IDs:**")
+        for lid in cited_lessons:
+            out.append(f"- `{lid}`")
+        out.append("")
+    out.append(
+        "*Citations are verbatim string matches — case_ids and lesson_ids "
+        "appear in the NA's emitted text (summary, hypothesis statements, "
+        "or layer notes). The EvidenceValidator can audit any cited case "
+        "by following its `source_episode_path` from the retrieval table "
+        "above.*"
+    )
+    return out
 
 
 def _format_symptom_classification(payload) -> list[str]:

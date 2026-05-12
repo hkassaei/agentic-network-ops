@@ -1089,6 +1089,30 @@ def _phase25_rag_inject_prior_episodes(
     """
     phase_start = time.time()
 
+    # Every exit from this helper writes a complete metadata record to
+    # `state["rag_retrieval_metadata"]`. The recorder reads this in
+    # `_render_v7_pipeline` to surface what happened (or didn't) into
+    # the episode markdown. Helper-local builder so each branch can
+    # finalize with one call.
+    def _finalize(
+        *, status: str, summary: str,
+        hits_payload: Optional[list[dict]] = None,
+        extras: Optional[dict] = None,
+    ) -> None:
+        state["rag_retrieval_metadata"] = {
+            "status": status,
+            "summary": summary,
+            "hits": hits_payload or [],
+            **(extras or {}),
+        }
+        all_phases.append(PhaseTrace(
+            agent_name="RAGRetriever",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=summary,
+        ))
+
     # Lazy imports keep RAG entirely optional. If the import fails
     # (e.g. someone removed sklearn from the venv), we degrade
     # gracefully instead of crashing the orchestrator.
@@ -1099,24 +1123,16 @@ def _phase25_rag_inject_prior_episodes(
         )
     except ImportError as e:
         log.info("Phase 2.5: RAG module unavailable (%s); skipping.", e)
-        all_phases.append(PhaseTrace(
-            agent_name="RAGRetriever",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary="rag_module_unavailable",
-        ))
+        _finalize(
+            status="rag_module_unavailable",
+            summary="rag_module_unavailable",
+            extras={"error": str(e)},
+        )
         return
 
     index_dir = _resolve_rag_index_dir()
     if index_dir is None:
-        all_phases.append(PhaseTrace(
-            agent_name="RAGRetriever",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary="rag_disabled",
-        ))
+        _finalize(status="rag_disabled", summary="rag_disabled")
         return
 
     try:
@@ -1126,24 +1142,23 @@ def _phase25_rag_inject_prior_episodes(
         retriever = None
 
     if retriever is None:
-        all_phases.append(PhaseTrace(
-            agent_name="RAGRetriever",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary=f"index_not_loaded:{index_dir}",
-        ))
+        _finalize(
+            status="index_not_loaded",
+            summary=f"index_not_loaded:{index_dir}",
+            extras={"index_dir": str(index_dir)},
+        )
         return
 
     flags = state.get("anomaly_flags") or []
     if not flags:
-        all_phases.append(PhaseTrace(
-            agent_name="RAGRetriever",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary=f"no_flags (corpus_size={retriever.case_count})",
-        ))
+        _finalize(
+            status="no_flags",
+            summary=f"no_flags (corpus_size={retriever.case_count})",
+            extras={
+                "index_dir": str(index_dir),
+                "corpus_size": retriever.case_count,
+            },
+        )
         return
 
     classifier_label: Optional[str] = None
@@ -1163,28 +1178,58 @@ def _phase25_rag_inject_prior_episodes(
         )
     except Exception as e:
         log.warning("Phase 2.5: retrieve raised: %s", e, exc_info=True)
-        all_phases.append(PhaseTrace(
-            agent_name="RAGRetriever",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary=f"retrieve_raised:{type(e).__name__}",
-        ))
+        _finalize(
+            status="retrieve_raised",
+            summary=f"retrieve_raised:{type(e).__name__}",
+            extras={
+                "index_dir": str(index_dir),
+                "corpus_size": retriever.case_count,
+                "error": str(e),
+            },
+        )
         return
 
+    common_extras = {
+        "index_dir": str(index_dir),
+        "corpus_size": retriever.case_count,
+        "anomaly_flag_count": len(flags),
+        "classifier_label": classifier_label,
+        "k": _RAG_TOP_K,
+        "min_similarity": min_similarity,
+    }
+
     if not hits:
-        all_phases.append(PhaseTrace(
-            agent_name="RAGRetriever",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary=(
+        _finalize(
+            status="no_hits",
+            summary=(
                 f"no_hits (k={_RAG_TOP_K}, "
                 f"min_sim={min_similarity}, "
                 f"corpus_size={retriever.case_count})"
             ),
-        ))
+            extras=common_extras,
+        )
         return
+
+    # ── Happy path: hits retrieved. Capture them as structured data so
+    # the recorder can render the table and a downstream NA-citation
+    # scan can intersect against the case_ids.
+    hits_payload = [
+        {
+            "rank": h.rank,
+            "similarity": round(h.similarity, 4),
+            "case_id": h.case.case_id,
+            "scenario_name": h.case.scenario_name,
+            "ground_truth_affected_components": list(
+                h.case.ground_truth_affected_components or []
+            ),
+            "ground_truth_failure_domain": h.case.ground_truth_failure_domain,
+            "agent_version": h.case.agent_version,
+            "score_pct": h.case.score_pct,
+            "diagnosis_primary_suspect_nf": h.case.diagnosis_primary_suspect_nf,
+            "source_episode_path": h.case.source_episode_path,
+        }
+        for h in hits
+    ]
 
     block = retriever.render_hits_for_prompt(hits, verbosity="default")
     state["prior_similar_episodes"] = block
@@ -1195,16 +1240,18 @@ def _phase25_rag_inject_prior_episodes(
         "(top_sim=%.3f, top_case=%s)",
         len(hits), top_sim, hits[0].case.case_id,
     )
-    all_phases.append(PhaseTrace(
-        agent_name="RAGRetriever",
-        started_at=phase_start,
-        finished_at=time.time(),
-        duration_ms=int((time.time() - phase_start) * 1000),
-        output_summary=(
+    _finalize(
+        status="hits",
+        summary=(
             f"hits={len(hits)}, top_sim={top_sim:.2f}, "
             f"top_case={hits[0].case.case_id}"
         ),
-    ))
+        hits_payload=hits_payload,
+        extras={
+            **common_extras,
+            "block_chars": len(block),
+        },
+    )
 
 
 # ── Operational lessons injection (R5) ─────────────────────────────
@@ -1216,7 +1263,10 @@ def _phase25_rag_inject_prior_episodes(
 # it to one of `_RAG_DISABLED_SENTINELS` disables lesson injection
 # (useful for A/B comparison against a no-lessons baseline).
 
-_LESSONS_CACHE: dict[str, str] = {}
+# Cache value: (rendered_block, lesson_id_list). Both are derivable
+# from the loaded lessons but they're what every downstream consumer
+# wants; caching both avoids re-walking the lesson list per call.
+_LESSONS_CACHE: dict[str, tuple[str, list[str]]] = {}
 
 
 def _resolve_lessons_path() -> Optional[Path]:
@@ -1253,28 +1303,51 @@ def _phase25_inject_operational_lessons(
     """
     phase_start = time.time()
 
-    path = _resolve_lessons_path()
-    if path is None:
+    # Mirror the RAG-injection helper: every exit writes a complete
+    # metadata record to `state["lessons_injection_metadata"]`. The
+    # recorder reads it for the episode markdown's RAG section, and
+    # the NA-citation scan reads `lesson_ids` to know which IDs the
+    # NA might cite.
+    def _finalize(
+        *, status: str, summary: str,
+        path: Optional[Path] = None,
+        lesson_ids: Optional[list[str]] = None,
+        block_chars: int = 0,
+        extras: Optional[dict] = None,
+    ) -> None:
+        state["lessons_injection_metadata"] = {
+            "status": status,
+            "summary": summary,
+            "path": str(path) if path else None,
+            "lesson_ids": list(lesson_ids or []),
+            "lesson_count": len(lesson_ids or []),
+            "block_chars": block_chars,
+            **(extras or {}),
+        }
         all_phases.append(PhaseTrace(
             agent_name="OperationalLessons",
             started_at=phase_start,
             finished_at=time.time(),
             duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary="lessons_disabled",
+            output_summary=summary,
         ))
+
+    path = _resolve_lessons_path()
+    if path is None:
+        _finalize(status="lessons_disabled", summary="lessons_disabled")
         return
 
     cache_key = str(path)
     if cache_key in _LESSONS_CACHE:
-        block = _LESSONS_CACHE[cache_key]
+        block, lesson_ids = _LESSONS_CACHE[cache_key]
         state["operational_lessons"] = block
-        all_phases.append(PhaseTrace(
-            agent_name="OperationalLessons",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary=f"injected_from_cache (chars={len(block)})",
-        ))
+        _finalize(
+            status="injected_from_cache",
+            summary=f"injected_from_cache (chars={len(block)})",
+            path=path,
+            lesson_ids=lesson_ids,
+            block_chars=len(block),
+        )
         return
 
     try:
@@ -1284,47 +1357,138 @@ def _phase25_inject_operational_lessons(
         )
     except ImportError as e:
         log.info("Phase 2.5b: lessons module unavailable (%s); skipping.", e)
-        all_phases.append(PhaseTrace(
-            agent_name="OperationalLessons",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary="lessons_module_unavailable",
-        ))
+        _finalize(
+            status="lessons_module_unavailable",
+            summary="lessons_module_unavailable",
+            path=path,
+            extras={"error": str(e)},
+        )
         return
 
     lessons = try_load_lessons(path)
     if lessons is None:
-        all_phases.append(PhaseTrace(
-            agent_name="OperationalLessons",
-            started_at=phase_start,
-            finished_at=time.time(),
-            duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary=f"yaml_unreadable:{path}",
-        ))
+        _finalize(
+            status="yaml_unreadable",
+            summary=f"yaml_unreadable:{path}",
+            path=path,
+        )
         return
 
     block = render_lessons_for_prompt(lessons)
-    _LESSONS_CACHE[cache_key] = block
+    lesson_ids = [lesson.id for lesson in lessons]
+    _LESSONS_CACHE[cache_key] = (block, lesson_ids)
     state["operational_lessons"] = block
 
     log.info(
         "Phase 2.5b: injected %d operational lessons (chars=%d)",
         len(lessons), len(block),
     )
-    all_phases.append(PhaseTrace(
-        agent_name="OperationalLessons",
-        started_at=phase_start,
-        finished_at=time.time(),
-        duration_ms=int((time.time() - phase_start) * 1000),
-        output_summary=f"lessons={len(lessons)}, chars={len(block)}",
-    ))
+    _finalize(
+        status="injected",
+        summary=f"lessons={len(lessons)}, chars={len(block)}",
+        path=path,
+        lesson_ids=lesson_ids,
+        block_chars=len(block),
+    )
 
 
 def _reset_lessons_cache() -> None:
     """Test hook — clear the lesson-rendering cache between tests so
     each test sees a fresh load."""
     _LESSONS_CACHE.clear()
+
+
+# ── RAG citation detection (post-Phase-3 scan) ─────────────────────
+#
+# After the NA emits its NetworkAnalystReport, walk its free-text
+# fields and intersect against the lists of injected case_ids and
+# lesson_ids. The result is the operator-facing answer to "did the NA
+# actually use the RAG / lessons content?"
+#
+# Two kinds of citation:
+#
+#   - **case_id verbatim**: a retrieved case carries a stable id like
+#     `v7/ep_20260510_185748_call_quality_degradation`. The NA prompt
+#     instructs the LLM to cite by case_id when a prior case shapes a
+#     hypothesis. The scan checks whether any retrieved id appears
+#     in the NA's emitted text.
+#   - **lesson_id pattern**: lessons have ids like `L01`, `L14`. The
+#     NA prompt instructs the LLM to cite by id when a lesson shapes
+#     its reasoning. The scan finds `\bL\d+\b` tokens and filters to
+#     ids that are actually in the corpus (rejects hallucinated `L99`).
+
+import re as _RE_CITATIONS
+
+
+_LESSON_ID_RE = _RE_CITATIONS.compile(r"\bL\d+\b")
+
+
+def _collect_na_text_fields(na_report) -> str:
+    """Concatenate the NA report's free-text fields into one string for
+    citation scanning. Tolerant of None / missing pieces."""
+    if na_report is None:
+        return ""
+    parts: list[str] = []
+    summary = getattr(na_report, "summary", "") or ""
+    parts.append(str(summary))
+    layer_status = getattr(na_report, "layer_status", {}) or {}
+    if isinstance(layer_status, dict):
+        for layer in layer_status.values():
+            note = getattr(layer, "note", "") if not isinstance(layer, dict) else layer.get("note", "")
+            if note:
+                parts.append(str(note))
+    hypotheses = getattr(na_report, "hypotheses", []) or []
+    for h in hypotheses:
+        statement = (
+            getattr(h, "statement", "") if not isinstance(h, dict) else h.get("statement", "")
+        )
+        if statement:
+            parts.append(str(statement))
+        # supporting_events are token-shaped (event_type ids); not text
+        # the LLM would write a citation into, but include for completeness.
+        supports = (
+            getattr(h, "supporting_events", []) if not isinstance(h, dict) else h.get("supporting_events", [])
+        )
+        for s in supports or []:
+            parts.append(str(s))
+    return "\n".join(parts)
+
+
+def _detect_rag_citations_in_na(
+    na_report,
+    retrieved_case_ids: list[str],
+    injected_lesson_ids: list[str],
+) -> dict:
+    """Scan the NA report's text for citations of retrieved cases /
+    injected lessons. Returns a dict with two lists.
+
+    Citations are case-sensitive verbatim matches against the
+    structurally-typed identifiers. False-positive risk is low because:
+      - case_ids carry the agent-version prefix + episode_id, which is
+        not a phrase the LLM would coin organically.
+      - lesson_ids are 2-letter+digit tokens (`L01`, `L14`) intersected
+        with the actually-injected corpus, so hallucinated `L99` ids
+        are filtered out.
+    """
+    text = _collect_na_text_fields(na_report)
+    if not text:
+        return {
+            "cited_case_ids": [],
+            "cited_lesson_ids": [],
+            "any_citation": False,
+        }
+
+    cited_cases = [cid for cid in retrieved_case_ids if cid and cid in text]
+
+    found_lesson_ids = set(_LESSON_ID_RE.findall(text))
+    injected_set = set(injected_lesson_ids)
+    cited_lessons = sorted(found_lesson_ids & injected_set)
+
+    return {
+        "cited_case_ids": cited_cases,
+        "cited_lesson_ids": cited_lessons,
+        "any_citation": bool(cited_cases or cited_lessons),
+    }
 
 
 # ============================================================================
@@ -2139,6 +2303,26 @@ async def investigate(
     na_for_report = na_report.model_copy(update={"hypotheses": hypotheses})
     state["network_analysis_structured"] = na_for_report.model_dump(mode="json")
 
+    # RAG / lessons citation detection. Scan the NA's free-text fields
+    # (summary, hypothesis statements, layer-status notes) for verbatim
+    # citations of either: a retrieved case_id (from
+    # state["rag_retrieval_metadata"].hits[*].case_id) or a lesson_id
+    # matching the L<digits> pattern AND present in
+    # state["lessons_injection_metadata"].lesson_ids. Stored under
+    # state["rag_na_citations"] so the recorder can render whether the
+    # NA actually leveraged what RAG injected.
+    state["rag_na_citations"] = _detect_rag_citations_in_na(
+        na_report=na_for_report,
+        retrieved_case_ids=[
+            h.get("case_id") for h in
+            (state.get("rag_retrieval_metadata") or {}).get("hits", [])
+            if isinstance(h, dict) and h.get("case_id")
+        ],
+        injected_lesson_ids=list(
+            (state.get("lessons_injection_metadata") or {}).get("lesson_ids", [])
+        ),
+    )
+
     if not hypotheses:
         log.warning("No testable hypotheses from NA — skipping Investigator phase")
         state["diagnosis"] = _render_no_hypotheses_diagnosis(na_report)
@@ -2771,6 +2955,12 @@ def _build_result(
         "resolved_path":          state.get("resolved_path"),
         "path_walk_report":       state.get("path_walk_report"),
         "diagnosis_report":       state.get("diagnosis_report"),
+        # ── RAG observability (R4 / R5) — see _phase25_rag_inject…  ───
+        # All four are None when the localized branch fired (Phases 1-7
+        # didn't run, so neither RAG injection nor citation scan ran).
+        "rag_retrieval_metadata":   state.get("rag_retrieval_metadata"),
+        "lessons_injection_metadata": state.get("lessons_injection_metadata"),
+        "rag_na_citations":         state.get("rag_na_citations"),
     }
 
 

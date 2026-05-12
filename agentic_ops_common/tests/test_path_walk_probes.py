@@ -15,6 +15,8 @@ Per Phase 1 of ADR `path_anchored_probe_planning_for_transport_layer_faults.md`.
 
 from __future__ import annotations
 
+import pytest
+
 from agentic_ops.tools import (
     _parse_ip_link_stats_block,
     _parse_netem_delay_ms,
@@ -117,12 +119,85 @@ def test_parse_netem_loss_pct_none_for_non_netem_qdisc():
     assert _parse_netem_loss_pct(_TC_TBF_RATE_CAP) is None
 
 
-def test_parse_netem_delay_ms():
+def test_parse_netem_delay_ms_from_canonical_ms_format():
     assert _parse_netem_delay_ms(_TC_NETEM_DELAY_100) == 100.0
 
 
 def test_parse_netem_delay_ms_none_when_no_delay_param():
     assert _parse_netem_delay_ms(_TC_NETEM_LOSS_30) is None
+
+
+# ---------------------------------------------------------------------------
+# Multi-unit delay parsing — regression coverage for the auto-scaling
+# behavior of `tc -s qdisc show`.
+#
+# `tc` auto-picks the time unit (us / ms / s / ns / ps) based on the
+# magnitude of the delay (see iproute2's `__print_size_str` in
+# lib/utils.c). A regex that hard-codes the `ms` suffix silently
+# misses every delay >= 1 second. This was the HSS Unresponsive walker
+# failure observed in run_20260512_121509_hss_unresponsive (60-second
+# injection on pyhss was shown as `delay 60.0s`, the ms-only regex
+# returned None, prober emitted CleanHop).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw,expected_ms", [
+    # Sub-millisecond
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 500us", 0.5),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 12.5us", 0.0125),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 50ns",   5e-05),
+
+    # Canonical millisecond format
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 100.0ms", 100.0),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 100ms",   100.0),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 999.9ms", 999.9),
+
+    # Second-scale (the live HSS Unresponsive bug)
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 1.0s",    1000.0),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 1.5s",    1500.0),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 60.0s",   60000.0),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 60s",     60000.0),
+
+    # Delay with jitter — tc emits a second time value after the main
+    # delay (e.g. `delay 100.0ms 25.0ms 50%`). The parser matches the
+    # first one (the central delay), not the jitter.
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 100.0ms 25.0ms 50%", 100.0),
+    ("qdisc netem 8001: root refcnt 2 limit 1000 delay 1.5s 100ms 25%",     1500.0),
+])
+def test_parse_netem_delay_ms_handles_all_tc_units(raw, expected_ms):
+    """Pinned regression for the 60-second-injection-as-seconds case
+    and all neighboring units the kernel might emit."""
+    result = _parse_netem_delay_ms(raw)
+    assert result is not None
+    assert abs(result - expected_ms) < 1e-9, (
+        f"raw={raw!r} expected={expected_ms} got={result}"
+    )
+
+
+def test_parse_netem_delay_ms_live_hss_unresponsive_regression():
+    """Direct pin for the failure observed in
+    run_20260512_121509_hss_unresponsive: 60-second outbound delay on
+    pyhss, shown by `tc` as `delay 60.0s`. Pre-fix parser returned None
+    and the walker emitted CleanHop instead of LatencyAtHop. Post-fix
+    must return 60000.0."""
+    raw = (
+        "qdisc netem 800a: root refcnt 9 limit 1000 delay 60.0s\n"
+        " Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0)\n"
+        " backlog 0b 0p requeues 0"
+    )
+    assert _parse_netem_delay_ms(raw) == 60000.0
+
+
+@pytest.mark.parametrize("raw", [
+    "qdisc fq_codel 0: root refcnt 2 limit 10240p flows 1024",
+    "qdisc noqueue 0: root refcnt 2",
+    "no qdisc here at all",
+    "",
+    "delay (a generic word)",  # the regex requires a numeric after delay
+])
+def test_parse_netem_delay_ms_returns_none_on_non_netem_output(raw):
+    """Anything that isn't a `delay <number><unit>` shape returns None."""
+    assert _parse_netem_delay_ms(raw) is None
 
 
 # ---------------------------------------------------------------------------

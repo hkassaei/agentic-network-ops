@@ -519,3 +519,69 @@ To distinguish these, 3-5 paired runs with the bucket pinned (prime the stack in
 2. **Pin state-bucket variance before more A/B-ing RAG.** Single-pair A/B with uncontrolled bucket variance is statistical noise.
 3. **Run the rest of the batch with RAG ON.** Other scenarios (rtpengine_latency, p_cscf_latency, ims_network_partition) may benefit differently. Don't decide RAG from one scenario.
 4. **Consider re-exposing `check_tc_rules` to the Investigator as a backstop** for cases where the walker mis-routes or misses an attribution type. ~3 LOC change. Re-opens a small attack surface (LLM picks wrong container) but recovers the kernel-evidence visibility on the most common chaos-fault class. Pair with a lesson teaching the Investigator when to call it.
+
+---
+
+## Addendum (2026-05-12): Follow-up #1 — root cause found and fixed
+
+The walker-missed-delay bug was traced to a single regex in `agentic_ops/tools.py::_parse_netem_delay_ms`. The pre-fix code hard-coded the `ms` suffix:
+
+```python
+m = _re.search(r"delay\s+([\d.]+)\s*ms", raw)
+```
+
+But `tc -s qdisc show` auto-scales the time unit (see iproute2's `__print_size_str` in `lib/utils.c`):
+
+  - sub-millisecond → `us` (microseconds)
+  - sub-second      → `ms`
+  - second and above → `s`
+
+So `tc qdisc add … netem delay 60000ms` is shown by `tc` as `delay 60.0s`, NOT `delay 60000.0ms`. The `ms`-only regex returned `None` for every delay ≥ 1 second. The KernelHopProber's `LatencyAtHop` branch never fired, the prober fell through to `CleanHop`, and the walker null-localized despite walking pyhss[eth0] three times.
+
+The existing unit test covered only the `100.0ms` case (the `rtpengine_latency_injection` scenario, which injects 100 ms — the one unit the regex happened to match), so this regression sat undetected since the parser was written.
+
+**Fix shipped same day.** New parser:
+
+```python
+m = _re.search(r"delay\s+([\d.]+)\s*(us|ms|ns|ps|s)\b", raw)
+```
+
+Captures the unit, normalizes to milliseconds:
+
+- `us` → ÷ 1,000
+- `ms` → ×1
+- `s`  → × 1,000
+- `ns` → ÷ 1,000,000
+- `ps` → ÷ 1,000,000,000
+
+Two-character units are listed before single-char `s` so the regex engine prefers `ms` over `s` when both match — Python alternates left-to-right.
+
+**New test coverage (18 cases) pinned in `agentic_ops_common/tests/test_path_walk_probes.py`:**
+
+- Parametrized table over `us`, `ms`, `s`, `ns` formats including decimal values.
+- Jitter format: `delay 100.0ms 25.0ms 50%` — parser correctly extracts the central delay, ignores the jitter.
+- Direct regression pin for the live HSS Unresponsive failure: `delay 60.0s` → `60000.0`.
+- Non-delay outputs return `None` (fq_codel, noqueue, empty, etc.).
+
+**Test state after fix:** 803 passed, 48 skipped, 3 xfailed across the full v7 + common suites. No other tests regressed.
+
+### Expected impact on the next HSS Unresponsive run
+
+With the parser fixed, a re-run of `HSS Unresponsive` (60-second netem delay on pyhss) should:
+
+1. Walker walks `ims_registration` flow (assuming the resolver routes correctly, as it did in the RAG-OFF run).
+2. KernelHopProber reaches pyhss[eth0] at hop 16, runs `tc -s qdisc show dev eth0`, sees `delay 60.0s`, parser returns `60000.0`.
+3. Branch at `kernel.py:124` fires: `LatencyAtHop(observed_delay_ms=60000.0, counter_kind="qdisc_netem_delay", evidence=<verbatim tc output>)`.
+4. Walker emits `is_localized=True` with `first_attributed_hop=pyhss[eth0]`.
+5. Synthesis takes the localized branch, emits `verdict_kind=localized, primary_suspect_nf=pyhss, observed_delay_ms=60000ms, root_cause=Kernel-level 60-second egress delay on pyhss[eth0]`.
+6. **Cost: ~10K tokens** (single Synthesis call, no app-layer pipeline).
+
+That's a 30-50× token reduction vs. either previous HSS Unresponsive run, with a more mechanism-faithful diagnosis (the actual fault is netem latency, not "port-binding failure" or "100% packet loss").
+
+Caveat: this assumes the resolver routes to `ims_registration` (RAG-OFF bucket-(0,1) path). The RAG-ON run in bucket-(1,1) routed to `data_pdu_session_user_traffic`, which doesn't include pyhss as a hop, so the walker wouldn't reach pyhss regardless of the parser. The B4 (screener over-flagging) follow-up still controls whether the walker gets the chance to fire on this scenario.
+
+### What this episode's investigation reveals about test discipline
+
+The pre-fix parser passed every existing unit test. The bug surfaced only when a chaos scenario injected a delay magnitude that the test fixtures didn't cover. The lesson is **test fixtures must cover the *range* of inputs the production system actually produces, not just one representative value.** A single-magnitude test that happens to match the kernel's unit-scaling boundary on the unlucky side fails silently and indefinitely.
+
+The fix added a parametrized table covering every unit the kernel can emit, including a direct pin for the exact live-failure case. The principle: when a parser handles auto-scaling inputs, every scale should appear in the test corpus.

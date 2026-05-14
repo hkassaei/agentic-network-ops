@@ -162,12 +162,41 @@ class InconclusiveHop:
     kind: Literal["inconclusive"] = "inconclusive"
 
 
+@dataclass(frozen=True)
+class ContainerDeadHop:
+    """Hop's container is not running.
+
+    Emitted by the `KernelHopProber` when `docker inspect` reports a
+    `State.Status` other than `running` — i.e. `exited`, `dead`,
+    `paused`, `restarting`, `removing`, `created`, or `absent` (the
+    sentinel for "no such container"). This case is *not* an
+    `InconclusiveHop`: a dead container means the probe couldn't run
+    because the container is dead, which is itself the fault signal.
+    Without this attribution the prober previously reported the
+    indistinguishable "tc binary missing" inconclusive, hiding
+    container-death from the walker and from Synthesis.
+
+    `status` carries the Docker status string verbatim so downstream
+    consumers can render it ("exited", "paused", etc.) and so
+    Synthesis can include it in the explanation. `detail` carries
+    any human-readable context (e.g. the docker inspect raw output
+    when the helper had something useful to surface).
+
+    See ADR `path_anchored_probe_planning_for_transport_layer_faults.md`
+    and task #61 in the team task tracker.
+    """
+    status: str
+    detail: str = ""
+    kind: Literal["container_dead"] = "container_dead"
+
+
 HopAttribution = Union[
     CleanHop,
     DropsAttributedHere,
     DropsAttributedToInboundLink,
     LatencyAtHop,
     InconclusiveHop,
+    ContainerDeadHop,
 ]
 
 
@@ -203,7 +232,7 @@ class PathWalkReport:
 
     @property
     def first_attributed_hop(self) -> Optional[HopRecord]:
-        """Return the first hop with a drop / latency attribution.
+        """Return the first hop with a drop / latency / container-dead attribution.
 
         Topology order. Used by Synthesis to pick the localization
         point. Returns None if the walk found no attributions
@@ -213,9 +242,44 @@ class PathWalkReport:
             kind = record.attribution.kind
             if kind in ("drops_attributed_here",
                         "drops_attributed_to_inbound_link",
-                        "latency_at_hop"):
+                        "latency_at_hop",
+                        "container_dead"):
                 return record
         return None
+
+    @property
+    def attributed_hops(self) -> list[HopRecord]:
+        """All hops with a load-bearing attribution, in topology order.
+
+        Used by the compound-verdict Synthesis branch to surface every
+        root cause the walker found. Includes drops_attributed_here,
+        drops_attributed_to_inbound_link, latency_at_hop, container_dead.
+        Excludes clean and inconclusive.
+
+        **De-duplication.** A flow walk often visits the same hop twice
+        (uplink leg + downlink leg). When two records share the same
+        `(node, iface, kind)` triple they're the same fault observed
+        twice; the second is dropped. Records that share `(node, iface)`
+        but differ in `kind` (e.g. drops on uplink + latency on downlink
+        at the same NF) are kept separate — they represent operationally
+        distinct faults at the same physical hop. See ADR
+        `multi_fault_orchestration.md` for the rationale.
+        """
+        out: list[HopRecord] = []
+        seen: set[tuple[str, str, str]] = set()
+        for record in self.hops:
+            kind = record.attribution.kind
+            if kind not in ("drops_attributed_here",
+                            "drops_attributed_to_inbound_link",
+                            "latency_at_hop",
+                            "container_dead"):
+                continue
+            key = (record.hop.node, record.hop.iface, kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(record)
+        return out
 
     @property
     def is_localized(self) -> bool:

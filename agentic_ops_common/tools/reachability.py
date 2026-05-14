@@ -119,6 +119,23 @@ async def get_interface_drops(container: str, iface: str = "eth0") -> dict:
     return await _t.get_interface_drops(container, iface)
 
 
+async def get_container_status(container: str) -> str:
+    """Return Docker's `State.Status` for one container.
+
+    Thin re-export of `agentic_ops.tools.get_container_status`. The
+    path-walk `KernelHopProber` uses this to distinguish a legitimately
+    healthy container that lacks a probe binary from one that has
+    exited (`exited`) or been removed (`absent`). The former is
+    `tool_unavailable`; the latter is a `ContainerDeadHop` attribution
+    that downstream Synthesis treats as a strong fault signal.
+
+    Possible return values:
+        running | exited | paused | restarting | removing | dead | created
+        absent (when `docker inspect` itself fails)
+    """
+    return await _t.get_container_status(container)
+
+
 async def get_link_rate_diff(
     container_a: str,
     iface_a: str,

@@ -191,6 +191,17 @@ def cap_synthesis_confidence(
     if report.verdict_kind == "localized":
         return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
 
+    # Compound verdict short-circuit — the primary slot's confidence
+    # comes from the walker's attribution kind (same rule as `localized`),
+    # and each `RootCause` in `additional_root_causes` carries its own
+    # confidence field bounded by the corresponding evidence source.
+    # No pool-driven evidence-strength cap applies here. ADR
+    # `multi_fault_orchestration.md` and the dedicated
+    # `lint_compound_verdict_consistency` guardrail handle the
+    # compound-specific invariants.
+    if report.verdict_kind == "compound":
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
     # Compute evidence-strength for the verdict supporting the diagnosis.
     strength: EvidenceStrength
     rationale: str

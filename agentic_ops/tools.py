@@ -248,6 +248,23 @@ async def _container_status(name: str) -> str:
     return output.strip()
 
 
+async def get_container_status(container: str) -> str:
+    """Return Docker's `State.Status` for one container.
+
+    Possible values: `running`, `exited`, `paused`, `restarting`,
+    `removing`, `dead`, `created`. Returns `"absent"` if `docker inspect`
+    fails (typically because the container does not exist at all).
+
+    Used by the path-walk's `KernelHopProber` to distinguish "container is
+    healthy but lacks a probe binary" (legitimate tool_unavailable) from
+    "container is exited / removed" (which the prober now surfaces as a
+    `ContainerDeadHop` attribution rather than a misleading inconclusive).
+    See ADR `path_anchored_probe_planning_for_transport_layer_faults.md`
+    and task #61.
+    """
+    return await _container_status(container)
+
+
 # ---------------------------------------------------------------------------
 # Tool 4: query_subscriber
 # ---------------------------------------------------------------------------

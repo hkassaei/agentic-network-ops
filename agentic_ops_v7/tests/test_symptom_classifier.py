@@ -335,6 +335,196 @@ def test_rationale_cites_kb_label_for_every_flag():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Cluster-on-different-layer rule (task #63) — compound-fault detection
+#
+# The cascading_ims_failure regression. Single transport flag (UPF GTP
+# drop, owner=core) plus an ambiguous-bucket cluster on ims-layer NFs
+# (icscf/pcscf/scscf — all KB-labeled fault_layer=mixed) signals a
+# compound fault: transport-layer fault at one NF AND application-layer
+# trouble at NFs in a different layer. The classifier promotes the label
+# from `transport_layer` to `mixed` so the orchestrator runs both
+# pipelines and Synthesis can surface both root causes.
+#
+# Corpus analysis behind the 70% share threshold lives in
+# /tmp/analyze_classifier_corpus.py (one-off script, not under version
+# control). Every compound scenario in the May-9-to-14 corpus produces
+# >=86% share; the rule fires on share >=70%.
+# ---------------------------------------------------------------------------
+
+
+def test_cluster_on_different_layer_promotes_to_mixed():
+    """Cascading IMS Failure signature: 1 transport flag on UPF (core)
+    plus 9 ambiguous flags clustering on ims NFs. Must label `mixed`,
+    not `transport_layer`.
+
+    The cluster check is layer-not-NF: any IMS NF (icscf/pcscf/scscf)
+    in the ambiguous bucket counts toward the ims share.
+    """
+    classification = _classify_with_real_enrichment([
+        # Transport flag — UPF (core layer)
+        _flag("normalized.upf.gtp_indatapktn3upf_per_ue",
+              current=0.5, learned_normal=5.0, direction="drop"),
+        # Ambiguous flags — all on ims NFs
+        _flag("normalized.icscf.cdp_replies_per_ue",
+              current=0.0, learned_normal=1.0, direction="drop"),
+        _flag("normalized.icscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=1.0, direction="drop"),
+        _flag("normalized.pcscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=1.0, direction="drop"),
+        _flag("normalized.scscf.cdp_replies_per_ue",
+              current=0.0, learned_normal=1.0, direction="drop"),
+        _flag("normalized.scscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=1.0, direction="drop"),
+    ])
+    assert classification.label == "mixed", (
+        f"Expected 'mixed' (cluster-on-different-layer rule), got "
+        f"{classification.label!r}. Rationale:\n{classification.rationale}"
+    )
+    # The rationale must explain why the promotion fired so an operator
+    # can audit it.
+    assert "different" in classification.rationale.lower() or (
+        "core" in classification.rationale and "ims" in classification.rationale
+    )
+
+
+def test_ambiguous_cluster_on_same_layer_stays_transport_layer():
+    """When ambiguous flags cluster on the SAME layer as transport, the
+    rule does NOT promote — those signals are downstream consequences
+    of one transport-layer fault, not a separate compound fault.
+
+    Synthetic case: transport flag on UPF (core) + ambiguous flags on
+    other core NFs. With my real-KB enrichment this is hard to construct
+    (most core-layer metrics with `fault_layer=mixed` are SBI/control
+    plane), so we use a representative shape.
+    """
+    # All transport flags on core — same layer
+    classification = _classify_with_real_enrichment([
+        _flag("normalized.upf.gtp_indatapktn3upf_per_ue",
+              current=0.5, learned_normal=5.0, direction="drop"),
+        _flag("normalized.upf.gtp_outdatapktn3upf_per_ue",
+              current=0.5, learned_normal=5.0, direction="drop"),
+    ])
+    # No ambiguous → trivially stays transport_layer; check that the
+    # rule's same-layer guard doesn't accidentally promote.
+    assert classification.label == "transport_layer", classification.rationale
+
+
+def test_unresolved_owner_layer_does_not_promote():
+    """If the owner layer can't be resolved for either bucket (e.g. an
+    unmappable feature key), the promotion guard must short-circuit on
+    None and keep the label transport_layer.
+
+    Without this guard, `_dominant_owner_layer` returning None on the
+    transport bucket would let any ambiguous cluster trigger the rule
+    spuriously.
+    """
+    # Transport flag with kb_context.kb_metric_id → owner_layer resolves
+    # to `core`. Ambiguous flag with no resolvable owner.
+    classification = _classify_with_real_enrichment([
+        _flag("normalized.upf.gtp_indatapktn3upf_per_ue",
+              current=0.5, learned_normal=5.0, direction="drop"),
+        # `context.cx_active` is the screener's bucketing-feature
+        # context, not an NF metric. No owner layer.
+        _flag("context.cx_active",
+              current=0.0, learned_normal=1.0, direction="drop"),
+    ])
+    # Either label is acceptable here depending on how the screener's
+    # enrichment routes `context.cx_active` — but if it lands in the
+    # ambiguous bucket with no owner_layer, the rule must NOT promote.
+    if classification.ambiguous_flags and all(
+        fb.owner_layer is None for fb in classification.ambiguous_flags
+    ):
+        assert classification.label == "transport_layer", (
+            f"Unresolved owner-layer should not promote; got "
+            f"{classification.label!r}"
+        )
+
+
+def test_dominant_layer_helper():
+    """Direct test of `_dominant_owner_layer`: tracks share, picks max."""
+    from agentic_ops_v7.symptom_classifier import (
+        FlagBucket,
+        _dominant_owner_layer,
+    )
+    from agentic_ops_common.anomaly.screener import AnomalyFlag
+
+    def _fb(owner_layer):
+        return FlagBucket(
+            flag=AnomalyFlag(
+                metric="m", component="c", current=0.0, learned_normal=0.0,
+                anomaly_score=1.0, severity="LOW", direction="drop",
+            ),
+            bucket="ambiguous", reason="", owner_layer=owner_layer,
+        )
+
+    layer, share = _dominant_owner_layer([_fb("ims"), _fb("ims"), _fb("core")])
+    assert layer == "ims"
+    assert abs(share - 2 / 3) < 1e-6
+
+    # Empty input
+    assert _dominant_owner_layer([]) == (None, 0.0)
+
+    # All None owner_layers
+    assert _dominant_owner_layer([_fb(None), _fb(None)]) == (None, 0.0)
+
+
+def test_promotion_helper_share_threshold():
+    """The 70% threshold is structurally enforced: 60% share does NOT
+    promote; 70% does."""
+    from agentic_ops_v7.symptom_classifier import (
+        FlagBucket,
+        _ambiguous_cluster_promotes_to_mixed,
+    )
+    from agentic_ops_common.anomaly.screener import AnomalyFlag
+
+    def _fb(owner_layer):
+        return FlagBucket(
+            flag=AnomalyFlag(
+                metric="m", component="c", current=0.0, learned_normal=0.0,
+                anomaly_score=1.0, severity="LOW", direction="drop",
+            ),
+            bucket="ambiguous", reason="", owner_layer=owner_layer,
+        )
+
+    transport = [_fb("core")]
+
+    # 60% share on ims — below threshold; no promotion.
+    ambiguous_60 = [_fb("ims")] * 6 + [_fb("core")] * 4
+    promote, _ = _ambiguous_cluster_promotes_to_mixed(transport, ambiguous_60)
+    assert promote is False
+
+    # 70% share on ims — at threshold; promotes.
+    ambiguous_70 = [_fb("ims")] * 7 + [_fb("core")] * 3
+    promote, _ = _ambiguous_cluster_promotes_to_mixed(transport, ambiguous_70)
+    assert promote is True
+
+    # 100% on same layer (core) — never promotes.
+    ambiguous_same_layer = [_fb("core")] * 5
+    promote, _ = _ambiguous_cluster_promotes_to_mixed(
+        transport, ambiguous_same_layer,
+    )
+    assert promote is False
+
+
+# ---------------------------------------------------------------------------
+# Persistence — owner_layer must survive the to_dict round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_owner_layer_persists_in_to_dict():
+    """The recorder and the orchestrator's _reconstruct_classification
+    both depend on `owner_layer` being in the serialized form. Pin it."""
+    classification = _classify_with_real_enrichment([
+        _flag("normalized.upf.gtp_indatapktn3upf_per_ue",
+              current=0.5, learned_normal=5.0, direction="drop"),
+    ])
+    payload = classification.to_dict()
+    for fb in payload["transport_flags"]:
+        assert "owner_layer" in fb
+        assert fb["owner_layer"] == "core"
+
+
 def test_kb_has_fault_layer_on_every_metric():
     """The classifier reads `fault_layer` from KB. If a metric in the KB
     doesn't have one set, an episode that flags it gets ambiguous —

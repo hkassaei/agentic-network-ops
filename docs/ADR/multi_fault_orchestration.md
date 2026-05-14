@@ -26,7 +26,7 @@ The walker's output shape also changes for the `mixed` path: instead of returnin
 
 Phase 7 Synthesis gains a fourth verdict_kind — `compound` — for the merged path. The existing `localized` verdict_kind keeps its current contract (single-hop attribution, kernel evidence only) and stays the right answer for genuine single-fault transport scenarios.
 
-We add two circuit-breakers to bound the cost of false `mixed` labels (see [Trade-offs](#trade-offs)).
+We add one guardrail to keep `compound` honest (see [Trade-offs](#trade-offs)). An earlier draft of this ADR also included a per-episode token cap; it was reverted after an empirical failure (see §Circuit-breakers).
 
 ---
 
@@ -204,12 +204,27 @@ Both follow the structural-guardrails pattern from prior ADRs: mechanical post-e
 
 ### 5. Circuit-breakers against false `mixed` labels
 
-Two caps keep us safe if task #63's classifier turns out to over-fire `mixed`:
+One guardrail is the only remaining safeguard:
 
-1. **Per-episode token budget.** A `mixed`-labeled run is allowed up to ~200K tokens before Synthesis is forced to emit `inconclusive` with the partial evidence collected so far. (Today's `localized` runs hit ~8K; today's worst-case application-layer runs hit ~160K. Cap above worst-case but below 2× to bound the bill.) Implemented in the existing token-tracker; threshold lives in `agentic_ops_v7/orchestrator.py` as a module-level constant.
-2. **Synthesis-emitted `compound` requires walker localization.** The guardrail above already enforces this. We list it here so the pair is explicit: classifier may say `mixed`, orchestration may pay for both pipelines, but Synthesis still can't emit `compound` without kernel evidence to back the primary slot. A `mixed`-labeled run whose walker null-localizes degrades cleanly to application-layer-only verdicts.
+1. **Synthesis-emitted `compound` requires walker localization.** Classifier may say `mixed`, orchestration may pay for both pipelines, but Synthesis still can't emit `compound` without kernel evidence to back the primary slot. A `mixed`-labeled run whose walker null-localizes degrades cleanly to application-layer-only verdicts (`confirmed` / `promoted` / `inconclusive`). Enforced by `lint_compound_verdict_consistency`.
 
-These caps are **off by default** until task #63 lands and the false-positive rate of `mixed` is measured on the historical corpus (see [Validation](#validation--rollout)).
+**Reverted circuit-breaker — per-episode token cap.** The original draft of this ADR also proposed a 200K per-episode cumulative token cap, intended to bound damage from false-positive `mixed` labels. The cap was implemented as a check at the entry to Phase 7 Synthesis: if `sum(p.tokens.total for p in all_phases) > 200_000`, skip Synthesis and emit an `inconclusive` sentinel.
+
+**It was removed on 2026-05-15** after `run_20260514_220149_data_plane_degradation`. That episode was a single-fault Data Plane Degradation scenario that the classifier false-positive-labeled `mixed`. The app-layer pipeline ran cleanly and produced an h1=UPF NOT_DISPROVEN consensus with paired-probe triangulation, multi-shot agreement, and the right answer staring at Synthesis. The cap fired at **458K cumulative** and Synthesis was replaced with an `inconclusive` sentinel — destroying a diagnosis that would have scored well.
+
+What went wrong:
+
+- **Granularity was wrong.** The cap measured *cumulative across all prior phases*. With three parallel Investigators each running multi-shot consensus, cumulative tokens routinely hit 300K–500K on perfectly valid runs (NA ~50K + IG ~70K + 3 × Investigator × 2 shots × ~50K avg). The cap fired on normal pipeline behavior, not runaway behavior.
+- **Threshold was wrong.** The "worst-case 160K" anchor came from a no-walker, single-Investigator-fan-out run. It was not a worst case for the compound path with Investigator fan-out. Even with the granularity issue fixed, 200K would be too low.
+- **The cap defeated its own purpose.** False-positive `mixed` labels are the very thing the cap was supposed to protect against — but on those scenarios the app-layer pipeline produces a *valid* diagnosis, not runaway behavior. The cap was killing correct answers instead of bounding wrong ones.
+
+Lesson and forward guidance:
+
+- The classifier's accuracy (task #63) plus the compound-consistency guardrail are the actual backstops. They're load-bearing; the token cap added nothing on top.
+- If a future runaway *does* materialize, re-add a cap that measures the *Synthesis call alone*, not whole-run cumulative — Investigator fan-out is normal and shouldn't be subject to the same guard as a Synthesis-prompt blowup.
+- General principle: don't size empirical thresholds against a single observed worst-case run; sample across the failure mode shapes you're actually trying to bound.
+
+The single remaining guardrail above is sufficient.
 
 ---
 
@@ -235,7 +250,7 @@ Land in this order:
 3. **`compound` verdict_kind** added to `DiagnosisReport.verdict_kind` Literal and to the Synthesis pool-membership guardrail's allowed set.
 4. **`lint_compound_verdict_consistency` + `lint_compound_additional_causes`** guardrails (`agentic_ops_v7/guardrails/`). Pure unit tests against synthetic `DiagnosisReport` fixtures, no LLM involvement.
 5. **Synthesis prompt** (`agentic_ops_v7/prompts/synthesis.md`). New branch-select directive; new section explaining compound-verdict rules; bad-output / good-output examples per the prompt-engineering pattern used elsewhere in v7.
-6. **Orchestrator routing** (`agentic_ops_v7/orchestrator.py`). Extract `_phase06_run_walker` from `_phase06_transport_layer_route`. New compound-branch arm in the main `investigate()` flow. Per-episode token-budget circuit-breaker reads `state["total_tokens"]` between phases and triggers a graceful Synthesis-to-`inconclusive` short-circuit when the threshold is crossed.
+6. **Orchestrator routing** (`agentic_ops_v7/orchestrator.py`). Extract `_phase06_run_walker` from `_phase06_transport_layer_route`. New compound-branch arm in the main `investigate()` flow. (An earlier revision of this step also added a per-episode token-budget circuit-breaker; reverted — see §Circuit-breakers.)
 7. **Recorder** (`agentic_chaos/recorder.py`). Render `verdict_kind=compound` with the primary slot table + `additional_root_causes` list. Backwards-compatible — old episode JSONs continue to render via the existing single-suspect path.
 8. **Episode-log JSON shape**: `challenge_result["compound_root_causes"]` mirrors `additional_root_causes` for the recorder. Recorder-side parsing handles missing-key (older runs) gracefully.
 
@@ -250,12 +265,12 @@ Touches 8 files across `agentic_ops_v7/`, `agentic_ops_common/`, and `agentic_ch
 **Behavior on the existing 26+ historical scenarios:** if task #63 is *not* landed, the classifier never emits `mixed` (today's label distribution shows zero `mixed` labels on the existing chaos library). So this ADR is a no-op on every scenario until #63 lands. That's the deliberate dependency ordering — the classifier change unlocks the routing change.
 
 **Risk: classifier mis-labels** a single-fault scenario as `mixed`. Mitigations:
-- Circuit-breaker #1 (per-episode token budget) caps the worst-case cost of any single mis-labeled run at ~200K tokens.
-- Guardrail (`compound` requires walker localization) means a `mixed`-labeled single-fault scenario degrades to whichever single-branch verdict the bundle supports, not an invented compound verdict.
+- The guardrail (`compound` requires walker localization) means a `mixed`-labeled single-fault scenario degrades to whichever single-branch verdict the bundle supports, not an invented compound verdict. The app-layer pipeline still runs and produces its normal output; Synthesis chooses the right verdict_kind based on what the bundles contain.
+- **Empirical observation.** False positives do happen (see task #63's corpus analysis: HSS Unresponsive, Data Plane Degradation, Call Quality Degradation occasionally label `mixed`). On every observed case the app-layer pipeline still produces a correct diagnosis and Synthesis emits a valid single-suspect verdict. The marginal cost is the extra walker pass (~8K) plus whatever Investigator fan-out the scenario triggers — not catastrophic.
 
 **Risk: Synthesis hallucinates the second root cause.** The existing post-emit guardrail pattern handles this. `lint_compound_additional_causes` requires each `RootCause.evidence_source` to point at a real artifact (`path_walk_report.attributed_hops` for `path_walk`, `network_analysis.hypotheses` for `investigator`, `anomaly_flags` for `anomaly_screener`). Anything else REJECTs.
 
-**Risk: token-cost blowout in production batches.** The per-episode cap above bounds any single run; the recorder already prints per-phase token counts, so a `mixed`-labeled run that hits the cap is visible immediately in the episode log. Batch-level cost stays proportional to the number of `mixed` labels the classifier emits — task #63's tuning on the historical corpus is where that rate is controlled, not here.
+**Risk: token-cost blowout in production batches.** Token cost stays proportional to the number of `mixed` labels the classifier emits × the Investigator fan-out per scenario. Batch-level economics are controlled by task #63's classifier accuracy, not by a per-episode cap (which was tried and removed — see §Circuit-breakers). The recorder prints per-phase token counts so any run going pathologically high is visible immediately in the episode log; that's the operator-facing signal.
 
 ---
 

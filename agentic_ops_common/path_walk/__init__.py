@@ -7,7 +7,8 @@ Public surface:
     HopAttribution              — closed-enum of per-hop verdicts:
                                   CleanHop, DropsAttributedHere,
                                   DropsAttributedToInboundLink,
-                                  LatencyAtHop, InconclusiveHop
+                                  LatencyAtHop, InconclusiveHop,
+                                  ContainerDeadHop
     HopRecord, PathWalkReport   — walker output
     HopProber                   — Protocol every prober implements
     KernelHopProber             — lab prober (containers, host kernel)
@@ -17,6 +18,7 @@ Public surface:
 
 from .protocol import (
     CleanHop,
+    ContainerDeadHop,
     DropsAttributedHere,
     DropsAttributedToInboundLink,
     Hop,
@@ -38,6 +40,7 @@ from .probers.registry import prober_for_kind  # noqa: E402
 
 __all__ = [
     "CleanHop",
+    "ContainerDeadHop",
     "DockerBridgeProber",
     "DropsAttributedHere",
     "DropsAttributedToInboundLink",

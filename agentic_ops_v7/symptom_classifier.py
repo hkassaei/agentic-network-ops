@@ -11,8 +11,11 @@ the classifier labels every screener output as one of:
                        application fault (stuck Diameter peer,
                        crashed process, misconfiguration, mis-
                        provisioned subscriber).
-    mixed              Both signatures co-load-bearing, OR the
-                       evidence is ambiguous between the two.
+    mixed              Both signatures co-load-bearing, OR ambiguous
+                       flags strongly cluster on an NF-owner layer
+                       different from the transport flags', which is
+                       the signature of a compound fault spanning
+                       layers.
 
 Bucketing is a single KB lookup per flag: read the metric's
 `fault_layer` field (`transport` / `application` / `mixed`) and
@@ -22,11 +25,22 @@ classifier has no per-metric special cases and adding a new metric
 to the KB automatically adds it to the classifier's vocabulary.
 
 Final label:
-    transport-bucket non-empty             -> transport_layer
+    transport-bucket non-empty             -> transport_layer*
     application-bucket non-empty, T==0     -> application_layer
     both T and A non-empty                 -> mixed
     only mixed/unknown flags               -> mixed
     no flags at all                        -> application_layer
+
+    *Exception: when only T+ambiguous flags fire (n_a == 0, n_x > 0),
+    and the ambiguous flags cluster (>=70% share) on an NF-owner
+    layer different from the transport flags' dominant owner layer,
+    the label is `mixed` instead of `transport_layer`. This catches
+    compound faults where one root cause is transport-layer and a
+    second sits in an app-layer NF whose downstream metrics fire as
+    ambiguous (KB `fault_layer=mixed`). See:
+        - ADR `multi_fault_orchestration.md`
+        - Failing run: run_20260514_193941_cascading_ims_failure
+        - Task #63 corpus analysis
 """
 
 from __future__ import annotations
@@ -45,10 +59,20 @@ SignalBucket = Literal["transport", "application", "ambiguous"]
 
 @dataclass(frozen=True)
 class FlagBucket:
-    """One classified anomaly flag plus the reason it landed in its bucket."""
+    """One classified anomaly flag plus the reason it landed in its bucket.
+
+    `owner_layer` is the NF-owner layer the metric sits in
+    (`infrastructure | ran | core | ims`), read from
+    `MetricsKB.metrics[<nf>].layer`. This is the layer of the NF that
+    OWNS the metric — distinct from `bucket`, which is the
+    *fault-layer* the metric responds to. Owner-layer is consumed by
+    the cluster-on-different-layer rule in `_decide_label` to detect
+    compound faults; `None` when the flag couldn't be resolved.
+    """
     flag: AnomalyFlag
     bucket: SignalBucket
     reason: str
+    owner_layer: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +120,7 @@ class SymptomClassification:
                 "anomaly_score": round(fb.flag.anomaly_score, 3),
                 "kb_metric_id": kb_id,
                 "bucket": fb.bucket,
+                "owner_layer": fb.owner_layer,
                 "reason": fb.reason,
             }
         return {
@@ -146,7 +171,10 @@ def classify(report: Optional[AnomalyReport], kb: MetricsKB) -> SymptomClassific
 
     for flag in report.flags:
         bucket, reason = _bucket_flag(flag, kb)
-        record = FlagBucket(flag=flag, bucket=bucket, reason=reason)
+        owner_layer = _flag_owner_layer(flag, kb)
+        record = FlagBucket(
+            flag=flag, bucket=bucket, reason=reason, owner_layer=owner_layer,
+        )
         if bucket == "transport":
             transport_flags.append(record)
         elif bucket == "application":
@@ -210,6 +238,50 @@ def _bucket_flag(flag: AnomalyFlag, kb: MetricsKB) -> tuple[SignalBucket, str]:
     return ("ambiguous", reason)
 
 
+def _flag_owner_layer(flag: AnomalyFlag, kb: MetricsKB) -> Optional[str]:
+    """Resolve the NF-owner layer for a flag's metric.
+
+    Prefers `flag.kb_context.kb_metric_id` (canonical `<layer>.<nf>.<metric>`
+    form, populated by Phase 0's `enrich_anomaly_report`) because the
+    layer is encoded directly in the id. Falls back to
+    `kb.metrics[<nf>].layer` when the canonical id isn't available
+    but `flag.component` is itself an NF name.
+
+    Returns `None` when neither path resolves — e.g., `context.cx_active`
+    has no NF owner; some screener-derived metrics like `normalized.<nf>`
+    are stripped before lookup. Callers must tolerate None.
+
+    Used by `_decide_label`'s cluster-on-different-layer rule to detect
+    compound faults; see the module docstring for the rule.
+    """
+    if flag.kb_context and flag.kb_context.kb_metric_id:
+        parts = flag.kb_context.kb_metric_id.split(".")
+        if len(parts) >= 1 and parts[0] in ("infrastructure", "ran", "core", "ims"):
+            return parts[0]
+        # Two-part id `<nf>.<metric>` — fall through to the NF lookup
+        # path below using the canonical nf name from the id.
+        if len(parts) == 2:
+            nf = parts[0]
+            block = kb.metrics.get(nf)
+            if block is not None:
+                return block.layer.value
+
+    comp = flag.component
+    if isinstance(comp, str):
+        if comp in kb.metrics:
+            return kb.metrics[comp].layer.value
+        # The screener namespace prefixes `normalized.` / `derived.`
+        # leak through on some flags; strip and retry.
+        for prefix in ("normalized.", "derived."):
+            if comp.startswith(prefix):
+                nf = comp[len(prefix):].split(".")[0]
+                if nf in kb.metrics:
+                    return kb.metrics[nf].layer.value
+                break
+
+    return None
+
+
 def _resolve_kb_entry(
     flag: AnomalyFlag, kb: MetricsKB,
 ) -> tuple[Optional[MetricEntry], Optional[str]]:
@@ -259,18 +331,41 @@ def _decide_label(
     """Pick the final label and render a one-paragraph rationale.
 
     Decision table:
-        only transport             -> transport_layer
+        only transport             -> transport_layer*
         only application           -> application_layer
         both transport + app       -> mixed
         only ambiguous             -> mixed (path walk runs first; falls
                                             through to application-layer
                                             if it produces null localization)
         empty input                -> application_layer (caller short-circuits)
+
+        *Promotion to mixed when only T+ambiguous flags fire and the
+        ambiguous bucket clusters on an NF-owner layer different from
+        the transport flags' dominant owner layer (>=70% share). See
+        `_ambiguous_cluster_promotes_to_mixed` for the exact rule.
     """
     n_t, n_a, n_x = len(transport), len(application), len(ambiguous)
 
     if n_t > 0 and n_a == 0:
-        label: SymptomLabel = "transport_layer"
+        promote, promote_reason = _ambiguous_cluster_promotes_to_mixed(
+            transport, ambiguous,
+        )
+        if promote:
+            label: SymptomLabel = "mixed"
+            rationale = _render_rationale(
+                label, transport, application, ambiguous,
+                verdict_summary=(
+                    f"{n_t} transport-layer signal(s) plus {n_x} ambiguous "
+                    f"signal(s) clustering on a different NF-owner layer "
+                    f"({promote_reason}). Treated as compound: walker plus "
+                    f"application-layer pipeline both run; Synthesis merges "
+                    f"into a single (potentially multi-root-cause) verdict. "
+                    f"See ADR multi_fault_orchestration.md."
+                ),
+            )
+            return label, rationale
+
+        label = "transport_layer"
         rationale = _render_rationale(
             label, transport, application, ambiguous,
             verdict_summary=(
@@ -318,6 +413,80 @@ def _decide_label(
         ),
     )
     return label, rationale
+
+
+# Threshold for the cluster-on-different-layer promotion rule.
+# Picked empirically from the May-9-to-14 historical corpus (see
+# /tmp/analyze_classifier_corpus.py): every compound scenario in the
+# corpus produces an ambiguous-share >=86%, and ≥70% catches all
+# compound while keeping the single-fault false-positive rate
+# bounded. Tunable as more episodes accumulate.
+_AMBIGUOUS_CLUSTER_SHARE_THRESHOLD = 0.70
+
+
+def _ambiguous_cluster_promotes_to_mixed(
+    transport: list[FlagBucket],
+    ambiguous: list[FlagBucket],
+) -> tuple[bool, str]:
+    """Cluster-on-different-layer rule for promoting transport_layer -> mixed.
+
+    Returns (promote: bool, reason: str). The reason is included in the
+    rationale so an operator can audit the promotion.
+
+    The rule fires when:
+      1. The ambiguous bucket's dominant owner layer differs from the
+         transport bucket's dominant owner layer.
+      2. The ambiguous bucket's dominant-layer share is at least
+         `_AMBIGUOUS_CLUSTER_SHARE_THRESHOLD`.
+
+    Callers have already established that there are transport flags and
+    no application flags but at least one ambiguous flag — the rule is
+    only consulted when the existing "only T flags -> transport_layer"
+    branch would otherwise fire.
+    """
+    t_layer, _ = _dominant_owner_layer(transport)
+    x_layer, x_share = _dominant_owner_layer(ambiguous)
+
+    if t_layer is None or x_layer is None:
+        return False, (
+            f"cannot resolve owner-layer for transport (t={t_layer}) "
+            f"or ambiguous (x={x_layer}) — no promotion"
+        )
+    if x_layer == t_layer:
+        return False, (
+            f"ambiguous flags cluster on the same layer as transport "
+            f"({t_layer}) — symptoms are downstream consequences of one "
+            f"transport-layer fault, not compound"
+        )
+    if x_share < _AMBIGUOUS_CLUSTER_SHARE_THRESHOLD:
+        return False, (
+            f"ambiguous flags split across layers (dominant={x_layer} "
+            f"at {x_share:.0%}, threshold={_AMBIGUOUS_CLUSTER_SHARE_THRESHOLD:.0%}) "
+            f"— no coherent app-layer cluster"
+        )
+    return True, (
+        f"transport on {t_layer}; ambiguous cluster on {x_layer} "
+        f"({x_share:.0%})"
+    )
+
+
+def _dominant_owner_layer(
+    buckets: list[FlagBucket],
+) -> tuple[Optional[str], float]:
+    """Return (layer, share) for the most-represented `owner_layer` in
+    `buckets`. None when buckets is empty or no flag has a resolved
+    owner_layer."""
+    counts: dict[str, int] = {}
+    total = 0
+    for fb in buckets:
+        if fb.owner_layer is None:
+            continue
+        counts[fb.owner_layer] = counts.get(fb.owner_layer, 0) + 1
+        total += 1
+    if total == 0:
+        return None, 0.0
+    layer, count = max(counts.items(), key=lambda kv: kv[1])
+    return layer, count / total
 
 
 def _render_rationale(

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from agentic_ops_common.path_walk import (
     CleanHop,
+    ContainerDeadHop,
     DockerBridgeProber,
     DropsAttributedHere,
     DropsAttributedToInboundLink,
@@ -229,3 +230,137 @@ def test_inconclusive_hop_does_not_count_as_localization():
     )
     assert not report.is_localized
     assert report.first_attributed_hop is None
+
+
+def test_first_attributed_hop_finds_container_dead():
+    """A dead container at any position is the attributed hop, same as
+    drops/latency/link-loss. Task #61: distinguishes 'pyhss is exited'
+    from 'pyhss has no tc binary' so cascading scenarios surface the
+    death instead of swallowing it as an inconclusive."""
+    report = PathWalkReport(
+        flow_id="t", direction="uplink", anchor_ts=None, window_seconds=5,
+        hops=[
+            _record("a", CleanHop()),
+            _record("b", ContainerDeadHop(status="exited", detail="pyhss exited")),
+            _record("c", CleanHop()),
+        ],
+    )
+    assert report.is_localized
+    assert report.first_attributed_hop is not None
+    assert report.first_attributed_hop.hop.node == "b"
+    assert report.first_attributed_hop.attribution.kind == "container_dead"
+
+
+# ---------------------------------------------------------------------------
+# attributed_hops — multi-suspect walker output (ADR multi_fault_orchestration)
+# ---------------------------------------------------------------------------
+
+
+def test_attributed_hops_returns_empty_on_clean_walk():
+    """No attributions → empty list. Mirrors `first_attributed_hop`'s
+    None contract."""
+    report = PathWalkReport(
+        flow_id="t", direction="uplink", anchor_ts=None, window_seconds=5,
+        hops=[_record("a", CleanHop()), _record("b", CleanHop())],
+    )
+    assert report.attributed_hops == []
+
+
+def test_attributed_hops_collects_all_attributions_in_topology_order():
+    """Cascading scenario: pyhss container_dead + scscf latency. Both
+    surface, in walk order."""
+    report = PathWalkReport(
+        flow_id="t", direction="uplink", anchor_ts=None, window_seconds=5,
+        hops=[
+            _record("a", CleanHop()),
+            _record("pyhss", ContainerDeadHop(status="exited")),
+            _record("c", CleanHop()),
+            _record("scscf", LatencyAtHop(
+                observed_delay_ms=2000.0,
+                counter_kind="qdisc_netem_delay",
+                evidence="qdisc netem delay 2s",
+            )),
+        ],
+    )
+    nodes = [r.hop.node for r in report.attributed_hops]
+    assert nodes == ["pyhss", "scscf"]
+
+
+def test_attributed_hops_dedupes_same_node_iface_kind():
+    """A flow walk often visits the same hop on uplink and downlink legs
+    — same `(node, iface, kind)` triple → collapses to one entry. The
+    user-facing report shouldn't list scscf twice for the same fault."""
+    same_latency = LatencyAtHop(
+        observed_delay_ms=2000.0,
+        counter_kind="qdisc_netem_delay",
+        evidence="qdisc netem delay 2s",
+    )
+    report = PathWalkReport(
+        flow_id="t", direction="both", anchor_ts=None, window_seconds=5,
+        hops=[
+            _record("a", CleanHop()),
+            _record("scscf", same_latency),       # uplink leg
+            _record("b", CleanHop()),
+            _record("scscf", same_latency),       # downlink leg — same triple
+        ],
+    )
+    nodes = [r.hop.node for r in report.attributed_hops]
+    assert nodes == ["scscf"]
+
+
+def test_attributed_hops_keeps_different_kinds_on_same_node():
+    """Same NF + same iface but DIFFERENT kinds = operationally distinct
+    faults (e.g. uplink drops + downlink latency). Both are kept."""
+    report = PathWalkReport(
+        flow_id="t", direction="both", anchor_ts=None, window_seconds=5,
+        hops=[
+            _record("scscf", DropsAttributedHere(
+                counter_kind="qdisc_netem",
+                dropped_pkts=10, dropped_pct=0.30,
+                evidence="t",
+            )),
+            _record("scscf", LatencyAtHop(
+                observed_delay_ms=2000.0,
+                counter_kind="qdisc_netem_delay",
+                evidence="t",
+            )),
+        ],
+    )
+    kinds = [r.attribution.kind for r in report.attributed_hops]
+    assert kinds == ["drops_attributed_here", "latency_at_hop"]
+
+
+def test_attributed_hops_excludes_clean_and_inconclusive():
+    """Only load-bearing attributions count. Clean and inconclusive
+    are excluded."""
+    report = PathWalkReport(
+        flow_id="t", direction="uplink", anchor_ts=None, window_seconds=5,
+        hops=[
+            _record("a", CleanHop()),
+            _record("b", InconclusiveHop(reason="tool_unavailable")),
+            _record("c", ContainerDeadHop(status="exited")),
+        ],
+    )
+    nodes = [r.hop.node for r in report.attributed_hops]
+    assert nodes == ["c"]
+
+
+def test_first_attributed_hop_prefers_earliest_attribution_with_container_dead():
+    """If multiple hops have attributions — e.g. cascading scenario with
+    pyhss exited AND scscf netem delay — the walker returns the earliest
+    one in topology order, same as the existing rule for drops/latency."""
+    report = PathWalkReport(
+        flow_id="t", direction="uplink", anchor_ts=None, window_seconds=5,
+        hops=[
+            _record("a", CleanHop()),
+            _record("b", ContainerDeadHop(status="exited")),
+            _record("c", LatencyAtHop(
+                observed_delay_ms=2000.0,
+                counter_kind="qdisc_netem_delay",
+                evidence="t",
+            )),
+        ],
+    )
+    assert report.is_localized
+    assert report.first_attributed_hop.hop.node == "b"
+    assert report.first_attributed_hop.attribution.kind == "container_dead"

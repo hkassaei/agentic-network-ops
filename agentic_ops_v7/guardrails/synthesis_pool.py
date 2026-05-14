@@ -287,6 +287,14 @@ def lint_synthesis_pool_membership(
     if report.verdict_kind == "localized":
         return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
 
+    # `compound` (ADR `multi_fault_orchestration.md`) also bypasses the
+    # pool-membership check on its primary slot: the primary suspect comes
+    # from the walker's earliest attributed hop, not from the
+    # NOT_DISPROVEN pool. The dedicated `lint_compound_verdict_consistency`
+    # guardrail enforces the compound-specific invariants instead.
+    if report.verdict_kind == "compound":
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
     pool_nfs = [m.nf for m in pool.members]
     pool_nfs_set = set(pool_nfs)
 

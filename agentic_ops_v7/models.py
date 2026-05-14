@@ -20,7 +20,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # Re-export common trace models
 from agentic_ops_common.models import (  # noqa: F401
@@ -308,6 +308,56 @@ class InvestigatorVerdict(BaseModel):
 # Synthesis output
 # ============================================================================
 
+class RootCause(BaseModel):
+    """One contributing root cause in a compound diagnosis.
+
+    Mirror of the primary slot — suspect NF + layer + evidence pointer.
+    Populated by the compound-verdict branch when the walker found
+    transport-layer faults AND the application-layer pipeline produced
+    a strong-evidence hypothesis whose `primary_suspect_nf` differs
+    from the walker's primary attributed hop.
+
+    Each entry must cite its evidence source so the
+    `lint_compound_additional_causes` guardrail can verify the entry
+    against a real artifact in the input bundle. Fabricated entries
+    that point at nothing get REJECTed.
+
+    See ADR `multi_fault_orchestration.md`.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    primary_suspect_nf: _KnownNF = Field(
+        ...,
+        description="The NF this root cause implicates.",
+    )
+    fault_layer: Literal["transport", "application"] = Field(
+        ...,
+        description=(
+            "Which layer of fault this root cause sits in. `transport` "
+            "for walker-sourced kernel attributions, `application` for "
+            "NA/Investigator-sourced application-layer hypotheses."
+        ),
+    )
+    evidence_source: Literal["path_walk", "investigator", "anomaly_screener"] = Field(
+        ...,
+        description=(
+            "Which artifact in the input bundle backs this entry. "
+            "Verified by lint_compound_additional_causes."
+        ),
+    )
+    evidence_summary: str = Field(
+        ...,
+        description=(
+            "Short verbatim or near-verbatim excerpt from the evidence "
+            "source. Operator-facing — appears in the rendered diagnosis."
+        ),
+    )
+    confidence: Literal["high", "medium", "low"] = Field(
+        ...,
+        description="Synthesis's confidence in this contributing cause.",
+    )
+
+
 class DiagnosisReport(BaseModel):
     """Final NOC-ready diagnosis produced by Synthesis.
 
@@ -321,13 +371,22 @@ class DiagnosisReport(BaseModel):
     validates that Synthesis picked from the candidate pool of
     NOT_DISPROVEN suspects.
 
-    `verdict_kind` distinguishes the three branches Synthesis can land
+    `verdict_kind` distinguishes the four branches Synthesis can land
     on:
       * `confirmed` — a sole NOT_DISPROVEN survivor, or a bounded
         re-investigation produced NOT_DISPROVEN.
       * `promoted` — diagnosis derived from `alternative_suspects`
         cross-corroboration in an all-DISPROVEN tree.
       * `inconclusive` — empty pool, or evidence too weak to commit.
+      * `localized` — v7 transport-layer-fault branch; path-walk
+        produced a hop attribution. See ADR
+        `path_anchored_probe_planning_for_transport_layer_faults.md`.
+      * `compound` — both transport-layer (walker) AND application-layer
+        (NA + Investigators) produced distinct evidence of separate root
+        causes. The primary slot carries the most-localized cause
+        (typically the walker's earliest attributed hop); the additional
+        causes go in `additional_root_causes`. See ADR
+        `multi_fault_orchestration.md`.
     """
     summary: str
     root_cause: str
@@ -340,14 +399,18 @@ class DiagnosisReport(BaseModel):
             "'promoted'. None when verdict_kind is 'inconclusive'."
         ),
     )
-    verdict_kind: Literal["confirmed", "promoted", "inconclusive", "localized"] = Field(
+    verdict_kind: Literal[
+        "confirmed", "promoted", "inconclusive", "localized", "compound",
+    ] = Field(
         default="inconclusive",
         description=(
             "Which Synthesis branch the diagnosis came from. Drives "
             "downstream confidence calibration and pool membership "
             "validation. `localized` is the v7 transport-layer-fault "
-            "branch (path-walk produced a hop attribution); see ADR "
-            "path_anchored_probe_planning_for_transport_layer_faults.md."
+            "branch (path-walk produced a hop attribution). `compound` "
+            "is when walker AND application-layer both produced distinct "
+            "evidence of separate root causes — see ADR "
+            "multi_fault_orchestration.md."
         ),
     )
     affected_components: list[dict] = Field(default_factory=list)
@@ -357,9 +420,20 @@ class DiagnosisReport(BaseModel):
     localization: "Optional[Localization]" = Field(
         default=None,
         description=(
-            "Populated when verdict_kind == 'localized': the path-walk's "
-            "hop attribution carrying the verbatim transport-layer counter "
-            "evidence. None for the application-layer verdict_kinds."
+            "Populated when verdict_kind == 'localized' or 'compound': "
+            "the path-walk's hop attribution carrying the verbatim "
+            "transport-layer counter evidence for the primary slot. "
+            "None for the application-layer verdict_kinds."
+        ),
+    )
+    additional_root_causes: list[RootCause] = Field(
+        default_factory=list,
+        description=(
+            "Populated when verdict_kind == 'compound': non-primary "
+            "contributing root causes. Empty for every other verdict_kind. "
+            "Verified by lint_compound_additional_causes — each entry's "
+            "evidence_source must point at a real artifact in the input "
+            "bundle. See ADR multi_fault_orchestration.md."
         ),
     )
 
@@ -400,6 +474,7 @@ class Localization(BaseModel):
         "drops_attributed_here",
         "drops_attributed_to_inbound_link",
         "latency_at_hop",
+        "container_dead",
     ] = Field(
         ...,
         description="Which HopAttribution variant the walker produced.",

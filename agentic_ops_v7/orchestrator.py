@@ -100,6 +100,10 @@ from .guardrails.llm_output_sanitizer import (
 from .guardrails.synthesis_localized_consistency import (
     lint_localized_verdict_consistency,
 )
+from .guardrails.synthesis_compound_consistency import (
+    lint_compound_additional_causes,
+    lint_compound_verdict_consistency,
+)
 from .guardrails.base import GuardrailVerdict
 from .models import (
     CorrelationAnalysis,
@@ -557,6 +561,7 @@ async def _phase06_transport_layer_route(
     question: str,
     session_service: InMemorySessionService,
     on_event=None,
+    short_circuit_on_localize: bool = True,
 ) -> Optional[dict]:
     """Run the transport-layer pipeline for transport_layer / mixed symptoms.
 
@@ -572,14 +577,27 @@ async def _phase06_transport_layer_route(
     inlined." The `synthesize_localized` deterministic Python path that
     previously lived here was a parallel synthesizer that produced
     branch-dependent output formatting; deleted in favor of this unified
-    flow so localized and confirmed/promoted/inconclusive verdicts share
-    the same DiagnosisReport rendering and downstream guardrails.
+    flow so localized and compound/confirmed/promoted/inconclusive
+    verdicts share the same DiagnosisReport rendering and downstream
+    guardrails.
+
+    Args:
+      short_circuit_on_localize: When True (default, the `transport_layer`
+        classifier path), the helper runs localized Synthesis and returns
+        a fully-built result dict on walker localization. When False (the
+        `mixed` classifier path, per ADR `multi_fault_orchestration.md`),
+        the walker still runs and populates `state["path_walk_report"]`
+        but the helper returns None unconditionally — the orchestrator
+        then runs the application-layer pipeline and the compound
+        Synthesis branch synthesizes both bundles together.
 
     Returns:
         A fully-built result dict when the walker produced an attribution
-        (caller short-circuits and returns this directly).
-        None when no hop attributed a fault (caller falls through to the
-        application-layer pipeline).
+        AND `short_circuit_on_localize=True` (caller short-circuits and
+        returns this directly).
+        None when no hop attributed a fault, OR when
+        `short_circuit_on_localize=False` regardless of walker outcome
+        (caller falls through to the application-layer pipeline).
     """
     from .path_resolver import resolve_path
     from .symptom_classifier import SymptomClassification, FlagBucket
@@ -675,6 +693,25 @@ async def _phase06_transport_layer_route(
     ))
 
     if not walk_report.is_localized:
+        return None
+
+    # `mixed`-label path (ADR `multi_fault_orchestration.md`): the walker
+    # localized, but we deliberately do not short-circuit. The orchestrator
+    # runs the application-layer pipeline next and the Synthesis agent's
+    # compound branch will receive both bundles. The walker bundle is
+    # rendered here so the Synthesis prompt sees it under
+    # `{path_walk_for_synthesis}` (same key the localized branch uses).
+    if not short_circuit_on_localize:
+        state["path_walk_for_synthesis"] = _render_path_walk_for_synthesis(
+            walk_report, classification,
+        )
+        log.info(
+            "Phase 0.6: walker localized at %s[%s]; running app-layer "
+            "pipeline in parallel for compound Synthesis "
+            "(short_circuit_on_localize=False).",
+            walk_report.first_attributed_hop.hop.node,
+            walk_report.first_attributed_hop.hop.iface,
+        )
         return None
 
     # ---- Phase 7 Synthesis (LLM, `localized` verdict) ----
@@ -803,6 +840,7 @@ def _reconstruct_classification(state: dict):
                     flag=flag,
                     bucket=f.get("bucket", "ambiguous"),
                     reason=f.get("reason", ""),
+                    owner_layer=f.get("owner_layer"),
                 ))
             return out
 
@@ -833,6 +871,7 @@ def _path_walk_report_to_dict(report) -> dict:
         for field in ("counter_kind", "dropped_pkts", "dropped_pct",
                       "observed_loss_pct", "tx_rate", "rx_rate",
                       "observed_delay_ms", "reason", "detail",
+                      "status",  # ContainerDeadHop
                       "evidence"):
             if hasattr(a, field):
                 out[field] = getattr(a, field)
@@ -881,6 +920,7 @@ def _render_path_walk_for_synthesis(report, classification) -> str:
     field is populated from the same hop's attribution variant.
     """
     from agentic_ops_common.path_walk import (
+        ContainerDeadHop,
         DropsAttributedHere,
         DropsAttributedToInboundLink,
         InconclusiveHop,
@@ -925,6 +965,8 @@ def _render_path_walk_for_synthesis(report, classification) -> str:
             attr_summary = f"{a.kind} ({a.observed_delay_ms:.0f}ms, {a.counter_kind})"
         elif isinstance(a, InconclusiveHop):
             attr_summary = f"{a.kind} ({a.reason})"
+        elif isinstance(a, ContainerDeadHop):
+            attr_summary = f"{a.kind} (status={a.status})"
         else:
             attr_summary = a.kind
         lines.append(
@@ -955,6 +997,11 @@ def _render_path_walk_for_synthesis(report, classification) -> str:
             lines.append(
                 f"- `counter_kind`: `{a.counter_kind}`  "
                 f"`observed_delay_ms`: {a.observed_delay_ms}"
+            )
+        elif isinstance(a, ContainerDeadHop):
+            lines.append(
+                f"- `status`: `{a.status}`  "
+                f"`detail`: {a.detail}"
             )
         evidence = getattr(a, "evidence", "(no evidence available)")
         lines.append("")
@@ -1012,6 +1059,14 @@ _RAG_MIN_SIMILARITY_DEFAULT = 0.40
 # rules. The default lives next to the loader; env var override lets
 # operators swap in alternate lesson sets for A/B comparison.
 _LESSONS_PATH_ENV_VAR = "LESSONS_YAML_PATH"
+
+# (Per-episode token cap for `mixed` runs removed 2026-05-15. The
+# constant lived here under the name `_COMPOUND_RUN_TOKEN_BUDGET` with
+# a 200K threshold; removed after `run_20260514_220149_data_plane_degradation`
+# showed the cap was sized against a no-fanout worst case and triggered
+# on a normal Investigator-fan-out run (458K cumulative, valid h1=UPF
+# diagnosis). See ADR `multi_fault_orchestration.md` §Circuit-breakers
+# for the corrected post-mortem; this comment is the durable pointer.)
 
 
 def _resolve_rag_min_similarity() -> float:
@@ -2097,30 +2152,42 @@ async def investigate(
     #   resolver  -> ordered hop list (from flows + topology authoring)
     #   walker    -> per-hop attribution via KernelHopProber + DockerBridgeProber
     #   synthesis -> `localized` DiagnosisReport with verbatim counter evidence
+    #                (transport_layer short-circuit path only)
     #
-    # If the walker produces an attribution: short-circuit and return the
-    # localized diagnosis (skipping Phases 1-7). If the walker returns null
-    # localization (no kernel/network-element drops anywhere on the implicated
-    # path), fall through to the application-layer pipeline below — handles
-    # the `mixed` case where the symptom turned out to be application-layer
-    # after all (e.g. HSS unresponsive).
+    # Routing per classifier label, per ADR `multi_fault_orchestration.md`:
     #
-    # See ADR `path_anchored_probe_planning_for_transport_layer_faults.md`.
+    #   transport_layer  walker runs; short-circuit to Synthesis (localized)
+    #                    if walker localized. Null-localize falls through to
+    #                    application-layer pipeline (which then emits one of
+    #                    confirmed / promoted / inconclusive).
+    #   mixed            walker runs; NEVER short-circuits regardless of
+    #                    walker outcome. The application-layer pipeline runs
+    #                    next, and Synthesis's compound branch receives both
+    #                    bundles to surface multiple root causes.
+    #   application_layer walker is skipped entirely.
+    #
+    # See ADRs `path_anchored_probe_planning_for_transport_layer_faults.md`
+    # (transport-layer pipeline) and `multi_fault_orchestration.md`
+    # (compound-verdict routing).
     classification_dict = state.get("symptom_classification", {})
     classifier_label = classification_dict.get("label", "application_layer")
     if classifier_label in ("transport_layer", "mixed"):
+        short_circuit = (classifier_label == "transport_layer")
         localized_result = await _phase06_transport_layer_route(
             state, all_phases, run_start,
             question=question,
             session_service=session_service,
             on_event=on_event,
+            short_circuit_on_localize=short_circuit,
         )
         if localized_result is not None:
             return localized_result
-        # Fall through to application-layer pipeline.
+        # Fall through to application-layer pipeline. For transport_layer
+        # this means the walker null-localized; for mixed it's the
+        # deliberate fall-through so the compound Synthesis branch fires.
         log.info(
-            "Phase 0.6 path walk produced null localization; falling through "
-            "to application-layer pipeline for `%s` classification.",
+            "Phase 0.6 done for `%s`; falling through to application-layer "
+            "pipeline (walker outcome stored in state['path_walk_report']).",
             classifier_label,
         )
 
@@ -2528,6 +2595,20 @@ async def investigate(
     )
     all_phases.append(ev_trace)
 
+    # NOTE: a per-episode token cap on `mixed` runs was drafted with this
+    # phase (see git history of `_COMPOUND_RUN_TOKEN_BUDGET`) and removed
+    # 2026-05-15 after `run_20260514_220149_data_plane_degradation` —
+    # a single-fault Data Plane Degradation scenario that the classifier
+    # false-positive-labeled `mixed`. The cap killed an otherwise clean
+    # h1=UPF NOT_DISPROVEN diagnosis at 458K cumulative tokens. The
+    # original 200K threshold was sized to "worst-case app-layer ~160K",
+    # but that figure was a no-walker / no-fanout run. Three parallel
+    # multi-shot Investigators routinely cumulate 300K–500K on perfectly
+    # valid runs, so the cap was triggered by normal pipeline behavior
+    # rather than runaway. The cap is gone. If a future runaway shows
+    # up, re-add as a per-Synthesis-call cap (not whole-run cumulative)
+    # so Investigator fan-out can't trip it.
+
     # -------- Phase 7: Synthesis --------
     # Three layered guards on Synthesis output:
     #   (a) Empty-output retry — same silent-bail ADK pattern as NA / IG.
@@ -2551,6 +2632,7 @@ async def investigate(
     # entitled to emit verdict_kind=localized here — there's no walker
     # attribution backing it.
     _captured_path_walk_report_app = state.get("path_walk_report")
+    _captured_network_analysis_app = state.get("network_analysis")
 
     def _synthesis_combined_guardrail(report):
         # (a) Localized-verdict consistency — fires FIRST because
@@ -2569,6 +2651,35 @@ async def investigate(
             )
             return consistency
 
+        # (a.5) Compound-verdict consistency — fires second, BEFORE
+        # pool-membership / cap. `compound` is invalid when only one
+        # branch's evidence was available; the dedicated guardrail
+        # tells the resampler what to degrade to. See ADR
+        # `multi_fault_orchestration.md`.
+        compound_consistency = lint_compound_verdict_consistency(
+            report,
+            _captured_path_walk_report_app,
+            _captured_network_analysis_app,
+        )
+        if compound_consistency.verdict is not GuardrailVerdict.PASS:
+            log.info(
+                "Synthesis compound-verdict consistency REJECT: %s",
+                compound_consistency.reason[:200],
+            )
+            return compound_consistency
+
+        compound_causes = lint_compound_additional_causes(report)
+        if compound_causes.verdict is not GuardrailVerdict.PASS:
+            log.info(
+                "Synthesis compound additional_root_causes REJECT: %s",
+                compound_causes.reason[:200],
+            )
+            return compound_causes
+
+        # Pool membership and the confidence cap both short-circuit on
+        # verdict_kind == "compound" (see their early-returns); the
+        # `compound`-specific invariants above are the only post-emit
+        # checks for that branch.
         membership = lint_synthesis_pool_membership(report, pool)
         if membership.verdict is not GuardrailVerdict.PASS:
             return membership
@@ -2819,6 +2930,18 @@ def _render_diagnosis_report_to_markdown(report: DiagnosisReport) -> str:
     lines.append(f"- **recommendation**: {report.recommendation}")
     lines.append(f"- **confidence**: {report.root_cause_confidence}")
     lines.append(f"- **verdict_kind**: {report.verdict_kind}")
+    # Compound verdict (ADR `multi_fault_orchestration.md`): list every
+    # `additional_root_causes` entry so the operator and the LLM scorer
+    # both see the multi-root-cause structure. Empty list for every other
+    # verdict_kind; the field defaults to [] on parse.
+    if report.verdict_kind == "compound" and report.additional_root_causes:
+        lines.append("- **additional_root_causes**:")
+        for rc in report.additional_root_causes:
+            lines.append(
+                f"    - `{rc.primary_suspect_nf}` "
+                f"({rc.fault_layer}, source=`{rc.evidence_source}`, "
+                f"confidence={rc.confidence}): {rc.evidence_summary}"
+            )
     lines.append(f"- **explanation**: {report.explanation}")
     return "\n".join(lines)
 

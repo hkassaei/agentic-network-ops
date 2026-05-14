@@ -6,18 +6,24 @@ For lab `container` hops, this prober runs `tc -s qdisc show` and
 
 Attribution rules (in order):
 
-1. **DropsAttributedHere** — `tc -s qdisc show` reports a netem qdisc
+1. **ContainerDeadHop** — `docker inspect` reports the container's
+   `State.Status` as anything other than `running` (or `"absent"` when
+   the container does not exist at all). Probes can't run inside a
+   dead container, but unlike `tool_unavailable` the death is itself
+   the fault signal — Synthesis treats this as a strong attribution.
+2. **DropsAttributedHere** — `tc -s qdisc show` reports a netem qdisc
    with non-zero `dropped` packets, OR a tbf qdisc with drops, OR an
    interface counter (`rx_dropped`/`tx_dropped`) is non-zero with no
    qdisc explanation. The kernel is the source of truth; this is an
    exact attribution.
-2. **LatencyAtHop** — `tc -s qdisc show` reports a netem qdisc with a
+3. **LatencyAtHop** — `tc -s qdisc show` reports a netem qdisc with a
    `delay` parameter > 0 (and no drops). Captures injected latency
    faults.
-3. **InconclusiveHop** — `tc` or `ip` not present in the container
+4. **InconclusiveHop** — `tc` or `ip` not present in the container
    (caught by the toolbelt-preflight inside the wrappers), or the
-   container is unreachable.
-4. **CleanHop** — none of the above fired. The hop's local counters
+   container is unreachable. Only emitted for *running* containers —
+   "container exited" is `ContainerDeadHop`, not `inconclusive`.
+5. **CleanHop** — none of the above fired. The hop's local counters
    show no fault.
 
 This prober deliberately does **not** read application-layer state —
@@ -33,12 +39,14 @@ from __future__ import annotations
 from typing import Optional
 
 from agentic_ops_common.tools.reachability import (
+    get_container_status,
     get_interface_drops,
     get_qdisc_drops,
 )
 
 from ..protocol import (
     CleanHop,
+    ContainerDeadHop,
     DropsAttributedHere,
     Hop,
     HopAttribution,
@@ -75,6 +83,26 @@ class KernelHopProber:
                 detail=(
                     f"KernelHopProber does not handle hop_kind={hop.kind!r}; "
                     f"supported: {self.supported_kinds}"
+                ),
+            )
+
+        # ---- 0. container liveness ----
+        # Distinguishes "container is healthy but lacks tc/ip" (legitimate
+        # tool_unavailable) from "container is exited / absent" (fault
+        # signal in its own right). Without this, `docker exec` against a
+        # dead container would propagate as a generic _container_has_binary
+        # failure and the prober would emit a misleading tool_unavailable
+        # for the dead hop — silently hiding the death from the walker.
+        # See task #61 and run_20260514_193941_cascading_ims_failure.md
+        # for the original symptom.
+        status = await get_container_status(hop.node)
+        if status != "running":
+            return ContainerDeadHop(
+                status=status,
+                detail=(
+                    f"container '{hop.node}' state is `{status}` "
+                    f"(expected `running`); probes cannot execute against a "
+                    f"non-running container"
                 ),
             )
 

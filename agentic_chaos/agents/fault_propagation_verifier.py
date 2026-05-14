@@ -89,6 +89,16 @@ class FaultPropagationVerifier(BaseAgent):
         elapsed = (datetime.now(timezone.utc) - start).total_seconds()
         log.info("Taking verification snapshot (%.1fs after start)...", elapsed)
 
+        # Compute the *real* propagation window — the time between the
+        # earliest successful fault injection and this verification
+        # snapshot. With the ObservationTrafficAgent in front of us this
+        # is typically ~120s even though `wait_seconds` is 0; reporting
+        # `wait_seconds=0, elapsed_seconds=0.0` alone makes the verifier
+        # look like it skipped its job. This field disambiguates.
+        propagation_window_seconds = _propagation_window_since_first_fault(
+            ctx.session.state, until=datetime.now(timezone.utc),
+        )
+
         # Snapshot current metrics
         try:
             current_metrics = await asyncio.wait_for(
@@ -105,24 +115,32 @@ class FaultPropagationVerifier(BaseAgent):
         # Filter out baseline noise using the ontology
         filtered_delta = _filter_significant(raw_delta)
 
-        # Determine verdict
+        # Determine verdict. We report the *propagation window* (time
+        # since the first fault was injected, including any prior
+        # ObservationTrafficAgent run) rather than the verifier's own
+        # in-helper wait — the latter is 0 on the normal path and
+        # confused operators reading the episode markdown.
+        propagation_label = f"{int(propagation_window_seconds)}s" if (
+            propagation_window_seconds is not None
+        ) else f"{wait_seconds}s"
+
         if filtered_delta:
             verdict = "confirmed"
             msg = (
-                f"Fault propagation CONFIRMED after {wait_seconds}s. "
+                f"Fault propagation CONFIRMED after {propagation_label}. "
                 f"Significant deltas on: {sorted(filtered_delta.keys())}"
             )
         elif raw_delta:
             verdict = "inconclusive"
             msg = (
-                f"Fault propagation INCONCLUSIVE after {wait_seconds}s. "
+                f"Fault propagation INCONCLUSIVE after {propagation_label}. "
                 f"Some metrics drifted but none exceeded significance thresholds. "
                 f"Drifted nodes: {sorted(raw_delta.keys())}"
             )
         else:
             verdict = "not_observed"
             msg = (
-                f"Fault propagation NOT_OBSERVED after {wait_seconds}s. "
+                f"Fault propagation NOT_OBSERVED after {propagation_label}. "
                 f"No metric deltas detected vs baseline. The fault may not "
                 f"have propagated or may not produce detectable metric signals."
             )
@@ -133,6 +151,16 @@ class FaultPropagationVerifier(BaseAgent):
             "verdict": verdict,
             "wait_seconds": wait_seconds,
             "elapsed_seconds": round(elapsed, 2),
+            # Real propagation window: time between first fault injection
+            # and this verification snapshot. None if no successful fault
+            # has an `injected_at` timestamp in state (defensive — should
+            # not happen in normal flow). The recorder renders this in
+            # preference to wait_seconds + elapsed_seconds when present.
+            "propagation_window_seconds": (
+                round(propagation_window_seconds, 2)
+                if propagation_window_seconds is not None else None
+            ),
+            "observation_phase_ran": observation_ran,
             "verified_at": datetime.now(timezone.utc).isoformat(),
             "filtered_deltas": filtered_delta,
             "raw_delta_node_count": len(raw_delta),
@@ -227,6 +255,44 @@ def _filter_significant(raw_delta: dict[str, dict]) -> dict[str, dict]:
         if kept:
             out[node] = kept
     return out
+
+
+def _propagation_window_since_first_fault(
+    state: dict, *, until: datetime,
+) -> float | None:
+    """Seconds between the earliest successful fault injection and `until`.
+
+    Reads `state["faults_injected"]` (set by the FaultInjector) and finds
+    the minimum `injected_at` across faults that report success=True. The
+    timestamp is the ISO-8601 string the injector writes; parsing is
+    permissive (we tolerate trailing `Z`).
+
+    Returns `None` if no successful fault has a parseable timestamp.
+    Used by the verifier to report the actual time since fault injection,
+    independent of whether the verifier itself waited or whether the
+    ObservationTrafficAgent already ran ahead of it.
+    """
+    faults = state.get("faults_injected") or []
+    if not isinstance(faults, list):
+        return None
+    earliest: datetime | None = None
+    for f in faults:
+        if not isinstance(f, dict) or not f.get("success"):
+            continue
+        ts_raw = f.get("injected_at")
+        if not isinstance(ts_raw, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if earliest is None or ts < earliest:
+            earliest = ts
+    if earliest is None:
+        return None
+    if earliest.tzinfo is None:
+        earliest = earliest.replace(tzinfo=timezone.utc)
+    return (until - earliest).total_seconds()
 
 
 def create_fault_propagation_verifier() -> FaultPropagationVerifier:

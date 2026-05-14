@@ -206,6 +206,13 @@ class ChallengeAgent(BaseAgent):
             "resolved_path":          diagnosis_dict.get("_resolved_path"),
             "path_walk_report":       diagnosis_dict.get("_path_walk_report"),
             "diagnosis_report":       diagnosis_dict.get("_diagnosis_report"),
+            # v7 RAG observability (Phase 2.5 / 2.5b + post-Phase-3 citation
+            # scan). Recorder reads these via challenge.get(...) to render
+            # the "RAG & Operational Lessons" section. None when the
+            # localized branch fired or RAG is disabled.
+            "rag_retrieval_metadata":   diagnosis_dict.get("_rag_retrieval_metadata"),
+            "lessons_injection_metadata": diagnosis_dict.get("_lessons_injection_metadata"),
+            "rag_na_citations":         diagnosis_dict.get("_rag_na_citations"),
         }
 
         total = score.get("total_score", 0)
@@ -430,6 +437,14 @@ class ChallengeAgent(BaseAgent):
             "_resolved_path":          result.get("resolved_path"),
             "_path_walk_report":       result.get("path_walk_report"),
             "_diagnosis_report":       result.get("diagnosis_report"),
+            # v7 RAG observability (Phase 2.5 / 2.5b + post-Phase-3 citation
+            # scan). All three are None when the localized branch fired
+            # (Phases 1-7 didn't run). Forwarded into challenge_result so
+            # the recorder can render the "RAG & Operational Lessons"
+            # section in the episode markdown.
+            "_rag_retrieval_metadata":   result.get("rag_retrieval_metadata"),
+            "_lessons_injection_metadata": result.get("lessons_injection_metadata"),
+            "_rag_na_citations":         result.get("rag_na_citations"),
         }
 
     async def _run_live_impl(self, ctx):

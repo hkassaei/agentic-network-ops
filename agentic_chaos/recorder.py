@@ -1266,11 +1266,15 @@ def _format_transport_layer_route(
 
     status = "✅ **localized**" if is_localized else "⚠️ **null localization**"
     out.append(f"**Status:** {status}")
-    if first_hop:
-        hop_obj = first_hop.get("hop", {}) if isinstance(first_hop, dict) else {}
+    if isinstance(first_hop, dict):
+        # `first_attributed_hop` is serialized by
+        # `agentic_ops_v7.orchestrator._path_walk_report_to_dict` as a
+        # flat `{node, kind, iface}` dict — not a nested HopRecord. Read
+        # the keys directly here. Reading `first_hop["hop"]` (legacy bug)
+        # rendered `?[?]` because the nested `hop` key never existed.
         out.append(
-            f"**First attributed hop:** `{hop_obj.get('node','?')}"
-            f"[{hop_obj.get('iface','?')}]`"
+            f"**First attributed hop:** `{first_hop.get('node','?')}"
+            f"[{first_hop.get('iface','?')}]`"
         )
     out.append(
         f"**Window:** {window_seconds}s  \n"
@@ -1287,11 +1291,15 @@ def _format_transport_layer_route(
             hop = rec.get("hop", {}) if isinstance(rec, dict) else {}
             attr = rec.get("attribution", {}) if isinstance(rec, dict) else {}
             kind = attr.get("kind") if isinstance(attr, dict) else "?"
+            # `first_hop` is flat `{node, kind, iface}` per
+            # `_path_walk_report_to_dict`. The legacy `first_hop["hop"]`
+            # path silently returned `None == hop_node` (False) and the
+            # marker never appeared. Same fix as `_first_attributed_index`.
             marker = "🎯 " if (
                 first_hop
                 and isinstance(first_hop, dict)
-                and first_hop.get("hop", {}).get("node") == hop.get("node")
-                and first_hop.get("hop", {}).get("iface") == hop.get("iface")
+                and first_hop.get("node") == hop.get("node")
+                and first_hop.get("iface") == hop.get("iface")
                 and i == _first_attributed_index(walk_hops, first_hop)
             ) else ""
             detail = _format_hop_attribution_detail(attr)
@@ -1316,10 +1324,30 @@ def _format_transport_layer_route(
         return out
 
     if not diagnosis_report:
-        out.append(
-            "*Walker localized but synthesis returned None — defensive "
-            "fall-through to app-layer pipeline.*"
-        )
+        # Two reasons this branch fires:
+        #   1. classifier_label == "mixed" — the walker localized but the
+        #      orchestrator deliberately fell through to the app-layer
+        #      pipeline so the compound Synthesis branch could merge
+        #      both bundles. See ADR `multi_fault_orchestration.md`.
+        #   2. Defensive — localized Synthesis genuinely returned None
+        #      (this shouldn't happen in the normal flow but the orchestrator
+        #      degrades to the app-layer pipeline rather than crashing).
+        # Differentiate the two so an operator reading the episode log
+        # knows which path was taken.
+        if (symptom_classification or {}).get("label") == "mixed":
+            out.append(
+                "*Walker localized; routing through the application-layer "
+                "pipeline (Phases 1-7) in parallel so the compound "
+                "Synthesis branch can merge walker + NA evidence into a "
+                "multi-root-cause verdict. The final diagnosis appears in "
+                "`Agent Diagnosis` below with `verdict_kind=compound`. "
+                "See ADR `multi_fault_orchestration.md`.*"
+            )
+        else:
+            out.append(
+                "*Walker localized but synthesis returned None — defensive "
+                "fall-through to app-layer pipeline.*"
+            )
         return out
 
     verdict_kind = diagnosis_report.get("verdict_kind", "?")
@@ -1346,22 +1374,32 @@ def _format_transport_layer_route(
 def _first_attributed_index(walk_hops, first_hop) -> int:
     """Return the index of the first attributed hop (matching `first_hop`)
     so we don't double-mark identical-(node,iface) records earlier on the
-    walk. Returns -1 if not found."""
+    walk. Returns -1 if not found.
+
+    `first_hop` is the flat `{node, kind, iface}` dict serialized by
+    `_path_walk_report_to_dict`. The legacy code expected a nested
+    `{hop: {...}}` shape and silently returned -1, which prevented the
+    🎯 marker from appearing on the walk table.
+    """
     if not isinstance(first_hop, dict):
         return -1
-    target = first_hop.get("hop", {})
+    target_node = first_hop.get("node")
+    target_iface = first_hop.get("iface")
+    if target_node is None or target_iface is None:
+        return -1
     for i, rec in enumerate(walk_hops):
         if not isinstance(rec, dict):
             continue
         hop = rec.get("hop", {})
         attr = rec.get("attribution", {})
-        if (hop.get("node") == target.get("node")
-                and hop.get("iface") == target.get("iface")
+        if (hop.get("node") == target_node
+                and hop.get("iface") == target_iface
                 and isinstance(attr, dict)
                 and attr.get("kind") in (
                     "drops_attributed_here",
                     "drops_attributed_to_inbound_link",
                     "latency_at_hop",
+                    "container_dead",
                 )):
             return i
     return -1
@@ -1392,6 +1430,9 @@ def _format_hop_attribution_detail(attr) -> str:
         delay = attr.get("observed_delay_ms")
         ck = attr.get("counter_kind", "?")
         return f"`{ck}`: delay {delay} ms"
+    if kind == "container_dead":
+        status = attr.get("status", "?")
+        return f"**container `{status}`**"
     if kind == "inconclusive":
         reason = attr.get("reason", "?")
         detail = attr.get("detail", "")
@@ -1470,8 +1511,28 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
         lines.append("")
         lines.append(f"**Verdict:** {verdict_icon} `{verdict}`")
         lines.append("")
-        lines.append(f"- **Wait:** {verification.get('wait_seconds', '?')}s")
-        lines.append(f"- **Actual elapsed:** {verification.get('elapsed_seconds', '?')}s")
+        # Prefer `propagation_window_seconds` (time since first fault was
+        # injected) when present — that's the operationally meaningful
+        # window. Fall back to the legacy `wait_seconds`/`elapsed_seconds`
+        # pair for older episodes that pre-date the field.
+        prop_window = verification.get("propagation_window_seconds")
+        if prop_window is not None:
+            obs_ran = verification.get("observation_phase_ran")
+            verifier_wait = verification.get("wait_seconds")
+            if obs_ran:
+                lines.append(
+                    f"- **Propagation window:** {prop_window:.0f}s "
+                    f"(ObservationTrafficAgent drove traffic for this window; "
+                    f"verifier added wait={verifier_wait}s on top)"
+                )
+            else:
+                lines.append(
+                    f"- **Propagation window:** {prop_window:.0f}s "
+                    f"(verifier wait={verifier_wait}s; no prior observation traffic)"
+                )
+        else:
+            lines.append(f"- **Wait:** {verification.get('wait_seconds', '?')}s")
+            lines.append(f"- **Actual elapsed:** {verification.get('elapsed_seconds', '?')}s")
         lines.append(
             f"- **Nodes with significant deltas:** "
             f"{len(verification.get('filtered_deltas', {}))}"

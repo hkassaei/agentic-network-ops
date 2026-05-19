@@ -1480,32 +1480,56 @@ _LESSON_ID_RE = _RE_CITATIONS.compile(r"\bL\d+\b")
 
 def _collect_na_text_fields(na_report) -> str:
     """Concatenate the NA report's free-text fields into one string for
-    citation scanning. Tolerant of None / missing pieces."""
+    citation scanning. Tolerant of None / missing pieces.
+
+    Includes every LLM-written prose field where a `L<digits>` or
+    case_id citation could plausibly appear. Notably this is NOT just
+    the hypothesis statement — past runs cite lessons inside
+    falsification-probe text ("disprove via X, per lesson L04") and
+    inside layer-status evidence bullets. Missing any of these makes
+    the recorder's "NA citations" section silently under-count.
+
+    Audit target: run_20260514_222937_data_plane_degradation cited
+    `L04` in h1's falsification probe text; the original collector
+    walked statement + supporting_events only and missed it.
+    """
     if na_report is None:
         return ""
     parts: list[str] = []
-    summary = getattr(na_report, "summary", "") or ""
+
+    def _get(obj, name, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
+
+    summary = _get(na_report, "summary", "") or ""
     parts.append(str(summary))
-    layer_status = getattr(na_report, "layer_status", {}) or {}
+
+    layer_status = _get(na_report, "layer_status", {}) or {}
     if isinstance(layer_status, dict):
         for layer in layer_status.values():
-            note = getattr(layer, "note", "") if not isinstance(layer, dict) else layer.get("note", "")
+            note = _get(layer, "note", "") or ""
             if note:
                 parts.append(str(note))
-    hypotheses = getattr(na_report, "hypotheses", []) or []
-    for h in hypotheses:
-        statement = (
-            getattr(h, "statement", "") if not isinstance(h, dict) else h.get("statement", "")
-        )
+            for ev in _get(layer, "evidence", []) or []:
+                parts.append(str(ev))
+
+    for h in _get(na_report, "hypotheses", []) or []:
+        statement = _get(h, "statement", "") or ""
         if statement:
             parts.append(str(statement))
-        # supporting_events are token-shaped (event_type ids); not text
-        # the LLM would write a citation into, but include for completeness.
-        supports = (
-            getattr(h, "supporting_events", []) if not isinstance(h, dict) else h.get("supporting_events", [])
-        )
-        for s in supports or []:
+        # supporting_events are typed event-id tokens, not natural prose;
+        # included for completeness so a citation embedded in a custom
+        # event id still surfaces.
+        for s in _get(h, "supporting_events", []) or []:
             parts.append(str(s))
+        # falsification_probes IS natural prose — load-bearing for L0x
+        # citations. Originally missed; pinned by the data-plane run.
+        for p in _get(h, "falsification_probes", []) or []:
+            parts.append(str(p))
+
     return "\n".join(parts)
 
 

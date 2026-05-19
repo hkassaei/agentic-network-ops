@@ -249,14 +249,21 @@ def test_lessons_metadata_records_injected_from_cache(monkeypatch, tmp_path):
 
 
 class _FakeHypothesis:
-    def __init__(self, statement, supporting_events=()):
+    def __init__(
+        self,
+        statement,
+        supporting_events=(),
+        falsification_probes=(),
+    ):
         self.statement = statement
         self.supporting_events = list(supporting_events)
+        self.falsification_probes = list(falsification_probes)
 
 
 class _FakeLayerStatus:
-    def __init__(self, note=""):
+    def __init__(self, note="", evidence=()):
         self.note = note
+        self.evidence = list(evidence)
 
 
 class _FakeNAReport:
@@ -298,6 +305,55 @@ def test_citation_detection_finds_verbatim_case_ids():
         "v7/ep_20260510_185748_call_quality_degradation",
     ]
     assert result["any_citation"] is True
+
+
+def test_citation_detection_finds_lesson_id_in_falsification_probe():
+    """Audit target: run_20260514_222937 cited `L04` in h1's
+    falsification probe, NOT in the hypothesis statement. The
+    original collector walked statement + supporting_events only and
+    missed it. Pin that the collector now scans probe text too."""
+    na = _FakeNAReport(
+        summary="Investigating the data plane.",
+        hypotheses=[_FakeHypothesis(
+            statement="The rtpengine media plane is broken.",  # no L0x here
+            falsification_probes=[
+                "A measure_rtt probe showing no drops would falsify this.",
+                # The probe author cited the lesson here, NOT in the statement.
+                "Directly inspect rtpengine kernel-level stats, as per lesson L04.",
+            ],
+        )],
+    )
+    result = _detect_rag_citations_in_na(
+        na_report=na,
+        retrieved_case_ids=[],
+        injected_lesson_ids=["L01", "L04", "L14"],
+    )
+    assert result["cited_lesson_ids"] == ["L04"]
+    assert result["any_citation"] is True
+
+
+def test_citation_detection_finds_case_id_in_layer_evidence_bullet():
+    """Defensive: a case_id citation in a layer-status evidence bullet
+    (rather than the layer note) must also surface. Catches the
+    symmetric miss for the layer_status block."""
+    na = _FakeNAReport(
+        layer_status={
+            "ims": _FakeLayerStatus(
+                note="IMS layer red.",
+                evidence=[
+                    "rtpengine packet loss elevated.",
+                    "Consistent with v7/ep_unrelated and v7/ep_dpd_match.",
+                ],
+            ),
+        },
+        hypotheses=[_FakeHypothesis("h1")],
+    )
+    result = _detect_rag_citations_in_na(
+        na_report=na,
+        retrieved_case_ids=["v7/ep_dpd_match", "v7/ep_other"],
+        injected_lesson_ids=[],
+    )
+    assert "v7/ep_dpd_match" in result["cited_case_ids"]
 
 
 def test_citation_detection_finds_lesson_ids_only_when_in_corpus():

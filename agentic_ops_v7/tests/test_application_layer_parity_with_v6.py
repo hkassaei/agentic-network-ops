@@ -133,8 +133,24 @@ _INTENTIONALLY_DIVERGENT = {
     # ADR `agent_tool_args_must_be_names_not_ips.md` — the prompt now
     # carries a names-only rule for tool args + updated example showing
     # `measure_rtt(\"pcscf\", \"icscf\")` instead of an IP literal.
-    # Pinned by deliberate-divergence test below.
+    # Pinned by deliberate-divergence test below. The investigator
+    # prompt also carries the "Verify deployment-specific assumptions"
+    # section (ADR `stack_config_tool_for_agents.md`) — pinned by
+    # `test_v7_investigator_prompt_has_deployment_config_rule` below.
     "prompts/investigator.md",
+    # ADR `make_gemini_model_version_configurable` (commit 7edacd7) —
+    # every subagent's model parameter was lifted from a literal to an
+    # env-driven value. v7 carries the change; v6 doesn't.
+    "subagents/network_analyst.py",
+    "subagents/ontology_consultation.py",
+    "subagents/synthesis.py",
+    # Two subagents diverge for an additional reason: ADR
+    # `stack_config_tool_for_agents.md` wires `get_deployment_config`
+    # into the IG and Investigator toolsets. v6 doesn't have the tool.
+    # Divergence pinned by `test_v7_*_has_deployment_config_in_toolset`
+    # below.
+    "subagents/instruction_generator.py",
+    "subagents/investigator.py",
 }
 
 
@@ -430,3 +446,117 @@ def test_v7_guardrails_import():
               "llm_output_sanitizer", "mechanism_grounding", "na_linter",
               "na_ranking", "probe_selection", "runner", "synthesis_pool"):
         importlib.import_module(f"agentic_ops_v7.guardrails.{g}")
+
+
+# ---------------------------------------------------------------------------
+# Deliberate-divergence pins for ADR `stack_config_tool_for_agents.md`.
+# The Investigator and IG toolsets gain `get_deployment_config`; the
+# Investigator prompt gains a "Verify deployment-specific assumptions"
+# section. Without these pins, accidental drift (removing the tool from
+# the toolset, dropping the prompt section) would not be caught by the
+# byte-for-byte parity test because both files are in the divergent
+# allowlist.
+# ---------------------------------------------------------------------------
+
+
+def test_v7_investigator_toolset_has_get_deployment_config():
+    """ADR `stack_config_tool_for_agents.md` wires the new tool into
+    the v7 Investigator toolset. Drift here re-opens the failure mode
+    where the investigator hallucinates port-binding faults by relying
+    on IANA-standard priors instead of the deployment's actual config.
+    """
+    src = (_V7_ROOT / "subagents" / "investigator.py").read_text()
+    assert "tools.get_deployment_config" in src, (
+        "v7 Investigator toolset must include `tools.get_deployment_config` "
+        "per ADR `stack_config_tool_for_agents.md`. Without it the "
+        "Investigator falls back to IANA priors when asserting port "
+        "bindings."
+    )
+
+
+def test_v7_instruction_generator_toolset_has_get_deployment_config():
+    """Same ADR wires the tool into the IG toolset so plans can ground
+    "Expected if hypothesis holds" / "Falsifying observation" criteria
+    in actual configured port values, not IANA defaults."""
+    src = (_V7_ROOT / "subagents" / "instruction_generator.py").read_text()
+    assert "tools.get_deployment_config" in src, (
+        "v7 InstructionGenerator toolset must include "
+        "`tools.get_deployment_config` per ADR "
+        "`stack_config_tool_for_agents.md`."
+    )
+
+
+def test_v7_synthesis_prompt_compound_requires_distinct_second_nf():
+    """The compound branch's entry condition is NOT "both bundles
+    populated" — it's "both bundles populated AND the app-layer pipeline
+    implicates a distinct second NF." Without that distinction the LLM
+    over-fires `compound` on single-fault scenarios where the walker and
+    the app-layer pipeline merely converge on the same NF.
+
+    Triggering run: `run_20260520_212351_hss_unresponsive` — the LLM
+    emitted `verdict_kind=compound, additional_root_causes=[]` on a
+    scenario where the walker localized pyhss AND the app-layer
+    pipeline confirmed the same pyhss. The compound-consistency
+    guardrail REJECTed twice; `on_guardrail_exhausted=accept` let the
+    invalid shape through. The fix is the prompt directive — this
+    test pins it.
+
+    See `agentic_ops_v7/prompts/synthesis.md` and the post-run
+    analysis in `docs/critical-observations/`.
+    """
+    text = (_V7_ROOT / "prompts" / "synthesis.md").read_text()
+
+    # The load-bearing directive — branch-2 produces EITHER localized
+    # OR compound depending on whether a distinct second NF exists.
+    assert "DIFFERENT" in text or "distinct" in text.lower(), (
+        "synthesis.md must explicitly say compound requires a "
+        "DIFFERENT / distinct second NF beyond the walker's hop."
+    )
+
+    # The fallback rule the LLM must follow when the application-layer
+    # pipeline only confirms the walker's NF.
+    assert "same NF" in text.lower() or "single root cause" in text.lower(), (
+        "synthesis.md must teach the 'walker and app-layer named the "
+        "same NF → emit localized' fallback. Without it the LLM "
+        "over-fires `compound` on single-fault scenarios."
+    )
+
+    # Explicit warning against the resample-with-same-shape trap.
+    # The triggering run showed the LLM resampling to the same invalid
+    # compound shape because the prompt didn't tell it what to do on
+    # REJECT. The directive must surface that path.
+    assert "resample" in text.lower(), (
+        "synthesis.md must address the resample behavior after a "
+        "compound-consistency REJECT — change verdict_kind, do not "
+        "retry the same shape."
+    )
+
+
+def test_v7_investigator_prompt_has_deployment_config_rule():
+    """The investigator prompt carries a 'Verify deployment-specific
+    assumptions' section per ADR `stack_config_tool_for_agents.md`.
+    Pure-principle text — no specific NF/port/run names. Pin the
+    section header and the load-bearing requirement that any port /
+    IP / container-name claim must trace back to a config lookup or
+    probe data."""
+    src = (_V7_ROOT / "prompts" / "investigator.md").read_text()
+    assert "Verify deployment-specific assumptions" in src, (
+        "Investigator prompt missing the 'Verify deployment-specific "
+        "assumptions' section per ADR `stack_config_tool_for_agents.md`."
+    )
+    assert "get_deployment_config" in src, (
+        "Investigator prompt must reference the `get_deployment_config` "
+        "tool by name in the deployment-assumptions rule."
+    )
+    # Pin that the rule remains principle-only — no hard-coded port
+    # numbers. Naming a specific port in the prompt does not generalize
+    # across deployments and re-introduces the failure mode this rule
+    # was written to close. NF names appear elsewhere in the prompt for
+    # legitimate reasons (e.g. the names-only-args tool examples), so a
+    # blanket NF-name check would be too aggressive — the port-number
+    # check is the load-bearing one for this ADR's failure mode.
+    assert "3868" not in src and "3875" not in src, (
+        "Investigator prompt must NOT name specific port numbers in "
+        "the deployment-assumptions rule — the rule has to generalize "
+        "across deployments. Found a specific port number in the prompt."
+    )

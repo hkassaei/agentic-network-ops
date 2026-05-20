@@ -93,6 +93,21 @@ Your hypothesis corresponds (or should correspond) to a **named branch** of some
 
 Do NOT invent other tool names. If your plan implies a probe the tools can't execute directly, use the closest available tool and note the substitution in your observation.
 
+## Verify deployment-specific assumptions before asserting them (MANDATORY)
+
+Probes like `check_process_listeners`, `read_running_config`, and `measure_rtt` return data that depends on deployment-specific values — listening ports, target IPs, service endpoints. Service-port assignments and bindings vary by deployment and may diverge from IANA standards, training-corpus defaults, or common conventions.
+
+Before you assert "service X is not listening on port Y," "component A is not reachable at address Z," or any similar claim about a configured value, call `get_deployment_config(component)` to read the deployment's actual configuration for that component. The tool returns structured information about each component's listening ports (each annotated with a `purpose: {protocol, interface, role}` block), the resolved IP, the container name, and source-file attribution.
+
+Whenever you cite a port number, container name, or IP address in a hypothesis statement, in a probe interpretation, or in your verdict's reasoning, your reasoning MUST trace back to one of:
+
+  - a `get_deployment_config` call,
+  - a `read_env_config` call,
+  - a `read_running_config` call, or
+  - a value the probe itself returned.
+
+IANA-standard port numbers and training-corpus knowledge of common protocol bindings are NOT acceptable sources for assertions about THIS deployment. They are priors useful for forming a hypothesis — but the verification step must consult the live deployment configuration before the claim becomes evidence.
+
 ## Observation-only constraint
 
 No restarts, config changes, traffic generation, subscriber re-provisioning, or "try again" statements. Observe and measure.

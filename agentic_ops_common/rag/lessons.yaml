@@ -347,3 +347,30 @@ lessons:
       converge on the upstream cause.
     sources:
       - docs/work-plan-may-11.md (batch failure analysis)
+
+  - id: L16
+    title: Deployment-configurable values must be verified, not assumed
+    rule: >
+      Service ports, IPs, container names, and interface bindings are
+      deployment-specific and vary across environments. Before
+      asserting that "service X is/isn't listening on port Y" or
+      "component A talks to component B at address Z," call
+      `get_deployment_config(component)` to read the deployment's
+      actual configuration. IANA-standard port assignments,
+      container-name defaults, and training-corpus knowledge about
+      common protocol bindings are priors useful for forming
+      hypotheses — they MUST be verified against the live deployment
+      configuration before being asserted as evidence in a probe
+      interpretation, a hypothesis statement, or a verdict.
+    applies_when: >
+      Any probe interpretation, hypothesis statement, or verdict
+      reasoning that names a specific port number, container name,
+      or IP address as evidence.
+    rationale: >
+      The agent's prior over standard port assignments is strong but
+      not always right for the live deployment. Asserting "service
+      not bound to port N" using a prior instead of the configured
+      value fabricates faults that aren't there and propagates them
+      through downstream phases including Synthesis.
+    sources:
+      - docs/ADR/stack_config_tool_for_agents.md

@@ -65,5 +65,12 @@ def create_instruction_generator() -> LlmAgent:
             tools.get_flow,
             tools.get_canonical_flows_through_component,
             tools.get_active_flows_through_component,
+            # `get_deployment_config` — targeted per-NF lookup of
+            # configured ports / IPs. The IG uses this to ground the
+            # "Expected if hypothesis holds" / "Falsifying observation"
+            # criteria in actual deployment values rather than IANA
+            # standards or training-corpus defaults. See ADR
+            # `stack_config_tool_for_agents.md`.
+            tools.get_deployment_config,
         ],
     )

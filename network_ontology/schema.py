@@ -79,6 +79,54 @@ class DeploymentFile(_Base):
 
 
 # =============================================================================
+# deployment_metadata.yaml
+# =============================================================================
+# Per-component port semantics. Answers "which configured port on this NF
+# serves which protocol / interface / role?" without the agent having to
+# fall back to IANA-standard priors when actual deployments diverge.
+#
+# Schema:
+#   deployment_metadata:
+#     <nf>:
+#       ports:
+#         - env_key: PYHSS_BIND_PORT     # OR
+#           port: 27017                  # (one of the two is required)
+#           transport: tcp | udp | sctp
+#           purpose:
+#             protocol: diameter | http | sip | gtp_u | mongodb | mysql | ng_control | sbi | dns | ...
+#             interface: cx | sh | rest_api | n3 | n4 | mongo_wire | mw | ...
+#             role: server | client | both
+#
+# `env_key` resolves at runtime against `network/.env`. `port` is a
+# literal value (used for fixed ports like MongoDB's 27017 or RTPEngine's
+# NG-control port). One MUST be provided; if both are set, `env_key` wins.
+#
+# Consumed by `agentic_ops.tools.get_deployment_config` — see ADR
+# `docs/ADR/stack_config_tool_for_agents.md`.
+
+
+class PortPurpose(_Base):
+    protocol: str | None = None
+    interface: str | None = None
+    role: str | None = None  # "server" | "client" | "both"
+
+
+class PortBinding(_Base):
+    env_key: str | None = None
+    port: int | None = None
+    transport: str | None = None  # "tcp" | "udp" | "sctp"
+    purpose: PortPurpose | None = None
+
+
+class DeploymentMetadataEntry(_Base):
+    ports: list[PortBinding] | None = None
+
+
+class DeploymentMetadataFile(_Base):
+    deployment_metadata: dict[str, DeploymentMetadataEntry]
+
+
+# =============================================================================
 # interfaces.yaml
 # =============================================================================
 
@@ -413,6 +461,7 @@ _MODEL_BY_FILE: dict[str, type[_Base]] = {
     "causal_chains.yaml": CausalChainsFile,
     "components.yaml": ComponentsFile,
     "deployment.yaml": DeploymentFile,
+    "deployment_metadata.yaml": DeploymentMetadataFile,
     "flows.yaml": FlowsFile,
     "healthchecks.yaml": HealthChecksFile,
     "interfaces.yaml": InterfacesFile,

@@ -328,6 +328,157 @@ async def query_subscriber(
 # Tool 5: read_env_config
 # ---------------------------------------------------------------------------
 
+async def get_deployment_config(
+    deps: AgentDeps,
+    component: str,
+) -> dict:
+    """Return the deployment-configured values for one network component.
+
+    Targeted, structured lookup of per-component deployment values. Use
+    this BEFORE asserting that a service is or is not bound to a port —
+    deployments routinely diverge from IANA-standard port assignments,
+    and training-corpus knowledge is not a safe substitute for the
+    actual configured value.
+
+    Consolidates four sources of truth:
+      1. `network/.env` — port env vars (PYHSS_BIND_PORT=3875, …)
+      2. `network_ontology/data/deployment.yaml` — IP env-var bindings
+         and container names
+      3. `network_ontology/data/deployment_metadata.yaml` — per-port
+         purpose annotations ({protocol, interface, role})
+      4. The `*_IP` family in `network/.env` — resolves the IP env-keys
+         from (2)
+
+    Per-port purpose annotations are structured:
+        purpose = {
+            "protocol":  "diameter" | "http" | "sip" | "gtp_u" | "mongodb" | ...,
+            "interface": "cx" | "sh" | "rest_api" | "sbi" | "n3" | "mw" | ...,
+            "role":      "server" | "client" | "both",
+        }
+
+    Args:
+        deps:      Agent dependencies (carries the env dict + repo root).
+        component: Canonical NF name (pyhss, icscf, scscf, pcscf, mongo,
+                   mysql, amf, smf, upf, …). Case-insensitive.
+
+    Returns:
+        Structured dict with keys: component, container_name, ip,
+        listening_ports (list of port records with `source` attribution),
+        config_files, ontology_files. Empty `listening_ports` if the
+        component has no metadata entry yet. `_error` key set on
+        component-not-found.
+
+    See ADR `docs/ADR/stack_config_tool_for_agents.md`.
+    """
+    component = component.strip().lower()
+    env = deps.env or {}
+    repo_root = Path(deps.repo_root)
+
+    deployment_yaml = repo_root / "network_ontology" / "data" / "deployment.yaml"
+    metadata_yaml = repo_root / "network_ontology" / "data" / "deployment_metadata.yaml"
+    env_path = repo_root / "network" / ".env"
+
+    # --- Load deployment.yaml: IP env-key + container name --------------
+    deployment_entry: dict = {}
+    if deployment_yaml.exists():
+        try:
+            import yaml as _yaml
+            deployment_data = _yaml.safe_load(deployment_yaml.read_text()) or {}
+            deployment_entry = (
+                (deployment_data.get("deployment") or {}).get(component) or {}
+            )
+        except Exception as e:
+            return {
+                "_error": f"failed to parse deployment.yaml: {e}",
+                "component": component,
+            }
+
+    # --- Load deployment_metadata.yaml: port semantics ------------------
+    metadata_entry: dict = {}
+    if metadata_yaml.exists():
+        try:
+            import yaml as _yaml
+            metadata_data = _yaml.safe_load(metadata_yaml.read_text()) or {}
+            metadata_entry = (
+                (metadata_data.get("deployment_metadata") or {}).get(component) or {}
+            )
+        except Exception as e:
+            return {
+                "_error": f"failed to parse deployment_metadata.yaml: {e}",
+                "component": component,
+            }
+
+    if not deployment_entry and not metadata_entry:
+        return {
+            "_error": (
+                f"Unknown component '{component}'. Not present in "
+                f"network_ontology/data/deployment.yaml or "
+                f"deployment_metadata.yaml."
+            ),
+            "component": component,
+        }
+
+    # --- Resolve container name + IP -----------------------------------
+    container_name = deployment_entry.get("container_name") or component
+    ip_env_key = deployment_entry.get("ip_env_key")
+    ip = env.get(ip_env_key) if ip_env_key else None
+
+    # --- Resolve port bindings -----------------------------------------
+    listening_ports: list[dict] = []
+    for binding in (metadata_entry.get("ports") or []):
+        env_key = binding.get("env_key")
+        literal_port = binding.get("port")
+        if env_key:
+            raw = env.get(env_key)
+            if raw is None:
+                # Env-var referenced but missing — surface as-is so the
+                # agent can see the gap. Don't silently drop.
+                resolved_port = None
+                source = (
+                    f"network/.env: {env_key} (NOT FOUND — env var missing)"
+                )
+            else:
+                try:
+                    resolved_port = int(raw)
+                except (TypeError, ValueError):
+                    resolved_port = None
+                source = f"network/.env: {env_key}"
+        elif literal_port is not None:
+            resolved_port = int(literal_port)
+            source = "network_ontology/data/deployment_metadata.yaml (literal)"
+        else:
+            # Malformed entry — skip
+            continue
+
+        listening_ports.append({
+            "port": resolved_port,
+            "transport": binding.get("transport"),
+            "purpose": binding.get("purpose") or {},
+            "source": source,
+        })
+
+    # --- Build result --------------------------------------------------
+    config_files: list[str] = []
+    if env_path.exists():
+        config_files.append("network/.env")
+    component_config = repo_root / "network" / component / "config.yaml"
+    if component_config.exists():
+        config_files.append(f"network/{component}/config.yaml")
+
+    return {
+        "component": component,
+        "container_name": container_name,
+        "ip": ip,
+        "ip_env_key": ip_env_key,
+        "listening_ports": listening_ports,
+        "config_files": config_files,
+        "ontology_files": [
+            "network_ontology/data/deployment.yaml",
+            "network_ontology/data/deployment_metadata.yaml",
+        ],
+    }
+
+
 async def read_env_config(
     deps: AgentDeps,
 ) -> str:

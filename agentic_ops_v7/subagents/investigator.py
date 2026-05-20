@@ -70,6 +70,14 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
             tools.run_kamcmd,
             tools.read_running_config,
             tools.read_env_config,
+            # `get_deployment_config` — targeted, structured per-NF lookup
+            # of configured ports / IPs / container names. Must be called
+            # before asserting "service X is/isn't bound to port Y"
+            # (deployments routinely diverge from IANA standards). See
+            # the "Verify deployment-specific assumptions" section of
+            # the investigator prompt and ADR
+            # `stack_config_tool_for_agents.md`.
+            tools.get_deployment_config,
             tools.query_subscriber,
             # Flow tools for mechanism-walk falsification:
             # `get_canonical_flows_through_component` (KB lookup) lists

@@ -24,6 +24,7 @@ from .reachability import (
     get_link_rate_diff,
 )
 from .config_inspection import read_config, read_running_config, read_env_config
+from .deployment_config import get_deployment_config
 from .kamailio_state import run_kamcmd
 from .subscriber_lookup import query_subscriber
 
@@ -58,6 +59,7 @@ __all__ = [
     "measure_rtt", "check_process_listeners", "check_tc_rules",
     "get_qdisc_drops", "get_interface_drops", "get_link_rate_diff",
     "read_config", "read_running_config", "read_env_config",
+    "get_deployment_config",
     "run_kamcmd",
     "query_subscriber",
     "match_symptoms", "check_stack_rules", "compare_to_baseline",

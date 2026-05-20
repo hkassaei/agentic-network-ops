@@ -2767,10 +2767,22 @@ async def investigate(
     # text, so we render the structured report back to markdown. The
     # structured form is preserved separately for any downstream tooling
     # that wants typed access.
+    #
+    # BOTH `diagnosis_structured` AND `diagnosis_report` must be written
+    # — `_build_result` surfaces `diagnosis_report` to the result dict
+    # (see line 3104), which the chaos challenger forwards into
+    # `challenge_result.diagnosis_report` in the episode JSON, which
+    # the RAG parser reads when building the corpus index. Writing only
+    # `diagnosis_structured` here previously left every app-layer
+    # episode's JSON with `diagnosis_report: null`, silently corrupting
+    # the v7 portion of the RAG corpus. See Bug A in
+    # `docs/next-work-package.md` and the parallel write on the
+    # localized branch at line 792.
     state[_SYNTHESIS_OUTPUT_KEY] = _render_diagnosis_report_to_markdown(
         diagnosis_report,
     )
     state["diagnosis_structured"] = diagnosis_report.model_dump(mode="json")
+    state["diagnosis_report"] = diagnosis_report.model_dump(mode="json")
 
     return _build_result(state, all_phases, run_start)
 

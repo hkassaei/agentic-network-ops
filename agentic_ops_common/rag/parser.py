@@ -38,6 +38,98 @@ from .schema import FlagSummary, RetrievedCase
 log = logging.getLogger("agentic_ops_common.rag.parser")
 
 
+# Canonical NF allowlist used to filter primary-suspect extractions from
+# free-text diagnosis prose. Mirrors `agentic_ops_v7/models.py:_KnownNF`
+# — the parallel maintenance burden is accepted because:
+#   - agentic_ops_common cannot import from agentic_ops_v7 (v7
+#     self-containment rule, per ADR
+#     path_anchored_probe_planning_for_transport_layer_faults.md).
+#   - The failure mode if these drift is a *false negative* (a real NF
+#     gets rejected → recorder shows `?`) — visible and debuggable.
+#     The other direction (junk string accepted into corpus) would
+#     silently corrupt the column the NA reads.
+# Keep in sync manually when the v7 NF list changes.
+_KNOWN_NFS: frozenset[str] = frozenset({
+    "amf", "smf", "upf", "pcf", "ausf", "udm", "udr", "nrf",
+    "pcscf", "icscf", "scscf", "pyhss", "rtpengine",
+    "mongo", "mysql", "dns",
+    "nr_gnb",
+})
+
+
+# Matches the v7 markdown renderer's pattern:
+#   - **root_cause**: ... (primary_suspect_nf: `<nf>`)
+# Used as the second fallback when extracting primary suspect from
+# free-text diagnosis_text. v6 episodes never produced this pattern;
+# v7 episodes always do via _render_diagnosis_report_to_markdown.
+_V7_PRIMARY_SUSPECT_INLINE_RE = re.compile(
+    r"primary_suspect_nf:\s*`([a-z0-9_]+)`",
+    re.IGNORECASE,
+)
+
+
+# Matches a single affected_components markdown bullet:
+#   - `<nf>`: Root Cause
+# The role marker after the colon is matched case-insensitively but
+# must start with "root cause" — "Root Cause", "ROOT CAUSE", and
+# "Root Cause (notes...)" all match; "Secondary" and "Symptomatic" do
+# not. Used as the FIRST fallback because it's the only path that
+# works for both v6 and old-v7 episodes.
+_AFFECTED_COMPONENT_ROOT_CAUSE_RE = re.compile(
+    r"^\s*-\s*`([a-z0-9_]+)`\s*:\s*root\s+cause",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_primary_suspect_from_diagnosis_text(text: str) -> Optional[str]:
+    r"""Extract ``primary_suspect_nf`` from a free-text diagnosis blob.
+
+    Two fallback strategies in order:
+
+      1. **affected_components markdown list.** Scan for the first
+         bullet tagged "Root Cause" — shape ``- `<nf>`: Root Cause``.
+         Works for both v6 (whose `diagnosis_text` is the agent's only
+         output) and old-v7 (pre-Bug-A, whose structured
+         `diagnosis_report` was unset but `diagnosis_text` was
+         rendered). Most reliable because the role-marker is
+         structural-ish, not free prose.
+
+      2. **v7 inline ``(primary_suspect_nf: `<nf>`)``.** v7's markdown
+         renderer emits this suffix on the `root_cause` line. Catches
+         old-v7 episodes where the affected_components list happened
+         to be empty or the renderer skipped it. Will not match v6 —
+         v6 had no inline suffix.
+
+    Extracted name is filtered against ``_KNOWN_NFS`` so junk tokens
+    (e.g. an LLM-emitted ``` `unknown`: Root Cause ```) don't poison
+    the corpus. Returns ``None`` if neither fallback yielded a
+    recognized NF.
+
+    Background: Bug B in ``docs/next-work-package.md``. The default
+    path in ``parse_episode`` reads ``diagnosis_report.primary_suspect_nf``
+    directly; this helper is consulted only when that structured key
+    is absent (v6 always, old-v7 until Bug-A's fix re-indexes).
+    """
+    if not text:
+        return None
+
+    # Fallback 1 — affected_components Root Cause entry.
+    m = _AFFECTED_COMPONENT_ROOT_CAUSE_RE.search(text)
+    if m:
+        nf = m.group(1).lower()
+        if nf in _KNOWN_NFS:
+            return nf
+
+    # Fallback 2 — v7 inline suffix.
+    m = _V7_PRIMARY_SUSPECT_INLINE_RE.search(text)
+    if m:
+        nf = m.group(1).lower()
+        if nf in _KNOWN_NFS:
+            return nf
+
+    return None
+
+
 # ── Agent-version detection ──────────────────────────────────────────
 
 _AGENT_VERSION_RE = re.compile(r"agentic_ops_(v\d+)")
@@ -341,12 +433,45 @@ def _parse_json(path: Path) -> Optional[RetrievedCase]:
     if isinstance(rp, dict):
         resolved_flow_id = rp.get("flow_id")
 
-    # Diagnosis (v7 has structured; v6 only has diagnosis_text).
+    # Diagnosis. Three input shapes the parser must handle:
+    #   (a) new-v7 (post-Bug-A's fix at orchestrator.py:2783): both
+    #       `diagnosis_report` (structured) AND `diagnosis_text`
+    #       (rendered markdown) are populated. Trust the structured
+    #       fields end-to-end — `verdict_kind` is the authoritative
+    #       marker; a structured `primary_suspect_nf=None` means the
+    #       agent legitimately emitted an inconclusive verdict and
+    #       we MUST NOT fall back to text scraping (which might
+    #       surface a lower-confidence guess).
+    #   (b) old-v7 (pre-Bug-A's fix): `diagnosis_report` is null
+    #       because Bug A left the state key unwritten on the
+    #       app-layer Synthesis path; `diagnosis_text` is populated
+    #       by the markdown renderer. Fall back to the text parser
+    #       to recover the primary suspect.
+    #   (c) v6: never had structured `diagnosis_report`. `diagnosis_text`
+    #       is the agent's only output. Same fallback as (b).
+    #
+    # The discriminator between (a) and (b)/(c) is whether `dr` has a
+    # populated `verdict_kind` — that field is set by every structured
+    # output regardless of conclusiveness, and unset when the key
+    # itself is missing.
     dr = cr.get("diagnosis_report") or {}
+    diagnosis_text = cr.get("diagnosis_text") if isinstance(cr.get("diagnosis_text"), str) else ""
     diagnosis_summary = dr.get("summary") if isinstance(dr, dict) else None
-    diagnosis_primary = dr.get("primary_suspect_nf") if isinstance(dr, dict) else None
     diagnosis_verdict = dr.get("verdict_kind") if isinstance(dr, dict) else None
     diagnosis_confidence = dr.get("root_cause_confidence") if isinstance(dr, dict) else None
+
+    # Structured-output authoritative path (case a). Anything that
+    # populates `verdict_kind` is trusted end-to-end — including a
+    # legitimate `primary_suspect_nf=None` for inconclusive verdicts.
+    # Otherwise (cases b and c) fall back to scraping `diagnosis_text`
+    # for an `affected_components: ... Root Cause` entry, then the v7
+    # inline `(primary_suspect_nf: ...)` suffix.
+    if isinstance(dr, dict) and diagnosis_verdict is not None:
+        diagnosis_primary = dr.get("primary_suspect_nf")
+    else:
+        diagnosis_primary = _extract_primary_suspect_from_diagnosis_text(
+            diagnosis_text,
+        )
 
     tokens = cr.get("token_usage") or {}
     total_tokens = tokens.get("total_tokens") if isinstance(tokens, dict) else None

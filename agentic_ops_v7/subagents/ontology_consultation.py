@@ -8,7 +8,7 @@ from google.adk.agents import LlmAgent
 
 from agentic_ops_common import tools
 
-from ..retry_config import make_retry_model
+from ..model_config import flash_model
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "ontology_consultation.md"
 
@@ -18,7 +18,7 @@ def create_ontology_consultation_agent() -> LlmAgent:
         name="OntologyConsultationAgent",
         # Gemini model wrapper carries retry_options for 429 / 408 / 5xx
         # transparently — see retry_config.py.
-        model=make_retry_model("gemini-2.5-flash"),
+        model=flash_model(),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Consults the network ontology. Matches symptoms, checks stack "

@@ -14,7 +14,7 @@ from google.adk.tools import AgentTool
 from agentic_ops_common import tools
 
 from ..models import InvestigatorVerdict
-from ..retry_config import make_retry_model
+from ..model_config import pro_model
 from .ontology_consultation import create_ontology_consultation_agent
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "investigator.md"
@@ -35,7 +35,7 @@ def create_investigator_agent(name: str = "InvestigatorAgent") -> LlmAgent:
         # transparently. Phase 5 fans out 1-3 of these in parallel and
         # each consumes 50-60k tokens with thinking — the highest-quota-
         # risk agent in the pipeline. See retry_config.py.
-        model=make_retry_model("gemini-2.5-pro"),
+        model=pro_model(),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Falsifies one specific hypothesis by running targeted probes "

@@ -26,9 +26,9 @@ import json
 import logging
 import os
 
-log = logging.getLogger("chaos-scorer")
+from agentic_ops_v7.model_config import flash_model_id
 
-_SCORER_MODEL = "gemini-2.5-flash"
+log = logging.getLogger("chaos-scorer")
 
 # Component → ontology layer mapping (from network_ontology/data/components.yaml)
 _COMPONENT_ONTOLOGY_LAYER = {
@@ -366,11 +366,11 @@ async def _call_scorer_llm(user_message: str) -> dict:
     client = genai.Client(
         vertexai=os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() == "TRUE",
         project=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-        location=os.environ.get("GOOGLE_CLOUD_LOCATION", "northamerica-northeast1"),
+        location=os.environ["GOOGLE_CLOUD_LOCATION"],
     )
 
     response = await client.aio.models.generate_content(
-        model=_SCORER_MODEL,
+        model=flash_model_id(),
         contents=user_message,
         config=types.GenerateContentConfig(
             system_instruction=_SCORER_PROMPT,

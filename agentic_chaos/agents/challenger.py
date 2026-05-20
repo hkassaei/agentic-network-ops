@@ -33,7 +33,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _get_v3_models() -> str:
-    """Read the actual model names from v3 agent definitions."""
+    """Read the actual model names from v3 agent definitions.
+
+    Used for v3/v4/v5/v6 reporting labels. v6 happens to share the same
+    Pro+Flash model ids as v3 today, so its label is correct by
+    coincidence; if v6 ever diverges this helper should be split.
+    v7 uses `_get_v7_models()` instead.
+    """
     try:
         ops_path = str(_REPO_ROOT)
         if ops_path not in sys.path:
@@ -53,6 +59,24 @@ def _get_v3_models() -> str:
     except Exception:
         pass
     return "gemini-unknown"
+
+
+def _get_v7_models() -> str:
+    """Resolve the v7 Pro+Flash model ids at call time.
+
+    Reads `agentic_ops_v7.model_config`, which honours the
+    `GEMINI_PRO_MODEL` / `GEMINI_FLASH_MODEL` env vars. This runs after
+    the v7 pipeline finishes, so the env state is identical to the env
+    the subagents saw — the label always matches what was invoked.
+    """
+    try:
+        ops_path = str(_REPO_ROOT)
+        if ops_path not in sys.path:
+            sys.path.insert(0, ops_path)
+        from agentic_ops_v7.model_config import pro_model_id, flash_model_id
+        return f"pro={pro_model_id()}+flash={flash_model_id()}"
+    except Exception:
+        return "gemini-unknown"
 
 
 class ChallengeAgent(BaseAgent):
@@ -177,7 +201,9 @@ class ChallengeAgent(BaseAgent):
             network_analysis=str(network_analysis) if network_analysis else "",
         )
 
-        if agent_version in ("v3", "v4", "v5", "v6", "v7"):
+        if agent_version == "v7":
+            rca_model = f"v7-adk/{_get_v7_models()}"
+        elif agent_version in ("v3", "v4", "v5", "v6"):
             rca_model = f"{agent_version}-adk/{_get_v3_models()}"
         else:
             rca_model = f"v1.5-pydantic/{os.environ.get('AGENT_MODEL', 'google-vertex:gemini-2.5-pro')}"

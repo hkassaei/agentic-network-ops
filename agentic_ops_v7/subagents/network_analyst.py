@@ -10,7 +10,7 @@ from google.adk.tools import AgentTool
 from agentic_ops_common import tools
 
 from ..models import NetworkAnalystReport
-from ..retry_config import make_retry_model
+from ..model_config import pro_model
 from .ontology_consultation import create_ontology_consultation_agent
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "network_analyst.md"
@@ -28,7 +28,7 @@ def create_network_analyst() -> LlmAgent:
         name="NetworkAnalystAgent",
         # Gemini model wrapper carries retry_options for 429 / 408 / 5xx
         # transparently — see retry_config.py.
-        model=make_retry_model("gemini-2.5-pro"),
+        model=pro_model(),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Forms ranked hypotheses over events + correlation output + "

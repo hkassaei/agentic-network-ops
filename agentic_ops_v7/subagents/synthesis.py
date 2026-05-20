@@ -7,7 +7,7 @@ from pathlib import Path
 from google.adk.agents import LlmAgent
 
 from ..models import DiagnosisReport
-from ..retry_config import make_retry_model
+from ..model_config import pro_model
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "synthesis.md"
 
@@ -27,7 +27,7 @@ def create_synthesis_agent() -> LlmAgent:
         name="SynthesisAgent",
         # Gemini model wrapper carries retry_options for 429 / 408 / 5xx
         # transparently — see retry_config.py.
-        model=make_retry_model("gemini-2.5-pro"),
+        model=pro_model(),
         instruction=_PROMPT_PATH.read_text(),
         description=(
             "Aggregates per-hypothesis Investigator verdicts into a NOC-ready "

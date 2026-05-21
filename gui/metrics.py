@@ -12,6 +12,7 @@ Consumed by server.py (GET /api/metrics, GET /api/metrics/history/{node}).
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 
@@ -21,6 +22,40 @@ log = logging.getLogger("vonr-metrics")
 
 CACHE_TTL = 5        # seconds — matches Prometheus scrape_interval
 HISTORY_LEN = 60     # snapshots  (60 × 5 s = 5 min)
+
+# Per-call deadline for `collect()`. Sized so that the slowest legitimate
+# per-NF timeout (5s for kamcmd, rtpengine-ctl, mongo) plus serialization
+# headroom fits comfortably, while staying under the outer
+# `snapshot_metrics()` backstop (15s) so the wrapper is a true backstop
+# rather than the load-bearing deadline. Sub-collectors still running at
+# this deadline are cancelled; whatever finished is merged and returned.
+# ADR: docs/ADR/screener_starvation_partial_metric_collection.md
+_COLLECT_DEADLINE = 12  # seconds
+
+
+async def _reap(proc: asyncio.subprocess.Process) -> None:
+    """Terminate then wait, escalating to kill if terminate hangs.
+
+    Used by the sub-collector cancellation path so a docker-exec subprocess
+    interrupted mid-flight is reaped from the host's process table rather
+    than left as a zombie. Under sustained degradation the screener-starvation
+    fix triggers cancellation frequently; unreaped subprocesses would
+    compound the daemon contention that caused the starvation in the
+    first place.
+    """
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=1)
+        return
+    except asyncio.TimeoutError:
+        pass
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    with contextlib.suppress(ProcessLookupError, asyncio.CancelledError):
+        await proc.wait()
 
 
 class MetricsCollector:
@@ -42,44 +77,74 @@ class MetricsCollector:
     # -----------------------------------------------------------------
 
     async def collect(self) -> dict[str, dict]:
-        """Return per-node metrics dict, using cache if still fresh."""
+        """Return per-node metrics dict, using cache if still fresh.
+
+        Partial-result semantics: sub-collectors run in parallel under a
+        single `_COLLECT_DEADLINE`. Whatever completes within the deadline
+        is merged into the returned dict; sub-collectors still in flight
+        at the deadline are cancelled (their owned subprocesses reaped via
+        `_reap`) and their NFs are simply absent from the snapshot. This
+        replaces the previous all-or-nothing `asyncio.gather` pattern
+        whose outer-timeout cancellation discarded completed work along
+        with in-flight work — the root cause of screener starvation when
+        one NF was chronically slow.
+        ADR: docs/ADR/screener_starvation_partial_metric_collection.md
+        """
         now = time.time()
         if now - self._cache_ts < CACHE_TTL and self._cache:
             return self._cache
 
-        results = await asyncio.gather(
-            self._collect_prometheus(),
-            self._collect_kamailio("pcscf"),
-            self._collect_kamailio("icscf"),
-            self._collect_kamailio("scscf"),
-            self._collect_rtpengine(),
-            self._collect_pyhss(),
-            self._collect_mongo(),
-            return_exceptions=True,
+        # Name each sub-collector so partial results can be attributed back
+        # to NFs by name (instead of by gather-result index position).
+        coros = {
+            "prometheus": self._collect_prometheus(),
+            "pcscf":      self._collect_kamailio("pcscf"),
+            "icscf":      self._collect_kamailio("icscf"),
+            "scscf":      self._collect_kamailio("scscf"),
+            "rtpengine":  self._collect_rtpengine(),
+            "pyhss":      self._collect_pyhss(),
+            "mongo":      self._collect_mongo(),
+        }
+        tasks: dict[str, asyncio.Task] = {
+            name: asyncio.create_task(coro, name=f"metrics:{name}")
+            for name, coro in coros.items()
+        }
+        await asyncio.wait(
+            tasks.values(),
+            timeout=_COLLECT_DEADLINE,
+            return_when=asyncio.ALL_COMPLETED,
         )
+        pending = [t for t in tasks.values() if not t.done()]
+        for t in pending:
+            t.cancel()
+        if pending:
+            # Drain cancellations so subprocess-reaping in each sub-collector's
+            # finally-block actually runs before we return.
+            await asyncio.gather(*pending, return_exceptions=True)
+            log.info(
+                "MetricsCollector deadline: %d of %d sub-collectors "
+                "completed within %ds (dropped: %s)",
+                len(tasks) - len(pending), len(tasks), _COLLECT_DEADLINE,
+                [t.get_name() for t in pending],
+            )
 
         merged: dict[str, dict] = {}
-
-        # Prometheus (returns dict of node_id → data)
-        if isinstance(results[0], dict):
-            merged.update(results[0])
-
-        # Kamailio CSCFs
-        for i, name in enumerate(["pcscf", "icscf", "scscf"], 1):
-            if isinstance(results[i], dict) and results[i].get("metrics"):
-                merged[name] = results[i]
-
-        # RTPEngine
-        if isinstance(results[4], dict) and results[4].get("metrics"):
-            merged["rtpengine"] = results[4]
-
-        # PyHSS
-        if isinstance(results[5], dict) and results[5].get("metrics"):
-            merged["pyhss"] = results[5]
-
-        # MongoDB
-        if isinstance(results[6], dict) and results[6].get("metrics"):
-            merged["mongo"] = results[6]
+        for name, t in tasks.items():
+            if not t.done() or t.cancelled():
+                continue
+            exc = t.exception()
+            if exc is not None:
+                log.debug("MetricsCollector sub-collector %s raised: %s", name, exc)
+                continue
+            result = t.result()
+            if name == "prometheus":
+                # Prometheus collector returns a dict of node_id → data,
+                # not a single {metrics, badge, source} record.
+                if isinstance(result, dict):
+                    merged.update(result)
+            else:
+                if isinstance(result, dict) and result.get("metrics"):
+                    merged[name] = result
 
         # Append to history
         for nid, data in merged.items():
@@ -301,7 +366,9 @@ class MetricsCollector:
     async def _collect_kamailio(self, container: str) -> dict:
         """Collect Kamailio stats via kamcmd stats.get_statistics."""
         raw: dict[str, float] = {}
+        m: dict[str, float] = {}
         badge = ""
+        proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "exec", container,
@@ -344,8 +411,15 @@ class MetricsCollector:
 
         except asyncio.TimeoutError:
             log.debug("kamcmd timeout for %s", container)
+        except asyncio.CancelledError:
+            if proc is not None:
+                await _reap(proc)
+            raise
         except Exception as e:
             log.debug("kamcmd %s: %s", container, e)
+        finally:
+            if proc is not None:
+                await _reap(proc)
 
         return {"metrics": m, "badge": badge, "source": "kamcmd"}
 
@@ -357,6 +431,7 @@ class MetricsCollector:
         """Collect RTPEngine session and VoIP quality stats."""
         m: dict[str, float] = {}
         badge = ""
+        proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "exec", "rtpengine",
@@ -398,8 +473,15 @@ class MetricsCollector:
 
         except asyncio.TimeoutError:
             log.debug("rtpengine-ctl timeout")
+        except asyncio.CancelledError:
+            if proc is not None:
+                await _reap(proc)
+            raise
         except Exception as e:
             log.debug("rtpengine-ctl: %s", e)
+        finally:
+            if proc is not None:
+                await _reap(proc)
 
         # Augment with Prometheus-sourced counters that the rtpengine-ctl
         # output doesn't carry. These feed the anomaly preprocessor's
@@ -501,6 +583,7 @@ class MetricsCollector:
         """Count provisioned 5G subscribers in MongoDB."""
         m: dict[str, float] = {}
         badge = ""
+        proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "exec", "mongo",
@@ -519,7 +602,14 @@ class MetricsCollector:
 
         except asyncio.TimeoutError:
             log.debug("mongosh timeout")
+        except asyncio.CancelledError:
+            if proc is not None:
+                await _reap(proc)
+            raise
         except Exception as e:
             log.debug("mongosh: %s", e)
+        finally:
+            if proc is not None:
+                await _reap(proc)
 
         return {"metrics": m, "badge": badge, "source": "mongosh"}

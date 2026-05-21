@@ -53,7 +53,19 @@ from agentic_ops_common.metric_kb import MetricsKB
 from agentic_ops_common.metric_kb.models import FaultLayer, MetricEntry
 
 
-SymptomLabel = Literal["transport_layer", "application_layer", "mixed"]
+SymptomLabel = Literal[
+    "transport_layer",
+    "application_layer",
+    "mixed",
+    # Set by the orchestrator (not by `classify()`) when Phase 0 reported
+    # `screener_status == "starved"`. Signals that the classifier had no
+    # screener output to act on — downstream routing must treat absence of
+    # flags as "unknown" and run the conservative fallback (path walk +
+    # app-layer regardless of walker outcome) rather than assuming
+    # application-layer.
+    # ADR: docs/ADR/screener_starvation_partial_metric_collection.md
+    "insufficient_anomaly_evidence",
+]
 SignalBucket = Literal["transport", "application", "ambiguous"]
 
 

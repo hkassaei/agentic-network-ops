@@ -35,7 +35,33 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+
+# Screener status — Phase 0 outcome the rest of the pipeline branches on.
+# Stored in `state["screener_status"]`. Three values, no others:
+#   "scored"  — ECOD scored ≥ _MIN_SCORED_SNAPSHOTS; flags may be empty
+#               (clean snapshot) or non-empty (anomalies present).
+#   "starved" — Phase 0 received fewer snapshots than the preprocessor's
+#               rate-window warmup needs (7), so ECOD never ran. Downstream
+#               phases must treat absence of flags as "unknown", not
+#               "healthy", and the orchestrator routes to the conservative
+#               fallback (path walk runs unconditionally, then app-layer).
+#   "clean"   — ECOD ran on enough snapshots and no anomalies fired. The
+#               legitimate clean-stack outcome.
+# ADR: docs/ADR/screener_starvation_partial_metric_collection.md
+ScreenerStatus = Literal["scored", "starved", "clean"]
+
+# Minimum snapshots that must reach ECOD scoring (post-warmup) for the
+# screener's output to be considered valid. With fewer, the preprocessor's
+# rate-window pipeline didn't produce enough scored frames for the per-bucket
+# model to deliver a meaningful verdict, and the state is reported as
+# "starved" rather than masquerading as "clean".
+_MIN_SCORED_SNAPSHOTS = 1
+
+# Snapshot-count threshold below which Phase 0 declares starvation outright
+# (the preprocessor needs ≥7 snapshots to seed temporal features; with
+# fewer, no snapshot can score).
+_PHASE0_MIN_INPUT_SNAPSHOTS = 7
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.runners import Runner
@@ -409,7 +435,13 @@ async def _phase0_anomaly_screener(
                     if isinstance(snap_ts, (int, float)):
                         best_snap_ts = float(snap_ts)
 
-        if best_report is not None:
+        # Three-way Phase 0 outcome — `scored` vs `starved` vs `clean`. The
+        # `starved` case is structurally distinct from `clean` so downstream
+        # routing can react conservatively (run the path walk anyway) instead
+        # of silently treating "no screener output" as "stack healthy".
+        # ADR: docs/ADR/screener_starvation_partial_metric_collection.md
+        scored_count = len(scored_snap_timestamps)
+        if best_report is not None and scored_count >= _MIN_SCORED_SNAPSHOTS:
             # Enrich flags with KB semantic context so the NA sees *what
             # the deviation means* instead of only *which numbers moved*.
             # KB load is best-effort — if it fails, we still emit the
@@ -424,6 +456,7 @@ async def _phase0_anomaly_screener(
                     "Anomaly flag enrichment failed (non-fatal): %s", e,
                     exc_info=True,
                 )
+            state["screener_status"] = "scored"
             state["anomaly_report"] = best_report.to_prompt_text()
             state["anomaly_flags"] = best_report.to_dict_list()
             # Stash the structured AnomalyReport so Phase 0.5
@@ -444,9 +477,38 @@ async def _phase0_anomaly_screener(
                 state["anomaly_window_end_ts"] = max(scored_snap_timestamps)
             if best_snap_ts is not None:
                 state["anomaly_screener_snapshot_ts"] = best_snap_ts
-        else:
+        elif len(snapshots) < _PHASE0_MIN_INPUT_SNAPSHOTS:
+            # Starvation: too few snapshots even reached Phase 0 for the
+            # rate-window preprocessor to seed temporal features. The
+            # metrics collector likely hit its per-snapshot deadline
+            # repeatedly during the observation window.
+            reason = (
+                f"Only {len(snapshots)} snapshots reached Phase 0; the "
+                f"rate-window preprocessor needs ≥{_PHASE0_MIN_INPUT_SNAPSHOTS} "
+                f"to seed temporal features and score against the per-bucket "
+                f"ECOD model. The metrics collector likely hit its "
+                f"per-snapshot deadline repeatedly during the observation "
+                f"window — see docs/ADR/screener_starvation_partial_metric_collection.md."
+            )
+            state["screener_status"] = "starved"
+            state["screener_starvation_reason"] = reason
+            state["anomaly_flags"] = []
             state["anomaly_report"] = (
-                f"Anomaly screening produced no results ({len(snapshots)} snapshots)."
+                f"Anomaly screening starved — {len(snapshots)} input "
+                f"snapshots, below the {_PHASE0_MIN_INPUT_SNAPSHOTS}-snapshot "
+                f"warmup threshold. Treat the absence of anomaly flags as "
+                f"'unknown', not 'healthy'. The orchestrator is running the "
+                f"path walk and application-layer pipeline anyway as a "
+                f"conservative fallback. Reason: {reason}"
+            )
+        else:
+            # Snapshots were sufficient, but ECOD scored everything below
+            # threshold. This is the legitimate clean-stack outcome.
+            state["screener_status"] = "clean"
+            state["anomaly_flags"] = []
+            state["anomaly_report"] = (
+                f"Anomaly screening ran on {len(snapshots)} snapshots "
+                f"({scored_count} scored after warmup); no anomalies detected."
             )
 
         phase0_duration = int((time.time() - phase0_start) * 1000)
@@ -500,29 +562,51 @@ def _phase05_symptom_classifier(
     starts using them for routing decisions.
     """
     from .symptom_classifier import classify
+    from .symptom_classifier import SymptomClassification
 
     phase_start = time.time()
     report_obj = state.get("_anomaly_report_obj")
+    screener_status = state.get("screener_status")
 
     classification = None
     note = ""
-    try:
-        kb = load_kb()
-    except Exception as e:
-        log.warning(
-            "SymptomClassifier: KB unavailable (%s); skipping classification.",
-            e,
+    # Phase 0 said the screener was starved — short-circuit the classifier
+    # entirely and emit `insufficient_anomaly_evidence`. The downstream
+    # router (Phase 0.6) treats this label like `mixed` (walk runs
+    # unconditionally, never short-circuits, falls through to app-layer)
+    # so the pipeline produces a diagnosis even with no anomaly signals.
+    # ADR: docs/ADR/screener_starvation_partial_metric_collection.md
+    if screener_status == "starved":
+        classification = SymptomClassification(
+            label="insufficient_anomaly_evidence",
+            rationale=(
+                "Anomaly screener was starved of input snapshots; no "
+                "classification possible. The orchestrator routes to the "
+                "conservative fallback (path walk on every transport-capable "
+                "flow, then application-layer pipeline regardless of walker "
+                "outcome). "
+                + (state.get("screener_starvation_reason") or "")
+            ),
         )
-        note = f"KB unavailable: {e}"
+        state["symptom_classification"] = classification.to_dict()
     else:
         try:
-            classification = classify(report_obj, kb)
-            state["symptom_classification"] = classification.to_dict()
+            kb = load_kb()
         except Exception as e:
             log.warning(
-                "SymptomClassifier failed (non-fatal): %s", e, exc_info=True,
+                "SymptomClassifier: KB unavailable (%s); skipping classification.",
+                e,
             )
-            note = f"classifier raised: {e}"
+            note = f"KB unavailable: {e}"
+        else:
+            try:
+                classification = classify(report_obj, kb)
+                state["symptom_classification"] = classification.to_dict()
+            except Exception as e:
+                log.warning(
+                    "SymptomClassifier failed (non-fatal): %s", e, exc_info=True,
+                )
+                note = f"classifier raised: {e}"
 
     duration_ms = int((time.time() - phase_start) * 1000)
     if classification is not None:
@@ -1220,7 +1304,10 @@ def _phase25_rag_inject_prior_episodes(
     sc = state.get("symptom_classification")
     if isinstance(sc, dict):
         label = sc.get("label")
-        if label in ("transport_layer", "application_layer", "mixed"):
+        if label in (
+            "transport_layer", "application_layer", "mixed",
+            "insufficient_anomaly_evidence",
+        ):
             classifier_label = label
 
     min_similarity = _resolve_rag_min_similarity()
@@ -2178,7 +2265,8 @@ async def investigate(
     #   synthesis -> `localized` DiagnosisReport with verbatim counter evidence
     #                (transport_layer short-circuit path only)
     #
-    # Routing per classifier label, per ADR `multi_fault_orchestration.md`:
+    # Routing per classifier label, per ADRs `multi_fault_orchestration.md`
+    # and `screener_starvation_partial_metric_collection.md`:
     #
     #   transport_layer  walker runs; short-circuit to Synthesis (localized)
     #                    if walker localized. Null-localize falls through to
@@ -2189,13 +2277,26 @@ async def investigate(
     #                    next, and Synthesis's compound branch receives both
     #                    bundles to surface multiple root causes.
     #   application_layer walker is skipped entirely.
+    #   insufficient_anomaly_evidence
+    #                    Screener was starved (Phase 0 input < warmup). Walker
+    #                    runs unconditionally, never short-circuits, falls
+    #                    through to app-layer. Same shape as `mixed` —
+    #                    diagnose with whatever signals the deterministic
+    #                    pipeline can recover.
     #
     # See ADRs `path_anchored_probe_planning_for_transport_layer_faults.md`
-    # (transport-layer pipeline) and `multi_fault_orchestration.md`
-    # (compound-verdict routing).
+    # (transport-layer pipeline), `multi_fault_orchestration.md`
+    # (compound-verdict routing), and
+    # `screener_starvation_partial_metric_collection.md`
+    # (conservative fallback when Phase 0 was starved).
     classification_dict = state.get("symptom_classification", {})
     classifier_label = classification_dict.get("label", "application_layer")
-    if classifier_label in ("transport_layer", "mixed"):
+    if classifier_label in (
+        "transport_layer", "mixed", "insufficient_anomaly_evidence",
+    ):
+        # Only `transport_layer` short-circuits on a clean walker localization.
+        # `mixed` and `insufficient_anomaly_evidence` both intentionally fall
+        # through to the application-layer pipeline.
         short_circuit = (classifier_label == "transport_layer")
         localized_result = await _phase06_transport_layer_route(
             state, all_phases, run_start,
@@ -2207,8 +2308,11 @@ async def investigate(
         if localized_result is not None:
             return localized_result
         # Fall through to application-layer pipeline. For transport_layer
-        # this means the walker null-localized; for mixed it's the
-        # deliberate fall-through so the compound Synthesis branch fires.
+        # this means the walker null-localized; for mixed and
+        # insufficient_anomaly_evidence it's the deliberate fall-through
+        # so the compound Synthesis branch fires (mixed) or so the
+        # app-layer can attempt diagnosis from non-screener signals
+        # (insufficient_anomaly_evidence).
         log.info(
             "Phase 0.6 done for `%s`; falling through to application-layer "
             "pipeline (walker outcome stored in state['path_walk_report']).",
@@ -3114,6 +3218,15 @@ def _build_result(
         "resolved_path":          state.get("resolved_path"),
         "path_walk_report":       state.get("path_walk_report"),
         "diagnosis_report":       state.get("diagnosis_report"),
+        # Phase 0 outcome — `scored` / `starved` / `clean`. Surfaced so the
+        # episode markdown distinguishes "screener was starved of input"
+        # from "screener ran cleanly and found nothing" — they emit
+        # identical `anomaly_flags == []` today, but the former means
+        # downstream routing took the conservative fallback while the
+        # latter means the stack was actually healthy.
+        # ADR: docs/ADR/screener_starvation_partial_metric_collection.md
+        "screener_status":            state.get("screener_status"),
+        "screener_starvation_reason": state.get("screener_starvation_reason"),
         # ── RAG observability (R4 / R5) — see _phase25_rag_inject…  ───
         # All four are None when the localized branch fired (Phases 1-7
         # didn't run, so neither RAG injection nor citation scan ran).

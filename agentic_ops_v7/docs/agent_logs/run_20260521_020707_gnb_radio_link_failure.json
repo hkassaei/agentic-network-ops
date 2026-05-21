@@ -1,0 +1,1243 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260521_015903_gnb_radio_link_failure",
+  "timestamp": "2026-05-21T01:59:04.886194+00:00",
+  "duration_seconds": 481.9199,
+  "scenario": {
+    "name": "gNB Radio Link Failure",
+    "description": "Kill the gNB to simulate a radio link failure. All UEs lose 5G registration, PDU sessions drop, and IMS SIP unregisters.",
+    "category": "container",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "container_kill",
+        "target": "nr_gnb",
+        "params": {},
+        "ttl_seconds": 600
+      }
+    ],
+    "expected_symptoms": [
+      "UEs lose RAN connection",
+      "PDU sessions dropped",
+      "SIP REGISTER expires without renewal",
+      "gNB disappears from AMF"
+    ],
+    "escalation": false,
+    "observation_traffic_seconds": 120,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 600
+  },
+  "baseline": {
+    "timestamp": "2026-05-21T01:59:04.886194+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 59634.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 54122.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 3670597.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 4210312.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 24.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 24.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 36.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 36.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 145.0,
+          "core:rcv_requests_register": 12.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 146.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 6.0,
+          "script:register_time": 2065.0,
+          "sl:1xx_replies": 12.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 83.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 6.0,
+          "cdp:replies_response_time": 502.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 12.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 83.0,
+          "ims_icscf:uar_replies_received": 6.0,
+          "ims_icscf:uar_replies_response_time": 502.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "12 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 114.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 12.0,
+          "cdp:replies_response_time": 1372.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 12.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 104.0,
+          "ims_auth:mar_replies_received": 6.0,
+          "ims_auth:mar_replies_response_time": 624.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 6.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 124.0,
+          "ims_registrar_scscf:sar_replies_received": 6.0,
+          "ims_registrar_scscf:sar_replies_response_time": 748.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 28.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 19.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 9.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 53514.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 1459558.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 53514.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 1459558.0,
+          "total_number_of_streams_with_no_relayed_packets": 16.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 18148.9,
+          "sum_of_all_mos_square_values_sampled": 78150.13,
+          "total_number_of_mos_samples": 4220.0,
+          "average_mos": 4.3,
+          "mos_standard_deviation": 0.01,
+          "sum_of_all_jitter_(reported)_values_sampled": 2716.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 5434.0,
+          "total_number_of_jitter_(reported)_samples": 4247.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 25901704.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 184834876606.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 4247.0,
+          "average_end_to_end_round_trip_time": 6098.0,
+          "end_to_end_round_trip_time_standard_deviation": 2515.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 13017486.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 49758582670.0,
+          "total_number_of_discrete_round_trip_time_samples": 4247.0,
+          "average_discrete_round_trip_time": 3065.0,
+          "discrete_round_trip_time_standard_deviation": 1523.0,
+          "sum_of_all_packet_loss_values_sampled": 17937.0,
+          "sum_of_all_packet_loss_square_values_sampled": 961445.0,
+          "total_number_of_packet_loss_samples": 4247.0,
+          "average_packet_loss": 4.0,
+          "packet_loss_standard_deviation": 14.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 17937.0,
+          "prom_packetloss_samples_total": 4247.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_56e45be5",
+      "fault_type": "container_kill",
+      "target": "nr_gnb",
+      "params": {},
+      "mechanism": "docker kill nr_gnb",
+      "heal_command": "docker start nr_gnb",
+      "injected_at": "2026-05-21T01:59:04.886782+00:00",
+      "ttl_seconds": 600,
+      "expires_at": "2026-05-21T02:09:04.886782+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "Expected 'exited', got 'exited'"
+    }
+  ],
+  "fault_verification": {
+    "verdict": "confirmed",
+    "wait_seconds": 0,
+    "elapsed_seconds": 0.0,
+    "propagation_window_seconds": 124.75,
+    "observation_phase_ran": true,
+    "verified_at": "2026-05-21T02:01:10.293303+00:00",
+    "filtered_deltas": {
+      "amf": {
+        "ran_ue": {
+          "baseline": 2.0,
+          "current": 0.0,
+          "delta": -2.0
+        },
+        "gnb": {
+          "baseline": 1.0,
+          "current": 0.0,
+          "delta": -1.0
+        }
+      }
+    },
+    "raw_delta_node_count": 2
+  },
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-21T02:01:10.293303+00:00",
+      "elapsed_seconds": 0.0,
+      "metrics_delta": {
+        "amf": {
+          "ran_ue": {
+            "baseline": 2.0,
+            "current": 0.0,
+            "delta": -2.0
+          },
+          "gnb": {
+            "baseline": 1.0,
+            "current": 0.0,
+            "delta": -1.0
+          }
+        }
+      },
+      "log_samples": {},
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-05-21T02:07:06.806094+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 0.0,
+          "gnb": 0.0
+        },
+        "badge": "",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 4.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 59634.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 54122.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 3670597.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 4210312.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 24.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 24.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 36.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 36.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_options": 242.0,
+          "core:rcv_requests_register": 12.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 243.0,
+          "httpclient:connok": 0.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 6.0,
+          "script:register_time": 2065.0,
+          "sl:1xx_replies": 12.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 83.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 6.0,
+          "cdp:replies_response_time": 502.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 12.0,
+          "ims_icscf:lir_avg_response_time": 0.0,
+          "ims_icscf:lir_replies_received": 0.0,
+          "ims_icscf:lir_replies_response_time": 0.0,
+          "ims_icscf:lir_timeouts": 0.0,
+          "ims_icscf:uar_avg_response_time": 83.0,
+          "ims_icscf:uar_replies_received": 6.0,
+          "ims_icscf:uar_replies_response_time": 502.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "12 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 114.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 12.0,
+          "cdp:replies_response_time": 1372.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 0.0,
+          "core:rcv_requests_register": 12.0,
+          "dialog_ng:active": 0.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 0.0,
+          "ims_auth:mar_avg_response_time": 104.0,
+          "ims_auth:mar_replies_received": 6.0,
+          "ims_auth:mar_replies_response_time": 624.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 6.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 124.0,
+          "ims_registrar_scscf:sar_replies_received": 6.0,
+          "ims_registrar_scscf:sar_replies_response_time": 748.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 28.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 19.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 9.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 53514.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 1459558.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 53514.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 1459558.0,
+          "total_number_of_streams_with_no_relayed_packets": 16.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 18148.9,
+          "sum_of_all_mos_square_values_sampled": 78150.13,
+          "total_number_of_mos_samples": 4220.0,
+          "average_mos": 4.3,
+          "mos_standard_deviation": 0.01,
+          "sum_of_all_jitter_(reported)_values_sampled": 2716.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 5434.0,
+          "total_number_of_jitter_(reported)_samples": 4247.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 0.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 25901704.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 184834876606.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 4247.0,
+          "average_end_to_end_round_trip_time": 6098.0,
+          "end_to_end_round_trip_time_standard_deviation": 2515.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 13017486.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 49758582670.0,
+          "total_number_of_discrete_round_trip_time_samples": 4247.0,
+          "average_discrete_round_trip_time": 3065.0,
+          "discrete_round_trip_time_standard_deviation": 1523.0,
+          "sum_of_all_packet_loss_values_sampled": 17937.0,
+          "sum_of_all_packet_loss_square_values_sampled": 961445.0,
+          "total_number_of_packet_loss_samples": 4247.0,
+          "average_packet_loss": 4.0,
+          "packet_loss_standard_deviation": 14.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 17937.0,
+          "prom_packetloss_samples_total": 4247.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 481.919312,
+    "faults_healed": 1
+  },
+  "rca_label": {
+    "root_cause": "Kill the gNB to simulate a radio link failure. All UEs lose 5G registration, PDU sessions drop, and IMS SIP unregisters.",
+    "affected_components": [
+      "nr_gnb"
+    ],
+    "severity": "degraded",
+    "failure_domain": "data_plane",
+    "protocol_impact": "GTP-U"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v7-adk/pro=gemini-3.1-pro-preview+flash=gemini-3.5-flash",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: Transport-layer fault localized to nr_gnb[eth0]: container_dead reports the container status as exited.\n- **timeline**:\n    1. Path walk started for flow data_pdu_session_user_traffic.\n    2. Fault attributed at hop nr_gnb (container_dead) due to an exited state.\n    3. Walk ended with complete localization at nr_gnb with high confidence.\n- **root_cause**: The nr_gnb container has exited or been removed entirely, terminating the N2 association and dropping all attached UEs along with the data plane. (primary_suspect_nf: `nr_gnb`)\n- **affected_components**:\n    - `nr_gnb`: Root Cause\n- **recommendation**: Verify nr_gnb container status: `docker ps -a | grep nr_gnb`.\n- **confidence**: high\n- **verdict_kind**: localized\n- **explanation**: | # | hop | kind | iface | prober | attribution |\n|---|-----|------|-------|--------|-------------|\n| 1 | e2e_ue1 | container | eth0 | KernelHopProber | clean |\n| 2 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 3 | nr_gnb | container | eth0 | KernelHopProber | container_dead (status=exited) \ud83c\udfaf |\n| 4 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 5 | upf | container | eth0 | KernelHopProber | clean |\n| 6 | internet | external_network | eth0 | <unregistered> | inconclusive (no_prober_registered) |\n| 7 | upf | container | eth0 | KernelHopProber | clean |\n| 8 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 9 | nr_gnb | container | eth0 | KernelHopProber | container_dead (status=exited) |\n| 10 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 11 | e2e_ue1 | container | eth0 | KernelHopProber | clean |\n\n```\ncontainer 'nr_gnb' state is `exited` (expected `running`); probes cannot execute against a non-running container\n```\n\nClassifier rationale: label=mixed. Both transport-layer (2) and application-layer (2) signals are load-bearing. Path walk runs first; falls through to the application-layer pipeline if the walk produces null localization. Transport signals: normalized.upf.gtp_indatapktn3upf_per_ue (drop, score=3.56) \u2014 KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (drop, score=3.56); normalized.upf.gtp_outdatapktn3upf_per_ue (drop, score=0.03) \u2014 KB-labeled transport: core.upf.gtp_outdatapktn3upf_per_ue (drop, score=0.03). Application signals: normalized.smf.bearers_per_ue (drop, score=4.25) \u2014 KB-labeled application: core.smf.bearers_per_ue (drop, score=4.25); normalized.smf.sessions_per_ue (drop, score=4.25) \u2014 KB-labeled application: core.smf.sessions_per_ue (drop, score=4.25).",
+    "score": {
+      "root_cause_correct": true,
+      "root_cause_rationale": "The agent correctly identified that the nr_gnb container exited, terminating the N2 association and dropping UEs.",
+      "component_overlap": 0.8,
+      "component_rationale": "The agent correctly identified nr_gnb as the primary root cause component.",
+      "severity_correct": true,
+      "severity_rationale": "The agent correctly assessed a complete outage due to the exited container.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent identified the container as dead/exited, representing an unreachable state.",
+      "layer_accuracy": true,
+      "layer_accuracy_rationale": "No layer status information was provided, so no misattribution occurred.",
+      "confidence_calibrated": true,
+      "confidence_rationale": "High confidence is justified given the direct container status evidence.",
+      "ranking_position": 1,
+      "ranking_rationale": "The correct root cause was identified as the primary suspect.",
+      "total_score": 0.96,
+      "summary": "The agent accurately diagnosed the gNB failure with high confidence using direct container status evidence."
+    },
+    "time_to_diagnosis_seconds": 344.2,
+    "token_usage": {
+      "input_tokens": 355105,
+      "output_tokens": 7564,
+      "thinking_tokens": 32847,
+      "total_tokens": 395516,
+      "per_phase": [
+        {
+          "agent": "AnomalyScreener",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SymptomClassifier",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "PathResolver",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "PathWalkInvestigator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EventAggregator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "CorrelationAnalyzer",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "RAGRetriever",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "OperationalLessons",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 97528,
+          "tool_calls": 6,
+          "llm_calls": 3
+        },
+        {
+          "agent": "Phase 3 NetworkAnalyst__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 10942,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 24303,
+          "tool_calls": 2,
+          "llm_calls": 2
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 46852,
+          "tool_calls": 5,
+          "llm_calls": 3
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 69122,
+          "tool_calls": 5,
+          "llm_calls": 3
+        },
+        {
+          "agent": "InvestigatorAgent_h1__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h2",
+          "tokens": 57752,
+          "tool_calls": 5,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h2",
+          "tokens": 72676,
+          "tool_calls": 4,
+          "llm_calls": 3
+        },
+        {
+          "agent": "InvestigatorAgent_h2__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase5FanOutAudit",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase6.5CandidatePool",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EvidenceValidator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 16341,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 7 Synthesis__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        }
+      ]
+    },
+    "anomaly_report": "**ANOMALY DETECTED.** Overall anomaly score: 12.08 (per-bucket threshold: 11.07, context bucket (0, 0), trained on 323 healthy snapshots). The current metric pattern is statistically different from the learned healthy baseline. Something in the network has changed.\n\nThe following metrics deviate from their learned-healthy baseline. Treat each as a semantic observation (meaning + numbers), not a number alone \u2014 the KB's interpretation is the authoritative reading.\n\n- **`normalized.smf.bearers_per_ue`** (Active QoS bearers per UE) \u2014 current **0.00 count** vs learned baseline **2.48 count** (MEDIUM, drop)\n    - **What it measures:** Per-UE count of active QoS bearers. Baseline reflects default\nbearers; increments during VoNR calls indicate dedicated voice\nbearers being set up. Drop during an active call = dedicated\nbearer torn down unexpectedly (voice will fail).\n    - **Drop means:** Lost bearers. If sustained during a call, voice path is broken.\n    - **Healthy typical range:** 2\u20133.5 count\n    - **Healthy invariant:** At rest: equals configured default bearers (typically 2 per UE).\nDuring active VoNR call: +1 per caller. The per-UE ratio is the\ninvariant; absolute count scales with UE pool.\n\n- **`normalized.smf.sessions_per_ue`** (PDU sessions per attached UE) \u2014 current **0.00 count** vs learned baseline **2.00 count** (MEDIUM, drop)\n    - **What it measures:** Ratio of established PDU sessions to RAN-attached UEs. Constant under\nhealthy operation (depends on configured APNs per UE). Drift means\nsome UEs lost or failed to establish their sessions \u2014 usually points\nto SMF or UPF control-plane issues, since attachment (ran_ue) is\nindependent of session establishment.\n    - **Drop means:** Some UEs have fewer PDU sessions than they should. Likely SMF or PFCP (N4) issues.\n    - **Healthy typical range:** 1.9\u20132.1 count\n    - **Healthy invariant:** Constant equal to configured_apns_per_ue (typically 2). Scale-independent.\n\n- **`normalized.upf.gtp_indatapktn3upf_per_ue`** (GTP-U uplink rate per UE (N3)) \u2014 current **0.00 packets_per_second** vs learned baseline **1.45 packets_per_second** (LOW, drop)\n    - **What it measures:** Health of the uplink user-plane path gNB \u2192 UPF. Drops to near-zero\nduring RAN or N3 outage; stays nonzero during active calls or data\nsessions. Decoupled from SIP signaling (signals data plane, not\ncontrol plane).\n    - **Drop means:** Data plane dead on uplink \u2014 UPF receiving no packets from gNB.\n    - **Healthy typical range:** 0\u201310 packets_per_second\n    - **Healthy invariant:** Per-UE rate. Constant regardless of UE pool size. Rises during\nactive VoNR calls (~100 pps for G.711 voice) and data transfer.\nUplink and downlink (gtp_outdatapktn3upf_per_ue) are independent\ndirections whose ratio is determined entirely by the current\ntraffic profile \u2014 voice with NULL_AUDIO (this testbed),\nsignaling-only chatter, idle UEs, and asymmetric data sessions\nall produce persistent in/out imbalance under healthy operation.\nAsymmetry between uplink and downlink rates is NEVER, by itself,\nevidence of packet loss \u2014 not at any magnitude, not under any\ntraffic mix. To detect actual loss, use the methods listed in\nstack rule `upf_counters_are_directional` (same-direction rate\ncomparison, RTCP loss_ratio at RTPEngine, or tc qdisc drop\ncounters). Rate-based metrics like this one are usually MORE\ninformative than the underlying lifetime cumulative counter for\ncurrent-state failure detection.\n\n- **`normalized.upf.gtp_outdatapktn3upf_per_ue`** (GTP-U downlink rate per UE (N3)) \u2014 current **0.00 packets_per_second** vs learned baseline **1.45 packets_per_second** (LOW, drop)\n    - **What it measures:** Health of the downlink user-plane path UPF \u2192 gNB. Drops to\nnear-zero during a downlink-affecting RAN, N3, or UPF\noutage; stays nonzero during active calls or data sessions.\nDecoupled from SIP signaling. The cross-direction\nrelationship to uplink (gtp_indatapktn3upf_per_ue) reflects\ncurrent traffic profile, NOT data-plane health \u2014 voice\nwith NULL_AUDIO, signaling-only chatter, idle UEs, and\nasymmetric data sessions all produce persistent in/out\nimbalance under healthy operation. Use this metric for\nsame-direction collapse detection (a known-active downlink\ncollapsing toward zero); do NOT infer loss from\nuplink-vs-downlink asymmetry \u2014 see stack rule\nupf_counters_are_directional.\n    - **Drop means:** No traffic leaving UPF toward RAN.\n    - **Healthy typical range:** 0\u201310 packets_per_second\n    - **Healthy invariant:** Per-UE rate. Constant regardless of UE pool size. Uplink\n(gtp_indatapktn3upf_per_ue) and downlink are independent\ndirections whose ratio is determined entirely by the current\ntraffic profile \u2014 voice with NULL_AUDIO (this testbed),\nsignaling-only chatter, idle UEs, and asymmetric data\nsessions all produce persistent in/out imbalance under\nhealthy operation. Asymmetry between uplink and downlink\nrates is NEVER, by itself, evidence of packet loss \u2014 not\nat any magnitude, not under any traffic mix. To detect\nactual loss, use the methods listed in stack rule\n`upf_counters_are_directional` (same-direction rate\ncomparison, RTCP loss_ratio at RTPEngine, or tc qdisc drop\ncounters). Rate-based metrics like this one are usually\nMORE informative than the underlying lifetime cumulative\ncounter for current-state failure detection.\n",
+    "network_analysis": "{\n  \"summary\": \"The complete loss of the N2 association (gnb=0) and attached UEs (ran_ue=0) at the AMF, combined with nr_gnb being absent from the running containers list, indicates nr_gnb is the primary fault source; the observed drops in UPF N3 GTP rates and SMF session metrics are explicitly demoted as secondary downstream consequences of this total RAN outage.\",\n  \"layer_status\": {},\n  \"hypotheses\": [\n    {\n      \"id\": \"h1\",\n      \"statement\": \"nr_gnb is the source of the N2 association loss, the ran_ue full loss, and the N3 data plane outage.\",\n      \"primary_suspect_nf\": \"nr_gnb\",\n      \"supporting_events\": [\n        \"core.amf.gnb_association_drop\",\n        \"core.amf.ran_ue_sudden_drop\",\n        \"core.amf.ran_ue_full_loss\",\n        \"core.smf.sessions_per_ue_drop\"\n      ],\n      \"explanatory_fit\": 1.0,\n      \"falsification_probes\": [\n        \"Verify nr_gnb container status to determine if it is exited or entirely absent.\",\n        \"Check AMF logs (amf_gnb_remove) to confirm the SCTP association drop originated from the gNB side.\"\n      ],\n      \"specificity\": \"specific\"\n    },\n    {\n      \"id\": \"h2\",\n      \"statement\": \"amf is the source of the N2 association drop and the resulting ran_ue deregistration.\",\n      \"primary_suspect_nf\": \"amf\",\n      \"supporting_events\": [\n        \"core.amf.gnb_association_drop\",\n        \"core.amf.ran_ue_sudden_drop\",\n        \"core.amf.ran_ue_full_loss\"\n      ],\n      \"explanatory_fit\": 0.6,\n      \"falsification_probes\": [\n        \"Check AMF logs for an SCTP listener failure or an AMF process restart.\",\n        \"Check if gNB is actively trying to reconnect to AMF but being refused.\"\n      ],\n      \"specificity\": \"moderate\"\n    }\n  ]\n}",
+    "pattern_match": "",
+    "investigation_instruction": "{\n  \"plans\": [\n    {\n      \"hypothesis_id\": \"h1\",\n      \"hypothesis_statement\": \"nr_gnb is the source of the N2 association loss, the ran_ue full loss, and the N3 data plane outage.\",\n      \"primary_suspect_nf\": \"nr_gnb\",\n      \"probes\": [\n        {\n          \"tool\": \"get_network_status\",\n          \"args_hint\": \"Check the container status of nr_gnb to determine if it is exited or absent.\",\n          \"expected_if_hypothesis_holds\": \"The probe's reading shows the nr_gnb container is absent or has exited.\",\n          \"falsifying_observation\": \"The probe's reading shows the nr_gnb container is running normally.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"get_diagnostic_metrics\",\n          \"args_hint\": \"Check core.amf.gnb on the AMF to confirm the loss of N2 association.\",\n          \"expected_if_hypothesis_holds\": \"The probe's reading shows core.amf.gnb is 0, consistent with a total gNB loss.\",\n          \"falsifying_observation\": \"The probe's reading shows core.amf.gnb > 0, inconsistent with the gNB being completely down.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"measure_rtt from amf to the IP of nr_gnb.\",\n          \"expected_if_hypothesis_holds\": \"The probe shows 100% packet loss, consistent with nr_gnb being unreachable or down.\",\n          \"falsifying_observation\": \"The probe shows successful pings to nr_gnb.\",\n          \"conflates_with\": [\n            \"the transport network routing between amf and nr_gnb could be dropping packets\"\n          ]\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"measure_rtt from upf to the IP of nr_gnb (a different path).\",\n          \"expected_if_hypothesis_holds\": \"The probe shows 100% packet loss, confirming the hypothesized element (nr_gnb) is globally unreachable.\",\n          \"falsifying_observation\": \"The probe shows successful pings, indicating the original reading was attributable to the amf-gnb path, not nr_gnb itself.\",\n          \"conflates_with\": []\n        }\n      ],\n      \"notes\": \"Using get_network_status to directly observe nr_gnb state as the primary indicator, and supplementing with transport reachability from two different sources.\"\n    },\n    {\n      \"hypothesis_id\": \"h2\",\n      \"hypothesis_statement\": \"amf is the source of the N2 association drop and the resulting ran_ue deregistration.\",\n      \"primary_suspect_nf\": \"amf\",\n      \"probes\": [\n        {\n          \"tool\": \"check_process_listeners\",\n          \"args_hint\": \"Check if amf is listening on the SCTP port for N2 (port 38412).\",\n          \"expected_if_hypothesis_holds\": \"The probe's reading shows no listening socket on the SCTP port, consistent with the amf being unable to accept N2 connections.\",\n          \"falsifying_observation\": \"The probe's reading shows an active listening socket on the SCTP port, inconsistent with amf being the source of a listening failure.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"get_network_status\",\n          \"args_hint\": \"Check the uptime and state of the amf container.\",\n          \"expected_if_hypothesis_holds\": \"The probe's reading shows the amf container has recently restarted or is exited.\",\n          \"falsifying_observation\": \"The probe's reading shows the amf container is running and has stable uptime.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"get_diagnostic_metrics\",\n          \"args_hint\": \"Check core.amf.gnb and core.amf.ran_ue metrics.\",\n          \"expected_if_hypothesis_holds\": \"The probe's reading shows core.amf.gnb > 0 but core.amf.ran_ue = 0, consistent with the amf maintaining the association but failing to process UE attaches.\",\n          \"falsifying_observation\": \"The probe's reading shows core.amf.gnb = 0, which points to a total N2 loss rather than a UE-specific processing issue on the amf.\",\n          \"conflates_with\": []\n        }\n      ],\n      \"notes\": \"Testing the AMF's ability to accept connections via listeners and verifying if it is a general N2 failure or a UE-attach failure using metric disambiguation.\"\n    }\n  ]\n}",
+    "investigation": "[\n  {\n    \"hypothesis_id\": \"h1\",\n    \"hypothesis_statement\": \"nr_gnb is the source of the N2 association loss, the ran_ue full loss, and the N3 data plane outage.\",\n    \"verdict\": \"NOT_DISPROVEN\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 both shots returned NOT_DISPROVEN.]\\n\\nShot 1: The get_network_status probe revealed that nr_gnb is completely absent from the network's known containers list. Further measure_rtt probes from both the AMF and UPF to nr_gnb failed with an 'Unknown target container' error, confirming the container is no longer resolvable or present on the network. Additionally, diagnostic metrics on the AMF anchored at the anomaly timestamp confirm the loss of N2 with gnb=0 and ran_ue=0. All evidence strongly supports the hypothesis that nr_gnb is entirely down or absent.\\n\\nShot 2: The get_network_status probe confirms that the nr_gnb container is entirely absent from the active deployment, which aligns with a total gNB failure. The diagnostic metrics at the time of the anomaly show AMF's gnb counter at 0, confirming the complete loss of the N2 association. The measure_rtt probes failed to execute because the nr_gnb container could not be resolved, further demonstrating that the container has been completely removed or destroyed rather than just experiencing network isolation.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check the container status of nr_gnb to determine if it is exited or absent.\",\n        \"tool_call\": \"get_network_status()\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"\\\"down_or_absent\\\": []\\\"] and nr_gnb is completely missing from the \\\"running\\\" list.\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"The container nr_gnb is neither running nor in the down list, indicating it has been completely removed or is entirely absent.\"\n      },\n      {\n        \"probe_description\": \"Check core.amf.gnb on the AMF to confirm the loss of N2 association.\",\n        \"tool_call\": \"get_diagnostic_metrics(at_time_ts=1779328783.2325494, nfs=[\\\"amf\\\"])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1779328783.2325494, nfs=[\\\"amf\\\"]) -> \\\"gnb = 0 [gauge, count]\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"AMF diagnostic metrics explicitly show 0 active gNB associations and 0 RAN UEs, directly confirming the N2 loss at the anomaly timestamp.\"\n      },\n      {\n        \"probe_description\": \"measure_rtt from amf to the IP of nr_gnb.\",\n        \"tool_call\": \"measure_rtt(\\\"amf\\\", \\\"nr_gnb\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"amf\\\", \\\"nr_gnb\\\") -> \\\"Unknown target container 'nr_gnb'.\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"The AMF cannot resolve or reach nr_gnb because the container is completely absent.\"\n      },\n      {\n        \"probe_description\": \"measure_rtt from upf to the IP of nr_gnb (a different path).\",\n        \"tool_call\": \"measure_rtt(\\\"upf\\\", \\\"nr_gnb\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"upf\\\", \\\"nr_gnb\\\") -> \\\"Unknown target container 'nr_gnb'.\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"The UPF cannot resolve or reach nr_gnb because the container is absent, confirming this is a global absence and not a path-specific transport issue.\"\n      }\n    ],\n    \"alternative_suspects\": []\n  },\n  {\n    \"hypothesis_id\": \"h2\",\n    \"hypothesis_statement\": \"amf is the source of the N2 association drop and the resulting ran_ue deregistration.\",\n    \"verdict\": \"DISPROVEN\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 both shots returned DISPROVEN.]\\n\\nShot 1: The get_network_status probe shows the amf container is running normally, contradicting a crash. The diagnostic metrics show gnb = 0 rather than gnb > 0 and ran_ue = 0, indicating a complete N2 association loss, not an AMF-side UE processing failure. Finally, the total absence of the nr_gnb container from the network confirms that the N2 drop and deregistration originated from the RAN itself crashing or disappearing, exonerating the AMF.\\n\\nShot 2: The AMF container is still running normally, contradicting the expectation that an AMF crash caused the N2 drop. Diagnostic metrics show gnb = 0, which contradicts the plan's expectation (gnb > 0) that the AMF maintained the N2 association but failed to process UEs. Furthermore, the complete absence of nr_gnb in the running containers list confirms that the N2 drop was caused by the gNB being removed, not an AMF-originated fault.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check if amf is listening on the SCTP port for N2 (port 38412).\",\n        \"tool_call\": \"check_process_listeners(\\\"amf\\\")\",\n        \"observation\": \"[EVIDENCE: check_process_listeners(\\\"amf\\\") -> \\\"tcp   LISTEN 0      5        172.22.0.10:7777... udp   UNCONN 0      0         127.0.0.11:47362\\\"]\",\n        \"compared_to_expected\": \"AMBIGUOUS\",\n        \"outcome\": \"ambiguous\",\n        \"commentary\": \"The output does not explicitly show SCTP listening sockets (likely a limitation of the ss tool in the container), making this specific listening check ambiguous. However, the process is actively running and listening on its TCP/UDP ports.\"\n      },\n      {\n        \"probe_description\": \"Check the uptime and state of the amf container.\",\n        \"tool_call\": \"get_network_status()\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"\\\"amf\\\": \\\"running\\\"\\\"] and [EVIDENCE: get_network_status() -> nr_gnb is entirely missing from the running list and containers dict]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"The amf container is running normally, refuting the expectation that it crashed or restarted. Furthermore, the complete absence of the nr_gnb container identifies the true source of the failure.\"\n      },\n      {\n        \"probe_description\": \"Check core.amf.gnb and core.amf.ran_ue metrics.\",\n        \"tool_call\": \"get_diagnostic_metrics(at_time_ts=1779328783.23255, nfs=[\\\"amf\\\"])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1779328783.23255, nfs=[\\\"amf\\\"]) -> \\\"gnb = 0 [gauge, count]\\\" and \\\"ran_ue = 0 [gauge, count]\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"The observation matches the falsifying condition: gnb=0 indicates a total N2 loss, which contradicts the hypothesis's prediction of an AMF-side UE processing issue where gnb>0 and ran_ue=0.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"nr_gnb\"\n    ]\n  }\n]",
+    "evidence_validation": "{\n  \"overall_verdict\": \"clean\",\n  \"overall_confidence\": \"high\",\n  \"per_agent\": [\n    {\n      \"agent_name\": \"InvestigatorAgent_h1\",\n      \"tool_calls_made\": 10,\n      \"citations_found\": 4,\n      \"citations_matched\": 4,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h2\",\n      \"tool_calls_made\": 9,\n      \"citations_found\": 4,\n      \"citations_matched\": 4,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    }\n  ],\n  \"summary\": \"Evidence validation across 2 sub-Investigator(s): overall verdict=clean, confidence=high.\\n  - InvestigatorAgent_h1: 10 tool calls, 4/4 citations verified (clean, high)\\n  - InvestigatorAgent_h2: 9 tool calls, 4/4 citations verified (clean, high)\"\n}",
+    "fired_events": "**4 events fired during the observation window:**\n\n- `core.amf.gnb_association_drop` (source: `core.amf.gnb`, nf: `amf`, t=1779328862.8)  [current_value=0.0, prior_stable_value=1.0]\n- `core.amf.ran_ue_sudden_drop` (source: `core.amf.ran_ue`, nf: `amf`, t=1779328862.8)  [current_value=0.0, prior_stable_value=2.0, delta_percent=-100.0]\n- `core.amf.ran_ue_full_loss` (source: `core.amf.ran_ue`, nf: `amf`, t=1779328862.8)  [current_value=0.0, prior_stable_value=2.0]\n- `core.smf.sessions_per_ue_drop` (source: `core.smf.sessions_per_ue`, nf: `smf`, t=1779328862.8)  [current_value=0.0, prior_stable_value=2.0, delta_percent=-100.0]",
+    "correlation_analysis": "**Correlation engine produced 5 ranked composite hypotheses from 4 fired events (showing top 3 of 5):**\n\n### H1: Total RAN outage\n  - primary_nf: amf\n  - explanatory_fit: 0.50 (2/4 events)\n  - testability: 2 (2 disambiguating metrics)\n  - supporting events: `core.amf.gnb_association_drop`, `core.amf.ran_ue_full_loss`\n  - probes to discriminate:\n      - Check core.amf.ran_ue \u2192 Whether N2 is dead (both zero) vs. AMF-side attach issue (gnb>0, ran_ue=0)\n      - Check core.amf.gnb \u2192 gNB-side failure (gnb=0) vs. AMF-side attach-processing issue (gnb>0 but ran_ue=0)\n\n### H2: Total RAN failure \u2014 gNB + UEs both gone\n  - primary_nf: amf\n  - explanatory_fit: 0.50 (2/4 events)\n  - testability: 2 (2 disambiguating metrics)\n  - supporting events: `core.amf.gnb_association_drop`, `core.amf.ran_ue_full_loss`\n  - probes to discriminate:\n      - Check core.amf.ran_ue \u2192 Whether N2 is dead (both zero) vs. AMF-side attach issue (gnb>0, ran_ue=0)\n      - Check core.amf.gnb \u2192 gNB-side failure (gnb=0) vs. AMF-side attach-processing issue (gnb>0 but ran_ue=0)\n\n### H3: RAN failure confirmed \u2014 gNB down, UEs followed\n  - primary_nf: amf\n  - explanatory_fit: 0.50 (2/4 events)\n  - testability: 2 (2 disambiguating metrics)\n  - supporting events: `core.amf.gnb_association_drop`, `core.amf.ran_ue_sudden_drop`\n  - probes to discriminate:\n      - Check core.amf.gnb \u2192 gNB-side failure (gnb=0) vs. AMF-side attach-processing issue (gnb>0 but ran_ue=0)\n      - Check core.amf.ran_ue \u2192 Whether N2 is dead (both zero) vs. AMF-side attach issue (gnb>0, ran_ue=0)\n",
+    "symptom_classification": {
+      "label": "mixed",
+      "rationale": "label=mixed. Both transport-layer (2) and application-layer (2) signals are load-bearing. Path walk runs first; falls through to the application-layer pipeline if the walk produces null localization.\n\nTransport signals: normalized.upf.gtp_indatapktn3upf_per_ue (drop, score=3.56) \u2014 KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (drop, score=3.56); normalized.upf.gtp_outdatapktn3upf_per_ue (drop, score=0.03) \u2014 KB-labeled transport: core.upf.gtp_outdatapktn3upf_per_ue (drop, score=0.03)\n\nApplication signals: normalized.smf.bearers_per_ue (drop, score=4.25) \u2014 KB-labeled application: core.smf.bearers_per_ue (drop, score=4.25); normalized.smf.sessions_per_ue (drop, score=4.25) \u2014 KB-labeled application: core.smf.sessions_per_ue (drop, score=4.25)",
+      "flag_counts": {
+        "transport": 2,
+        "application": 2,
+        "ambiguous": 0
+      },
+      "transport_flags": [
+        {
+          "metric": "upf.gtp_indatapktn3upf_per_ue",
+          "component": "normalized",
+          "current": 0.0,
+          "learned_normal": 1.4539,
+          "direction": "drop",
+          "severity": "LOW",
+          "anomaly_score": 3.555,
+          "kb_metric_id": "core.upf.gtp_indatapktn3upf_per_ue",
+          "bucket": "transport",
+          "owner_layer": "core",
+          "reason": "KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (drop, score=3.56)"
+        },
+        {
+          "metric": "upf.gtp_outdatapktn3upf_per_ue",
+          "component": "normalized",
+          "current": 0.0,
+          "learned_normal": 1.4541,
+          "direction": "drop",
+          "severity": "LOW",
+          "anomaly_score": 0.029,
+          "kb_metric_id": "core.upf.gtp_outdatapktn3upf_per_ue",
+          "bucket": "transport",
+          "owner_layer": "core",
+          "reason": "KB-labeled transport: core.upf.gtp_outdatapktn3upf_per_ue (drop, score=0.03)"
+        }
+      ],
+      "application_flags": [
+        {
+          "metric": "smf.bearers_per_ue",
+          "component": "normalized",
+          "current": 0.0,
+          "learned_normal": 2.4783,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.248,
+          "kb_metric_id": "core.smf.bearers_per_ue",
+          "bucket": "application",
+          "owner_layer": "core",
+          "reason": "KB-labeled application: core.smf.bearers_per_ue (drop, score=4.25)"
+        },
+        {
+          "metric": "smf.sessions_per_ue",
+          "component": "normalized",
+          "current": 0.0,
+          "learned_normal": 2.0,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.248,
+          "kb_metric_id": "core.smf.sessions_per_ue",
+          "bucket": "application",
+          "owner_layer": "core",
+          "reason": "KB-labeled application: core.smf.sessions_per_ue (drop, score=4.25)"
+        }
+      ],
+      "ambiguous_flags": []
+    },
+    "resolved_path": {
+      "flow_id": "data_pdu_session_user_traffic",
+      "flow_name": "Data PDU Session \u2014 User Traffic",
+      "direction": "both",
+      "hops": [
+        {
+          "node": "e2e_ue1",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "nr_gnb",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "upf",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "internet",
+          "kind": "external_network",
+          "iface": "eth0"
+        },
+        {
+          "node": "upf",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "nr_gnb",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "e2e_ue1",
+          "kind": "container",
+          "iface": "eth0"
+        }
+      ],
+      "rationale": "Resolved transport path to flow `data_pdu_session_user_traffic` (score=12, 11 hops on the walk). Load-bearing components: ['smf', 'upf']. Other candidate flows considered: vonr_media=12, pdu_session_establishment=4, ue_deregistration=4, ims_registration=2.",
+      "candidate_flows": [
+        {
+          "flow_id": "data_pdu_session_user_traffic",
+          "score": 12
+        },
+        {
+          "flow_id": "vonr_media",
+          "score": 12
+        },
+        {
+          "flow_id": "pdu_session_establishment",
+          "score": 4
+        },
+        {
+          "flow_id": "ue_deregistration",
+          "score": 4
+        },
+        {
+          "flow_id": "ims_registration",
+          "score": 2
+        }
+      ]
+    },
+    "path_walk_report": {
+      "flow_id": "data_pdu_session_user_traffic",
+      "direction": "both",
+      "anchor_ts": 1779328783.2325494,
+      "window_seconds": 5,
+      "is_localized": true,
+      "first_attributed_hop": {
+        "node": "nr_gnb",
+        "kind": "container",
+        "iface": "eth0"
+      },
+      "hops": [
+        {
+          "hop": {
+            "node": "e2e_ue1",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "e2e_ue1[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=948 rx_pkts=3042 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "nr_gnb",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "container_dead",
+            "detail": "container 'nr_gnb' state is `exited` (expected `running`); probes cannot execute against a non-running container",
+            "status": "exited"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "upf",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "upf[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=151736 rx_pkts=232436 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "internet",
+            "kind": "external_network",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "inconclusive",
+            "reason": "no_prober_registered",
+            "detail": "\"no HopProber registered for kind='external_network'; registered kinds: ['container', 'docker_bridge']\""
+          },
+          "prober": "<unregistered>"
+        },
+        {
+          "hop": {
+            "node": "upf",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "upf[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=151736 rx_pkts=232436 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "nr_gnb",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "container_dead",
+            "detail": "container 'nr_gnb' state is `exited` (expected `running`); probes cannot execute against a non-running container",
+            "status": "exited"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "e2e_ue1",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "e2e_ue1[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=950 rx_pkts=3045 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        }
+      ]
+    },
+    "diagnosis_report": {
+      "summary": "Transport-layer fault localized to nr_gnb[eth0]: container_dead reports the container status as exited.",
+      "root_cause": "The nr_gnb container has exited or been removed entirely, terminating the N2 association and dropping all attached UEs along with the data plane.",
+      "root_cause_confidence": "high",
+      "primary_suspect_nf": "nr_gnb",
+      "verdict_kind": "localized",
+      "affected_components": [
+        {
+          "name": "nr_gnb",
+          "role": "Root Cause"
+        }
+      ],
+      "timeline": [
+        "Path walk started for flow data_pdu_session_user_traffic.",
+        "Fault attributed at hop nr_gnb (container_dead) due to an exited state.",
+        "Walk ended with complete localization at nr_gnb with high confidence."
+      ],
+      "recommendation": "Verify nr_gnb container status: `docker ps -a | grep nr_gnb`.",
+      "explanation": "| # | hop | kind | iface | prober | attribution |\n|---|-----|------|-------|--------|-------------|\n| 1 | e2e_ue1 | container | eth0 | KernelHopProber | clean |\n| 2 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 3 | nr_gnb | container | eth0 | KernelHopProber | container_dead (status=exited) \ud83c\udfaf |\n| 4 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 5 | upf | container | eth0 | KernelHopProber | clean |\n| 6 | internet | external_network | eth0 | <unregistered> | inconclusive (no_prober_registered) |\n| 7 | upf | container | eth0 | KernelHopProber | clean |\n| 8 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 9 | nr_gnb | container | eth0 | KernelHopProber | container_dead (status=exited) |\n| 10 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 11 | e2e_ue1 | container | eth0 | KernelHopProber | clean |\n\n```\ncontainer 'nr_gnb' state is `exited` (expected `running`); probes cannot execute against a non-running container\n```\n\nClassifier rationale: label=mixed. Both transport-layer (2) and application-layer (2) signals are load-bearing. Path walk runs first; falls through to the application-layer pipeline if the walk produces null localization. Transport signals: normalized.upf.gtp_indatapktn3upf_per_ue (drop, score=3.56) \u2014 KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (drop, score=3.56); normalized.upf.gtp_outdatapktn3upf_per_ue (drop, score=0.03) \u2014 KB-labeled transport: core.upf.gtp_outdatapktn3upf_per_ue (drop, score=0.03). Application signals: normalized.smf.bearers_per_ue (drop, score=4.25) \u2014 KB-labeled application: core.smf.bearers_per_ue (drop, score=4.25); normalized.smf.sessions_per_ue (drop, score=4.25) \u2014 KB-labeled application: core.smf.sessions_per_ue (drop, score=4.25).",
+      "localization": {
+        "hop_node": "nr_gnb",
+        "hop_kind": "container",
+        "hop_iface": "eth0",
+        "attribution_kind": "container_dead",
+        "counter_kind": "",
+        "dropped_pkts": 0,
+        "dropped_pct": null,
+        "observed_delay_ms": null,
+        "evidence": "container 'nr_gnb' state is `exited` (expected `running`); probes cannot execute against a non-running container"
+      },
+      "additional_root_causes": []
+    },
+    "rag_retrieval_metadata": {
+      "status": "hits",
+      "summary": "hits=5, top_sim=0.84, top_case=v7/ep_20260510_123737_gnb_radio_link_failure",
+      "hits": [
+        {
+          "rank": 0,
+          "similarity": 0.8375,
+          "case_id": "v7/ep_20260510_123737_gnb_radio_link_failure",
+          "scenario_name": "gNB Radio Link Failure",
+          "ground_truth_affected_components": [
+            "nr_gnb"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v7",
+          "score_pct": 100,
+          "diagnosis_primary_suspect_nf": "nr_gnb",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v7/docs/agent_logs/run_20260510_124620_gnb_radio_link_failure.json"
+        },
+        {
+          "rank": 1,
+          "similarity": 0.7751,
+          "case_id": "v6/ep_20260429_155442_gnb_radio_link_failure",
+          "scenario_name": "gNB Radio Link Failure",
+          "ground_truth_affected_components": [
+            "nr_gnb"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v6",
+          "score_pct": 100,
+          "diagnosis_primary_suspect_nf": "nr_gnb",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v6/docs/agent_logs/run_20260429_160036_gnb_radio_link_failure.json"
+        },
+        {
+          "rank": 2,
+          "similarity": 0.6553,
+          "case_id": "v6/ep_20260420_040102_gnb_radio_link_failure",
+          "scenario_name": "gNB Radio Link Failure",
+          "ground_truth_affected_components": [
+            "nr_gnb"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v6",
+          "score_pct": 100,
+          "diagnosis_primary_suspect_nf": null,
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v6/docs/agent_logs/run_20260420_040523_gnb_radio_link_failure.json"
+        },
+        {
+          "rank": 3,
+          "similarity": 0.6553,
+          "case_id": "v6/ep_20260420_041956_gnb_radio_link_failure",
+          "scenario_name": "gNB Radio Link Failure",
+          "ground_truth_affected_components": [
+            "nr_gnb"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v6",
+          "score_pct": 100,
+          "diagnosis_primary_suspect_nf": null,
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v6/docs/agent_logs/run_20260420_042418_gnb_radio_link_failure.json"
+        },
+        {
+          "rank": 4,
+          "similarity": 0.6553,
+          "case_id": "v6/ep_20260423_193657_gnb_radio_link_failure",
+          "scenario_name": "gNB Radio Link Failure",
+          "ground_truth_affected_components": [
+            "nr_gnb"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v6",
+          "score_pct": 90,
+          "diagnosis_primary_suspect_nf": "nr_gnb",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v6/docs/agent_logs/run_20260423_194244_gnb_radio_link_failure.json"
+        }
+      ],
+      "index_dir": "/home/ehoskas/agentic-network-ops/rag_index",
+      "corpus_size": 102,
+      "anomaly_flag_count": 4,
+      "classifier_label": "mixed",
+      "k": 5,
+      "min_similarity": 0.4,
+      "block_chars": 3585
+    },
+    "lessons_injection_metadata": {
+      "status": "injected",
+      "summary": "lessons=16, chars=15678",
+      "path": "/home/ehoskas/agentic-network-ops/agentic_ops_common/rag/lessons.yaml",
+      "lesson_ids": [
+        "L01",
+        "L02",
+        "L03",
+        "L04",
+        "L05",
+        "L06",
+        "L07",
+        "L08",
+        "L09",
+        "L10",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15",
+        "L16"
+      ],
+      "lesson_count": 16,
+      "block_chars": 15678
+    },
+    "rag_na_citations": {
+      "cited_case_ids": [],
+      "cited_lesson_ids": [],
+      "any_citation": false
+    }
+  }
+}

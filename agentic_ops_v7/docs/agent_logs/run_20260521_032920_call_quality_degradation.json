@@ -1,0 +1,1667 @@
+{
+  "schema_version": "1.0",
+  "episode_id": "ep_20260521_031437_call_quality_degradation",
+  "timestamp": "2026-05-21T03:14:39.045836+00:00",
+  "duration_seconds": 880.966238,
+  "scenario": {
+    "name": "Call Quality Degradation",
+    "description": "Inject 30% packet loss on RTPEngine \u2014 the media relay for VoNR voice calls. RTP packets are dropped after RTPEngine receives them, degrading voice quality (MOS drop, jitter increase, audible artifacts). SIP signaling and 5G core are completely unaffected because they don't traverse RTPEngine. Tests whether the agent can diagnose a pure media-path fault without IMS signaling noise.",
+    "category": "network",
+    "blast_radius": "single_nf",
+    "faults": [
+      {
+        "fault_type": "network_loss",
+        "target": "rtpengine",
+        "params": {
+          "loss_pct": 30
+        },
+        "ttl_seconds": 600
+      }
+    ],
+    "expected_symptoms": [
+      "RTPEngine packets_lost increases",
+      "RTPEngine average_packet_loss rises",
+      "RTPEngine average_mos drops below 3.5",
+      "RTPEngine packet_loss_standard_deviation spikes",
+      "RTPEngine 1-way streams may appear",
+      "UPF GTP-U counters unaffected",
+      "IMS signaling (SIP, Diameter) unaffected"
+    ],
+    "escalation": false,
+    "observation_traffic_seconds": 120,
+    "observation_window_seconds": 30,
+    "ttl_seconds": 600
+  },
+  "baseline": {
+    "timestamp": "2026-05-21T03:14:39.045836+00:00",
+    "stack_phase": "ready",
+    "container_status": {
+      "mongo": "running",
+      "nrf": "running",
+      "scp": "running",
+      "ausf": "running",
+      "udr": "running",
+      "udm": "running",
+      "amf": "running",
+      "smf": "running",
+      "upf": "running",
+      "pcf": "running",
+      "dns": "running",
+      "mysql": "running",
+      "pyhss": "running",
+      "icscf": "running",
+      "scscf": "running",
+      "pcscf": "running",
+      "rtpengine": "running",
+      "nr_gnb": "running",
+      "e2e_ue1": "running",
+      "e2e_ue2": "running"
+    },
+    "metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 10.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 67686.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 59648.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 4270060.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 4718439.0,
+          "_gauge_upf_kbps": 0.0
+        },
+        "badge": "4 sess",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 30.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 30.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 48.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 48.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 2.0,
+          "core:rcv_requests_invite": 10.0,
+          "core:rcv_requests_options": 400.0,
+          "core:rcv_requests_register": 39.0,
+          "dialog_ng:active": 6.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 10.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 416.0,
+          "httpclient:connok": 15.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 10.0,
+          "script:register_time": 19450.0,
+          "sl:1xx_replies": 42.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 48.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 14.0,
+          "cdp:replies_response_time": 673.0,
+          "cdp:timeout": 2.0,
+          "core:rcv_requests_invite": 6.0,
+          "core:rcv_requests_register": 32.0,
+          "ims_icscf:lir_avg_response_time": 37.0,
+          "ims_icscf:lir_replies_received": 4.0,
+          "ims_icscf:lir_replies_response_time": 150.0,
+          "ims_icscf:lir_timeouts": 2.0,
+          "ims_icscf:uar_avg_response_time": 52.0,
+          "ims_icscf:uar_replies_received": 10.0,
+          "ims_icscf:uar_replies_response_time": 523.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "32 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 88.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 22.0,
+          "cdp:replies_response_time": 1953.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 10.0,
+          "core:rcv_requests_register": 22.0,
+          "dialog_ng:active": 6.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 10.0,
+          "ims_auth:mar_avg_response_time": 78.0,
+          "ims_auth:mar_replies_received": 12.0,
+          "ims_auth:mar_replies_response_time": 944.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 10.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 100.0,
+          "ims_registrar_scscf:sar_replies_received": 10.0,
+          "ims_registrar_scscf:sar_replies_response_time": 1009.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 4.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 4.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 32.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 22.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 10.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 58748.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 1608674.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 58748.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 1608674.0,
+          "total_number_of_streams_with_no_relayed_packets": 16.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 19751.6,
+          "sum_of_all_mos_square_values_sampled": 85165.44,
+          "total_number_of_mos_samples": 4590.0,
+          "average_mos": 4.3,
+          "mos_standard_deviation": 0.01,
+          "sum_of_all_jitter_(reported)_values_sampled": 3367.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 23187.0,
+          "total_number_of_jitter_(reported)_samples": 4622.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 2.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 29098938.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 240699078520.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 4622.0,
+          "average_end_to_end_round_trip_time": 6295.0,
+          "end_to_end_round_trip_time_standard_deviation": 3527.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 14704323.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 84477125533.0,
+          "total_number_of_discrete_round_trip_time_samples": 4622.0,
+          "average_discrete_round_trip_time": 3181.0,
+          "discrete_round_trip_time_standard_deviation": 2855.0,
+          "sum_of_all_packet_loss_values_sampled": 33578.0,
+          "sum_of_all_packet_loss_square_values_sampled": 1804184.0,
+          "total_number_of_packet_loss_samples": 4622.0,
+          "average_packet_loss": 7.0,
+          "packet_loss_standard_deviation": 18.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 33578.0,
+          "prom_packetloss_samples_total": 4622.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    }
+  },
+  "faults": [
+    {
+      "fault_id": "f_29218055",
+      "fault_type": "network_loss",
+      "target": "rtpengine",
+      "params": {
+        "loss_pct": 30
+      },
+      "mechanism": "sudo nsenter -t 1054933 -n tc qdisc add dev eth0 root netem loss 30.0%",
+      "heal_command": "sudo nsenter -t 1054933 -n tc qdisc del dev eth0 root",
+      "injected_at": "2026-05-21T03:14:39.046343+00:00",
+      "ttl_seconds": 600,
+      "expires_at": "2026-05-21T03:24:39.046343+00:00",
+      "success": true,
+      "verified": true,
+      "verification_result": "qdisc netem 80a2: root refcnt 9 limit 1000 loss 30%"
+    }
+  ],
+  "fault_verification": {
+    "verdict": "confirmed",
+    "wait_seconds": 0,
+    "elapsed_seconds": 0.0,
+    "propagation_window_seconds": 124.88,
+    "observation_phase_ran": true,
+    "verified_at": "2026-05-21T03:16:44.478458+00:00",
+    "filtered_deltas": {
+      "scscf": {
+        "ims_registrar_scscf:sar_replies_received": {
+          "baseline": 10.0,
+          "current": 20.0,
+          "delta": 10.0
+        },
+        "core:rcv_requests_register": {
+          "baseline": 22.0,
+          "current": 42.0,
+          "delta": 20.0
+        },
+        "ims_registrar_scscf:sar_replies_response_time": {
+          "baseline": 1009.0,
+          "current": 2168.0,
+          "delta": 1159.0
+        },
+        "cdp:replies_received": {
+          "baseline": 22.0,
+          "current": 42.0,
+          "delta": 20.0
+        },
+        "ims_auth:mar_replies_response_time": {
+          "baseline": 944.0,
+          "current": 2242.0,
+          "delta": 1298.0
+        },
+        "dialog_ng:processed": {
+          "baseline": 10.0,
+          "current": 16.0,
+          "delta": 6.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 10.0,
+          "current": 16.0,
+          "delta": 6.0
+        },
+        "ims_registrar_scscf:accepted_regs": {
+          "baseline": 10.0,
+          "current": 20.0,
+          "delta": 10.0
+        },
+        "ims_auth:mar_replies_received": {
+          "baseline": 12.0,
+          "current": 22.0,
+          "delta": 10.0
+        },
+        "ims_auth:mar_avg_response_time": {
+          "baseline": 78.0,
+          "current": 101.0,
+          "delta": 23.0
+        },
+        "cdp:replies_response_time": {
+          "baseline": 1953.0,
+          "current": 4410.0,
+          "delta": 2457.0
+        }
+      },
+      "pcscf": {
+        "core:rcv_requests_register": {
+          "baseline": 39.0,
+          "current": 59.0,
+          "delta": 20.0
+        },
+        "dialog_ng:processed": {
+          "baseline": 10.0,
+          "current": 16.0,
+          "delta": 6.0
+        },
+        "script:register_success": {
+          "baseline": 10.0,
+          "current": 20.0,
+          "delta": 10.0
+        },
+        "httpclient:connok": {
+          "baseline": 15.0,
+          "current": 21.0,
+          "delta": 6.0
+        },
+        "core:rcv_requests_bye": {
+          "baseline": 2.0,
+          "current": 19.0,
+          "delta": 17.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 10.0,
+          "current": 16.0,
+          "delta": 6.0
+        },
+        "sl:1xx_replies": {
+          "baseline": 42.0,
+          "current": 68.0,
+          "delta": 26.0
+        }
+      },
+      "rtpengine": {
+        "total_regular_terminated_sessions": {
+          "baseline": 10.0,
+          "current": 12.0,
+          "delta": 2.0
+        }
+      },
+      "icscf": {
+        "core:rcv_requests_register": {
+          "baseline": 32.0,
+          "current": 52.0,
+          "delta": 20.0
+        },
+        "cdp:replies_received": {
+          "baseline": 14.0,
+          "current": 27.0,
+          "delta": 13.0
+        },
+        "ims_icscf:lir_replies_received": {
+          "baseline": 4.0,
+          "current": 7.0,
+          "delta": 3.0
+        },
+        "ims_icscf:lir_replies_response_time": {
+          "baseline": 150.0,
+          "current": 310.0,
+          "delta": 160.0
+        },
+        "ims_icscf:uar_replies_received": {
+          "baseline": 10.0,
+          "current": 20.0,
+          "delta": 10.0
+        },
+        "ims_icscf:uar_replies_response_time": {
+          "baseline": 523.0,
+          "current": 1232.0,
+          "delta": 709.0
+        },
+        "core:rcv_requests_invite": {
+          "baseline": 6.0,
+          "current": 9.0,
+          "delta": 3.0
+        },
+        "cdp:replies_response_time": {
+          "baseline": 673.0,
+          "current": 1542.0,
+          "delta": 869.0
+        }
+      }
+    },
+    "raw_delta_node_count": 5
+  },
+  "observations": [
+    {
+      "iteration": 1,
+      "timestamp": "2026-05-21T03:16:44.478458+00:00",
+      "elapsed_seconds": 0.0,
+      "metrics_delta": {
+        "scscf": {
+          "ims_registrar_scscf:sar_replies_received": {
+            "baseline": 10.0,
+            "current": 20.0,
+            "delta": 10.0
+          },
+          "core:rcv_requests_register": {
+            "baseline": 22.0,
+            "current": 42.0,
+            "delta": 20.0
+          },
+          "ims_registrar_scscf:sar_replies_response_time": {
+            "baseline": 1009.0,
+            "current": 2168.0,
+            "delta": 1159.0
+          },
+          "cdp:replies_received": {
+            "baseline": 22.0,
+            "current": 42.0,
+            "delta": 20.0
+          },
+          "ims_auth:mar_replies_response_time": {
+            "baseline": 944.0,
+            "current": 2242.0,
+            "delta": 1298.0
+          },
+          "dialog_ng:processed": {
+            "baseline": 10.0,
+            "current": 16.0,
+            "delta": 6.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 10.0,
+            "current": 16.0,
+            "delta": 6.0
+          },
+          "ims_registrar_scscf:accepted_regs": {
+            "baseline": 10.0,
+            "current": 20.0,
+            "delta": 10.0
+          },
+          "ims_auth:mar_replies_received": {
+            "baseline": 12.0,
+            "current": 22.0,
+            "delta": 10.0
+          },
+          "ims_auth:mar_avg_response_time": {
+            "baseline": 78.0,
+            "current": 101.0,
+            "delta": 23.0
+          },
+          "cdp:replies_response_time": {
+            "baseline": 1953.0,
+            "current": 4410.0,
+            "delta": 2457.0
+          }
+        },
+        "pcscf": {
+          "core:rcv_requests_register": {
+            "baseline": 39.0,
+            "current": 59.0,
+            "delta": 20.0
+          },
+          "dialog_ng:processed": {
+            "baseline": 10.0,
+            "current": 16.0,
+            "delta": 6.0
+          },
+          "script:register_success": {
+            "baseline": 10.0,
+            "current": 20.0,
+            "delta": 10.0
+          },
+          "httpclient:connok": {
+            "baseline": 15.0,
+            "current": 21.0,
+            "delta": 6.0
+          },
+          "core:rcv_requests_bye": {
+            "baseline": 2.0,
+            "current": 19.0,
+            "delta": 17.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 10.0,
+            "current": 16.0,
+            "delta": 6.0
+          },
+          "sl:1xx_replies": {
+            "baseline": 42.0,
+            "current": 68.0,
+            "delta": 26.0
+          }
+        },
+        "rtpengine": {
+          "total_regular_terminated_sessions": {
+            "baseline": 10.0,
+            "current": 12.0,
+            "delta": 2.0
+          }
+        },
+        "icscf": {
+          "core:rcv_requests_register": {
+            "baseline": 32.0,
+            "current": 52.0,
+            "delta": 20.0
+          },
+          "cdp:replies_received": {
+            "baseline": 14.0,
+            "current": 27.0,
+            "delta": 13.0
+          },
+          "ims_icscf:lir_replies_received": {
+            "baseline": 4.0,
+            "current": 7.0,
+            "delta": 3.0
+          },
+          "ims_icscf:lir_replies_response_time": {
+            "baseline": 150.0,
+            "current": 310.0,
+            "delta": 160.0
+          },
+          "ims_icscf:uar_replies_received": {
+            "baseline": 10.0,
+            "current": 20.0,
+            "delta": 10.0
+          },
+          "ims_icscf:uar_replies_response_time": {
+            "baseline": 523.0,
+            "current": 1232.0,
+            "delta": 709.0
+          },
+          "core:rcv_requests_invite": {
+            "baseline": 6.0,
+            "current": 9.0,
+            "delta": 3.0
+          },
+          "cdp:replies_response_time": {
+            "baseline": 673.0,
+            "current": 1542.0,
+            "delta": 869.0
+          }
+        }
+      },
+      "log_samples": {},
+      "symptoms_detected": true,
+      "escalation_level": 0
+    }
+  ],
+  "resolution": {
+    "healed_at": "2026-05-21T03:29:20.012074+00:00",
+    "heal_method": "scheduled",
+    "post_heal_metrics": {
+      "amf": {
+        "metrics": {
+          "amf_session": 4.0,
+          "ran_ue": 2.0,
+          "gnb": 1.0
+        },
+        "badge": "2 UE",
+        "source": "prometheus"
+      },
+      "smf": {
+        "metrics": {
+          "fivegs_smffunction_sm_sessionnbr": 4.0,
+          "ues_active": 2.0,
+          "bearers_active": 8.0,
+          "pfcp_sessions_active": 4.0
+        },
+        "badge": "4 PDU",
+        "source": "prometheus"
+      },
+      "upf": {
+        "metrics": {
+          "fivegs_upffunction_upf_sessionnbr": 4.0,
+          "fivegs_ep_n3_gtp_indatapktn3upf": 70417.0,
+          "fivegs_ep_n3_gtp_outdatapktn3upf": 60360.0,
+          "fivegs_ep_n3_gtp_indatavolumeqosleveln3upf": 4473851.0,
+          "fivegs_ep_n3_gtp_outdatavolumeqosleveln3upf": 4833700.0,
+          "_gauge_upf_kbps": 0.14
+        },
+        "badge": "0.1 KB/s",
+        "source": "prometheus"
+      },
+      "pcf": {
+        "metrics": {
+          "fivegs_pcffunction_pa_sessionnbr": 4.0,
+          "fivegs_pcffunction_pa_policyamassoreq": 30.0,
+          "fivegs_pcffunction_pa_policyamassosucc": 30.0,
+          "fivegs_pcffunction_pa_policysmassoreq": 48.0,
+          "fivegs_pcffunction_pa_policysmassosucc": 48.0
+        },
+        "badge": "4 PA",
+        "source": "prometheus"
+      },
+      "pcscf": {
+        "metrics": {
+          "core:rcv_requests_bye": 23.0,
+          "core:rcv_requests_invite": 16.0,
+          "core:rcv_requests_options": 576.0,
+          "core:rcv_requests_register": 59.0,
+          "dialog_ng:active": 2.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 16.0,
+          "httpclient:connections": 0.0,
+          "httpclient:connfail": 608.0,
+          "httpclient:connok": 21.0,
+          "ims_usrloc_pcscf:expired_contacts": 0.0,
+          "ims_usrloc_pcscf:registered_contacts": 2.0,
+          "ims_usrloc_pcscf:registered_impus": 0.0,
+          "registrar:accepted_regs": 0.0,
+          "registrar:default_expire": 3600.0,
+          "registrar:default_expires_range": 0.0,
+          "registrar:expires_range": 0.0,
+          "registrar:max_contacts": 0.0,
+          "registrar:max_expires": 0.0,
+          "registrar:rejected_regs": 0.0,
+          "script:register_failed": 0.0,
+          "script:register_success": 20.0,
+          "script:register_time": 22765.0,
+          "sl:1xx_replies": 68.0,
+          "sl:200_replies": 0.0,
+          "sl:4xx_replies": 0.0,
+          "sl:5xx_replies": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "icscf": {
+        "metrics": {
+          "cdp:average_response_time": 57.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 27.0,
+          "cdp:replies_response_time": 1542.0,
+          "cdp:timeout": 2.0,
+          "core:rcv_requests_invite": 9.0,
+          "core:rcv_requests_register": 52.0,
+          "ims_icscf:lir_avg_response_time": 44.0,
+          "ims_icscf:lir_replies_received": 7.0,
+          "ims_icscf:lir_replies_response_time": 310.0,
+          "ims_icscf:lir_timeouts": 2.0,
+          "ims_icscf:uar_avg_response_time": 61.0,
+          "ims_icscf:uar_replies_received": 20.0,
+          "ims_icscf:uar_replies_response_time": 1232.0,
+          "ims_icscf:uar_timeouts": 0.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "52 req",
+        "source": "kamcmd"
+      },
+      "scscf": {
+        "metrics": {
+          "cdp:average_response_time": 105.0,
+          "cdp:queuelength": 0.0,
+          "cdp:replies_received": 42.0,
+          "cdp:replies_response_time": 4410.0,
+          "cdp:timeout": 0.0,
+          "core:rcv_requests_invite": 16.0,
+          "core:rcv_requests_register": 42.0,
+          "dialog_ng:active": 2.0,
+          "dialog_ng:early": 0.0,
+          "dialog_ng:expired": 0.0,
+          "dialog_ng:processed": 16.0,
+          "ims_auth:mar_avg_response_time": 101.0,
+          "ims_auth:mar_replies_received": 22.0,
+          "ims_auth:mar_replies_response_time": 2242.0,
+          "ims_auth:mar_timeouts": 0.0,
+          "ims_registrar_scscf:accepted_regs": 20.0,
+          "ims_registrar_scscf:default_expire": 3600.0,
+          "ims_registrar_scscf:default_expires_range": 0.0,
+          "ims_registrar_scscf:max_contacts": 5.0,
+          "ims_registrar_scscf:max_expires": 3600.0,
+          "ims_registrar_scscf:notifies_in_q": 0.0,
+          "ims_registrar_scscf:rejected_regs": 0.0,
+          "ims_registrar_scscf:sar_avg_response_time": 108.0,
+          "ims_registrar_scscf:sar_replies_received": 20.0,
+          "ims_registrar_scscf:sar_replies_response_time": 2168.0,
+          "ims_registrar_scscf:sar_timeouts": 0.0,
+          "ims_usrloc_scscf:active_contacts": 2.0,
+          "ims_usrloc_scscf:active_impus": 6.0,
+          "ims_usrloc_scscf:active_subscriptions": 2.0,
+          "ims_usrloc_scscf:contact_collisions": 1.0,
+          "ims_usrloc_scscf:impu_collisions": 1.0,
+          "ims_usrloc_scscf:subscription_collisions": 1.0,
+          "tmx:active_transactions": 0.0
+        },
+        "badge": "2 reg",
+        "source": "kamcmd"
+      },
+      "rtpengine": {
+        "metrics": {
+          "owned_sessions": 0.0,
+          "foreign_sessions": 0.0,
+          "total_sessions": 0.0,
+          "transcoded_media": 0.0,
+          "media_cache_size": 0.0,
+          "player_cache_size": 0.0,
+          "packets_per_second_(userspace)": 0.0,
+          "bytes_per_second_(userspace)": 0.0,
+          "errors_per_second_(userspace)": 0.0,
+          "packets_per_second_(kernel)": 0.0,
+          "bytes_per_second_(kernel)": 0.0,
+          "errors_per_second_(kernel)": 0.0,
+          "packets_per_second_(total)": 0.0,
+          "bytes_per_second_(total)": 0.0,
+          "errors_per_second_(total)": 0.0,
+          "userspace_only_media_streams": 0.0,
+          "kernel_only_media_streams": 0.0,
+          "mixed_kernel/userspace_media_streams": 0.0,
+          "total_managed_sessions": 38.0,
+          "total_rejected_sessions": 0.0,
+          "total_timed_out_sessions_via_timeout": 26.0,
+          "total_timed_out_sessions_via_silent_timeout": 0.0,
+          "total_timed_out_sessions_via_final_timeout": 0.0,
+          "total_timed_out_sessions_via_offer_timeout": 0.0,
+          "total_regular_terminated_sessions": 12.0,
+          "total_forced_terminated_sessions": 0.0,
+          "total_relayed_packets_(userspace)": 59060.0,
+          "total_relayed_packet_errors_(userspace)": 0.0,
+          "total_relayed_bytes_(userspace)": 1624696.0,
+          "total_relayed_packets_(kernel)": 0.0,
+          "total_relayed_packet_errors_(kernel)": 0.0,
+          "total_relayed_bytes_(kernel)": 0.0,
+          "total_relayed_packets": 59060.0,
+          "total_relayed_packet_errors": 0.0,
+          "total_relayed_bytes": 1624696.0,
+          "total_number_of_streams_with_no_relayed_packets": 20.0,
+          "total_number_of_1_way_streams": 0.0,
+          "sum_of_all_mos_values_sampled": 19828.5,
+          "sum_of_all_mos_square_values_sampled": 85483.95,
+          "total_number_of_mos_samples": 4609.0,
+          "average_mos": 4.3,
+          "mos_standard_deviation": 0.01,
+          "sum_of_all_jitter_(reported)_values_sampled": 3377.0,
+          "sum_of_all_jitter_(reported)_square_values_sampled": 23197.0,
+          "total_number_of_jitter_(reported)_samples": 4644.0,
+          "average_jitter_(reported)": 0.0,
+          "jitter_(reported)_standard_deviation": 2.0,
+          "sum_of_all_end_to_end_round_trip_time_values_sampled": 29232750.0,
+          "sum_of_all_end_to_end_round_trip_time_square_values_sampled": 241707437724.0,
+          "total_number_of_end_to_end_round_trip_time_samples": 4644.0,
+          "average_end_to_end_round_trip_time": 6294.0,
+          "end_to_end_round_trip_time_standard_deviation": 3524.0,
+          "sum_of_all_discrete_round_trip_time_values_sampled": 14776282.0,
+          "sum_of_all_discrete_round_trip_time_square_values_sampled": 84741597838.0,
+          "total_number_of_discrete_round_trip_time_samples": 4644.0,
+          "average_discrete_round_trip_time": 3181.0,
+          "discrete_round_trip_time_standard_deviation": 2850.0,
+          "sum_of_all_packet_loss_values_sampled": 33956.0,
+          "sum_of_all_packet_loss_square_values_sampled": 1815898.0,
+          "total_number_of_packet_loss_samples": 4644.0,
+          "average_packet_loss": 7.0,
+          "packet_loss_standard_deviation": 18.0,
+          "sum_of_all_jitter_(measured)_values_sampled": 0.0,
+          "sum_of_all_jitter_(measured)_square_values_sampled": 0.0,
+          "total_number_of_jitter_(measured)_samples": 0.0,
+          "average_jitter_(measured)": 0.0,
+          "jitter_(measured)_standard_deviation": 0.0,
+          "packets_lost": 0.0,
+          "duplicate_rtp_packets": 0.0,
+          "rtp_sequence_skips": 0.0,
+          "rtp_sequence_resets": 0.0,
+          "out_of_order_rtp_packets": 0.0,
+          "prom_packetloss_total": 33956.0,
+          "prom_packetloss_samples_total": 4644.0
+        },
+        "badge": "",
+        "source": "rtpengine-ctl+prom"
+      },
+      "pyhss": {
+        "metrics": {
+          "ims_subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "api"
+      },
+      "mongo": {
+        "metrics": {
+          "subscribers": 2
+        },
+        "badge": "2 subs",
+        "source": "mongosh"
+      }
+    },
+    "recovery_time_seconds": 880.965731,
+    "faults_healed": 0
+  },
+  "rca_label": {
+    "root_cause": "Inject 30% packet loss on RTPEngine \u2014 the media relay for VoNR voice calls. RTP packets are dropped after RTPEngine receives them, degrading voice quality (MOS drop, jitter increase, audible artifacts). SIP signaling and 5G core are completely unaffected because they don't traverse RTPEngine. Tests whether the agent can diagnose a pure media-path fault without IMS signaling noise.",
+    "affected_components": [
+      "rtpengine"
+    ],
+    "severity": "degraded",
+    "failure_domain": "ims_media",
+    "protocol_impact": "RTP"
+  },
+  "challenge_result": {
+    "rca_agent_model": "v7-adk/pro=gemini-3.1-pro-preview+flash=gemini-3.5-flash",
+    "prompt_to_agent": "The 5G SA + IMS stack is experiencing issues. Investigate and diagnose the root cause.",
+    "diagnosis_text": "### causes\n- **summary**: Transport-layer fault localized to rtpengine[eth0]: qdisc_netem reports 341 packets dropped (44.29%).\n- **timeline**:\n    1. Path walk initiated on flow `vonr_media`.\n    2. Attribution at rtpengine[eth0]: drops_attributed_here due to qdisc_netem dropping 341 packets (44.29%).\n    3. Path walk concluded with high confidence transport-layer localization.\n- **root_cause**: Kernel-level packet drop on rtpengine's egress: `tc netem` qdisc dropping 30% of packets. (primary_suspect_nf: `rtpengine`)\n- **affected_components**:\n    - `rtpengine`: Root Cause\n- **recommendation**: Inspect tc qdisc on rtpengine: `docker exec rtpengine tc -s qdisc show dev eth0`\n- **confidence**: high\n- **verdict_kind**: localized\n- **explanation**: | # | hop | kind | iface | prober | attribution |\n|---|-----|------|-------|--------|-------------|\n| 1 | e2e_ue1 | container | eth0 | KernelHopProber | clean |\n| 2 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 3 | nr_gnb | container | eth0 | KernelHopProber | clean |\n| 4 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 5 | upf | container | eth0 | KernelHopProber | clean |\n| 6 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 7 | rtpengine | container | eth0 | KernelHopProber | drops_attributed_here (qdisc_netem, 341 dropped, 44.3%) \ud83c\udfaf |\n| 8 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 9 | upf | container | eth0 | KernelHopProber | clean |\n| 10 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 11 | nr_gnb | container | eth0 | KernelHopProber | clean |\n| 12 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 13 | e2e_ue2 | container | eth0 | KernelHopProber | clean |\n\n```\nrtpengine[eth0] qdisc=netem, authored loss=30%: sent=770 dropped=341 (44.29%)\n---tc -s qdisc show dev eth0---\nqdisc netem 80a2: root refcnt 9 limit 1000 loss 30%\n Sent 640297 bytes 770 pkt (dropped 341, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\n```\n\nClassifier rationale: label=mixed. Both transport-layer (3) and application-layer (1) signals are load-bearing. Path walk runs first; falls through to the application-layer pipeline if the walk produces null localization.\nTransport signals: derived.rtpengine_loss_ratio (spike, score=4.28) \u2014 KB-labeled transport: ims.rtpengine.loss_ratio (spike, score=4.28); derived.upf_activity_during_calls (drop, score=4.28) \u2014 KB-labeled transport: core.upf.activity_during_calls (drop, score=4.28); normalized.upf.gtp_indatapktn3upf_per_ue (spike, score=4.28) \u2014 KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (spike, score=4.28)\nApplication signals: normalized.smf.bearers_per_ue (spike, score=4.28) \u2014 KB-labeled application: core.smf.bearers_per_ue (spike, score=4.28)\nAmbiguous signals: normalized.icscf.cdp_replies_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.icscf.cdp_replies_per_ue (spike, score=4.28); normalized.icscf.core:rcv_requests_register_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.icscf.rcv_requests_register_per_ue (spike, score=4.28); normalized.pcscf.core:rcv_requests_register_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.pcscf.rcv_requests_register_per_ue (spike, score=4.28); normalized.pcscf.dialogs_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.pcscf.dialogs_per_ue (spike, score=4.28); normalized.scscf.cdp_replies_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.scscf.cdp_replies_per_ue (spike, score=4.28) [+1 more]",
+    "score": {
+      "root_cause_correct": true,
+      "root_cause_rationale": "The agent correctly identified the root cause as packet drops on the rtpengine egress path, specifically identifying the 30% packet loss on rtpengine.",
+      "component_overlap": 1.0,
+      "component_rationale": "The agent correctly identified 'rtpengine' as the primary affected component and labeled it as the 'Root Cause'.",
+      "severity_correct": true,
+      "severity_rationale": "The agent correctly identified the issue as a packet loss degradation (30% to 44% packet drops) rather than a complete outage.",
+      "fault_type_identified": true,
+      "fault_type_rationale": "The agent correctly identified the fault type as packet drops/loss on the transport layer.",
+      "layer_accuracy": true,
+      "layer_accuracy_rationale": "No layer status information was provided in the intermediate network analysis, so no misattribution was detected.",
+      "confidence_calibrated": true,
+      "confidence_rationale": "The agent expressed high confidence, which is fully justified given the precise identification of the packet loss and the exact tc netem configuration.",
+      "ranking_position": 1,
+      "ranking_rationale": "The correct root cause (rtpengine packet loss) was identified as the primary and only suspect.",
+      "total_score": 1.0,
+      "summary": "The agent provided an exceptionally accurate diagnosis, correctly identifying the 30% packet loss on the RTPEngine egress path with precise tool evidence."
+    },
+    "time_to_diagnosis_seconds": 748.1,
+    "token_usage": {
+      "input_tokens": 762654,
+      "output_tokens": 10693,
+      "thinking_tokens": 50507,
+      "total_tokens": 823854,
+      "per_phase": [
+        {
+          "agent": "AnomalyScreener",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SymptomClassifier",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "PathResolver",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "PathWalkInvestigator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "EventAggregator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "CorrelationAnalyzer",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "RAGRetriever",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "OperationalLessons",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 131318,
+          "tool_calls": 8,
+          "llm_calls": 4
+        },
+        {
+          "agent": "NetworkAnalystAgent",
+          "tokens": 197744,
+          "tool_calls": 11,
+          "llm_calls": 5
+        },
+        {
+          "agent": "Phase 3 NetworkAnalyst__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 14416,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 17751,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase 4 InstructionGenerator__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 134152,
+          "tool_calls": 7,
+          "llm_calls": 6
+        },
+        {
+          "agent": "InvestigatorAgent_h1",
+          "tokens": 87900,
+          "tool_calls": 5,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h1__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h2",
+          "tokens": 57652,
+          "tool_calls": 4,
+          "llm_calls": 3
+        },
+        {
+          "agent": "InvestigatorAgent_h2",
+          "tokens": 82497,
+          "tool_calls": 5,
+          "llm_calls": 4
+        },
+        {
+          "agent": "InvestigatorAgent_h2__reconciliation",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase5FanOutAudit",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase6.5CandidatePool",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 14862,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 6.5 Reinvestigation IG__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InstructionGeneratorAgent",
+          "tokens": 14914,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 6.5 Reinvestigation IG__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "Phase 6.5 Reinvestigation IG__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "InvestigatorAgent_h_promoted_rtpengine",
+          "tokens": 52130,
+          "tool_calls": 5,
+          "llm_calls": 3
+        },
+        {
+          "agent": "EvidenceValidator",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        },
+        {
+          "agent": "SynthesisAgent",
+          "tokens": 18518,
+          "tool_calls": 0,
+          "llm_calls": 1
+        },
+        {
+          "agent": "Phase 7 Synthesis__guardrail",
+          "tokens": 0,
+          "tool_calls": 0,
+          "llm_calls": 0
+        }
+      ]
+    },
+    "anomaly_report": "**ANOMALY DETECTED.** Overall anomaly score: 51.68 (per-bucket threshold: 28.18, context bucket (1, 1), trained on 323 healthy snapshots). The current metric pattern is statistically different from the learned healthy baseline. Something in the network has changed.\n\nThe following metrics deviate from their learned-healthy baseline. Treat each as a semantic observation (meaning + numbers), not a number alone \u2014 the KB's interpretation is the authoritative reading.\n\n- **`derived.rtpengine_loss_ratio`** (RTPEngine RTCP-reported per-RR average packet loss) \u2014 current **22.50 packets_per_rr** vs learned baseline **0.00 packets_per_rr** (MEDIUM, spike)\n    - **What it measures:** Live measure of media-plane packet loss as observed by\nthe far end of each call (via RTCP RRs) and aggregated\ninto per-RR mean. Zero during healthy traffic regardless\nof call volume; rises when receivers report missing\npackets. Magnitude scales with loss intensity, so a\nhigher value indicates more packets lost per report.\n    - **Spike means:** Receivers are reporting packet loss back to rtpengine.\nCould be loss on the rtpengine container's egress\n(iptables / tc / interface congestion), loss anywhere\nupstream of the receiver, or \u2014 with simultaneous UPF\ncounter degradation \u2014 loss on the N3 path.\n    - **Healthy typical range:** 0\u20130.1 packets_per_rr\n\n- **`derived.upf_activity_during_calls`** (UPF activity consistency with active dialogs) \u2014 current **0.03 ratio** vs learned baseline **0.54 ratio** (MEDIUM, drop)\n    - **What it measures:** Cross-layer consistency check between IMS dialog state and UPF\nthroughput. A drop while dialogs_per_ue is non-zero is a\nsmoking-gun signal for media-plane failure independent of signaling.\n    - **Drop means:** Active calls reported but no media flowing \u2014 media path broken (UPF, RTPEngine, or N3 packet loss).\n    - **Healthy typical range:** 0.3\u20131 ratio\n    - **Healthy invariant:** 1.0 when traffic fully follows active calls; 0.0 when signaling says active but data plane is silent.\n\n- **`normalized.icscf.cdp_replies_per_ue`** (I-CSCF Diameter reply rate per UE) \u2014 current **0.07 replies_per_second_per_ue** vs learned baseline **0.03 replies_per_second_per_ue** (MEDIUM, spike)\n    - **What it measures:** Liveness of the I-CSCF\u2194HSS Cx path. Drops to 0 when HSS is unreachable OR when no signaling is occurring at the I-CSCF (idle or upstream P-CSCF partitioned).\n    - **Spike means:** Either HSS is unreachable or upstream signaling has stopped reaching I-CSCF.\n    - **Healthy typical range:** 0\u20131 replies_per_second_per_ue\n\n- **`normalized.icscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at I-CSCF) \u2014 current **0.12 requests_per_second** vs learned baseline **0.06 requests_per_second** (MEDIUM, spike)\n    - **What it measures:** Health of the P-CSCF \u2192 I-CSCF forwarding path (Mw interface). When\nthis drops to zero while P-CSCF REGISTER rate is still non-zero,\nit's the SIGNATURE of an IMS partition between P-CSCF and I-CSCF.\n    - **Spike means:** Forwarding issue on the Mw interface, or P-CSCF stopped forwarding.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate. Should closely track ims.pcscf.rcv_requests_register_per_ue.\n\n- **`normalized.pcscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at P-CSCF) \u2014 current **0.12 requests_per_second** vs learned baseline **0.06 requests_per_second** (MEDIUM, spike)\n    - **What it measures:** How actively UEs are refreshing their IMS registrations with the\nP-CSCF. REGISTERs arrive periodically (re-registration timer) plus\nat attach. Sustained zero means UEs cannot reach P-CSCF OR the\nUE-to-network SIP path is broken.\n    - **Spike means:** Fewer REGISTERs than expected \u2014 UE connectivity or P-CSCF reachability issue.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate \u2014 same value at any deployment scale.\n\n- **`normalized.pcscf.dialogs_per_ue`** (Active SIP dialogs per registered UE at P-CSCF) \u2014 current **3.00 count** vs learned baseline **0.48 count** (MEDIUM, spike)\n    - **What it measures:** How many calls per user are currently in progress at the P-CSCF.\nGoing to zero from a non-zero baseline means calls have ended\n(normal) OR call setup is failing system-wide (degradation).\nTogether with rcv_requests_* it discriminates the two.\n    - **Spike means:** Calls ending or setup failing.\n    - **Healthy typical range:** 0\u20131 count\n    - **Healthy invariant:** Per-UE \u2014 scale-independent. 0 at rest, ~1 per active VoNR call.\n\n- **`normalized.scscf.cdp_replies_per_ue`** (S-CSCF CDP Diameter replies per UE) \u2014 current **0.12 replies_per_second_per_ue** vs learned baseline **0.06 replies_per_second_per_ue** (MEDIUM, spike)\n    - **What it measures:** Active S-CSCF Diameter traffic with HSS. Near-zero when registrations idle OR HSS partition.\n    - **Spike means:** Diameter peering loss with HSS.\n    - **Healthy typical range:** 0\u20131 replies_per_second_per_ue\n    - **Healthy invariant:** Per-UE rate; varies with registration/auth load.\n\n- **`normalized.scscf.core:rcv_requests_register_per_ue`** (SIP REGISTER rate per UE at S-CSCF) \u2014 current **0.12 requests_per_second** vs learned baseline **0.06 requests_per_second** (MEDIUM, spike)\n    - **What it measures:** Health of the I-CSCF \u2192 S-CSCF forwarding path. Drop to zero while\nI-CSCF is receiving REGISTERs = S-CSCF-side issue (crashed, or\nI-CSCF \u2192 S-CSCF path broken).\n    - **Spike means:** I-CSCF not forwarding or S-CSCF not receiving.\n    - **Healthy typical range:** 0\u20130.5 requests_per_second\n    - **Healthy invariant:** Per-UE rate. Tracks icscf.register rate.\n\n- **`normalized.smf.bearers_per_ue`** (Active QoS bearers per UE) \u2014 current **5.00 count** vs learned baseline **2.48 count** (MEDIUM, spike)\n    - **What it measures:** Per-UE count of active QoS bearers. Baseline reflects default\nbearers; increments during VoNR calls indicate dedicated voice\nbearers being set up. Drop during an active call = dedicated\nbearer torn down unexpectedly (voice will fail).\n    - **Spike means:** Expected during VoNR calls (1 extra bearer per active call).\n    - **Healthy typical range:** 2\u20133.5 count\n    - **Healthy invariant:** At rest: equals configured default bearers (typically 2 per UE).\nDuring active VoNR call: +1 per caller. The per-UE ratio is the\ninvariant; absolute count scales with UE pool.\n\n- **`normalized.upf.gtp_indatapktn3upf_per_ue`** (GTP-U uplink rate per UE (N3)) \u2014 current **5.40 packets_per_second** vs learned baseline **1.45 packets_per_second** (MEDIUM, spike)\n    - **What it measures:** Health of the uplink user-plane path gNB \u2192 UPF. Drops to near-zero\nduring RAN or N3 outage; stays nonzero during active calls or data\nsessions. Decoupled from SIP signaling (signals data plane, not\ncontrol plane).\n    - **Spike means:** Either UEs not generating uplink traffic (no calls/data) or N3 path is degraded.\n    - **Healthy typical range:** 0\u201310 packets_per_second\n    - **Healthy invariant:** Per-UE rate. Constant regardless of UE pool size. Rises during\nactive VoNR calls (~100 pps for G.711 voice) and data transfer.\nUplink and downlink (gtp_outdatapktn3upf_per_ue) are independent\ndirections whose ratio is determined entirely by the current\ntraffic profile \u2014 voice with NULL_AUDIO (this testbed),\nsignaling-only chatter, idle UEs, and asymmetric data sessions\nall produce persistent in/out imbalance under healthy operation.\nAsymmetry between uplink and downlink rates is NEVER, by itself,\nevidence of packet loss \u2014 not at any magnitude, not under any\ntraffic mix. To detect actual loss, use the methods listed in\nstack rule `upf_counters_are_directional` (same-direction rate\ncomparison, RTCP loss_ratio at RTPEngine, or tc qdisc drop\ncounters). Rate-based metrics like this one are usually MORE\ninformative than the underlying lifetime cumulative counter for\ncurrent-state failure detection.\n",
+    "network_analysis": "{\n  \"summary\": \"A data plane failure is causing severe packet loss and breaking media flow during active calls, with RTPEngine and UPF as the primary suspects, while the flagged signaling metrics at P-CSCF, I-CSCF, S-CSCF, and SMF are demoted as they merely reflect expected healthy activity during VoNR call setup.\",\n  \"layer_status\": {},\n  \"hypotheses\": [\n    {\n      \"id\": \"h1\",\n      \"statement\": \"RTPEngine is the source of the elevated rtpengine_loss_ratio (matching branch vonr_rtp_loss), causing the RTCP-reported loss on the media plane.\",\n      \"primary_suspect_nf\": \"rtpengine\",\n      \"supporting_events\": [\n        \"core.upf.activity_during_calls_collapsed\"\n      ],\n      \"explanatory_fit\": 0.9,\n      \"falsification_probes\": [\n        \"measure_rtt from upf to rtpengine to identify drops on the media path\",\n        \"examine tc -s qdisc show on rtpengine to detect kernel-level packet drops\"\n      ],\n      \"specificity\": \"moderate\"\n    },\n    {\n      \"id\": \"h2\",\n      \"statement\": \"UPF is the source of the collapsed upf_activity_during_calls (matching branch vonr_media_stops), causing the deficit in data plane throughput.\",\n      \"primary_suspect_nf\": \"upf\",\n      \"supporting_events\": [\n        \"core.upf.activity_during_calls_collapsed\"\n      ],\n      \"explanatory_fit\": 0.8,\n      \"falsification_probes\": [\n        \"measure_rtt from rtpengine to upf to check for N6 downlink path drops\",\n        \"examine UPF internal logs and drop counters for packet forwarding errors\"\n      ],\n      \"specificity\": \"moderate\"\n    }\n  ]\n}",
+    "pattern_match": "",
+    "investigation_instruction": "{\n  \"plans\": [\n    {\n      \"hypothesis_id\": \"h1\",\n      \"hypothesis_statement\": \"RTPEngine is the source of the elevated rtpengine_loss_ratio (matching branch vonr_rtp_loss), causing the RTCP-reported loss on the media plane.\",\n      \"primary_suspect_nf\": \"rtpengine\",\n      \"probes\": [\n        {\n          \"tool\": \"get_dp_quality_gauges\",\n          \"args_hint\": \"window_seconds=120 to check rtpengine.errors_per_second\",\n          \"expected_if_hypothesis_holds\": \"Spike in rtpengine.errors_per_second, indicating active relay loop errors.\",\n          \"falsifying_observation\": \"Value within typical range (0.0, 0.0), showing the metric stays at its healthy baseline.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"upf to rtpengine\",\n          \"expected_if_hypothesis_holds\": \"Packet loss observed on the path from upf to rtpengine.\",\n          \"falsifying_observation\": \"The probe's reading is inconsistent with rtpengine being the source (e.g. the metric stays at its healthy baseline, or the loss is observed on a path that does not traverse rtpengine).\",\n          \"conflates_with\": [\n            \"Drops at upf egress\",\n            \"Drops on the network between upf and rtpengine\"\n          ]\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"pcscf to rtpengine\",\n          \"expected_if_hypothesis_holds\": \"Packet loss also observed on this path, isolating the deviation to rtpengine.\",\n          \"falsifying_observation\": \"0% packet loss, meaning the deviation observed in the upf to rtpengine probe is attributable to upf or the network, not rtpengine.\",\n          \"conflates_with\": []\n        }\n      ],\n      \"notes\": \"KB candidate check for rtpengine_loss_ratio branch and isolating RTPEngine from the UPF-RTPEngine path.\"\n    },\n    {\n      \"hypothesis_id\": \"h2\",\n      \"hypothesis_statement\": \"UPF is the source of the collapsed upf_activity_during_calls (matching branch vonr_media_stops), causing the deficit in data plane throughput.\",\n      \"primary_suspect_nf\": \"upf\",\n      \"probes\": [\n        {\n          \"tool\": \"get_dp_quality_gauges\",\n          \"args_hint\": \"window_seconds=120 to check upf.activity_during_calls\",\n          \"expected_if_hypothesis_holds\": \"Drop in activity_during_calls indicating active calls reported but no media flowing.\",\n          \"falsifying_observation\": \"Value within typical range (0.3, 1.0), meaning the metric stays at its healthy baseline.\",\n          \"conflates_with\": []\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"rtpengine to upf\",\n          \"expected_if_hypothesis_holds\": \"Packet loss observed on the path from rtpengine to upf.\",\n          \"falsifying_observation\": \"The probe's reading is inconsistent with upf being the source (e.g. the metric stays at its healthy baseline, or the loss is observed on a path that does not traverse upf).\",\n          \"conflates_with\": [\n            \"Drops at rtpengine egress\",\n            \"Drops on the network between rtpengine and upf\"\n          ]\n        },\n        {\n          \"tool\": \"measure_rtt\",\n          \"args_hint\": \"smf to upf\",\n          \"expected_if_hypothesis_holds\": \"Packet loss also observed on this path, isolating the deviation to upf.\",\n          \"falsifying_observation\": \"0% packet loss, meaning the deviation observed in the rtpengine to upf probe is attributable to rtpengine or the network, not upf.\",\n          \"conflates_with\": []\n        }\n      ],\n      \"notes\": \"KB candidate check for collapsed upf_activity_during_calls and isolating UPF from the RTPEngine-UPF path.\"\n    }\n  ]\n}",
+    "investigation": "[\n  {\n    \"hypothesis_id\": \"h1\",\n    \"hypothesis_statement\": \"RTPEngine is the source of the elevated rtpengine_loss_ratio (matching branch vonr_rtp_loss), causing the RTCP-reported loss on the media plane.\",\n    \"verdict\": \"INCONCLUSIVE\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 DISAGREEMENT. Shot 1 returned NOT_DISPROVEN; shot 2 returned DISPROVEN. Two independent samples of the same Investigator on the same plan reached opposite conclusions. The reconciler forces verdict to INCONCLUSIVE because we cannot trust either shot in isolation when the underlying LLM judgment is unstable.]\\n\\nShot 1 (NOT_DISPROVEN): Triangulation probes confirm the packet loss is completely localized to the RTPEngine container boundary. Traffic terminating at RTPEngine from both UPF and P-CSCF showed significant packet loss (~24% and ~39%), whereas a triangulation probe between UPF and P-CSCF (bypassing RTPEngine) showed 0% loss. While the relay loop errors metric (rtpengine.errors_per_second) was 0, this only refines the location of the fault from the application layer to the container's network boundary or kernel layer; it does not exonerate RTPEngine as the source.\\n\\nShot 2 (DISPROVEN): The hypothesis is falsified by direct evidence showing RTPEngine's relay loop and network interfaces are entirely healthy. The internal relay-loop metric `rtpengine.errors_per_second_(total)` is 0, contradicting any internal packet rejection. Additionally, transport-layer probes (`measure_rtt`) from UPF to RTPEngine, P-CSCF to RTPEngine, and RTPEngine to UPF all show 0% packet loss, ruling out container egress/ingress congestion. This isolates the packet drops away from RTPEngine, meaning the RTCP-reported `loss_ratio` must be originating downstream (likely at the UPF).\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"window_seconds=120 to check rtpengine.errors_per_second\",\n        \"tool_call\": \"get_diagnostic_metrics(at_time_ts=1779333363.57062, nfs=[\\\"rtpengine\\\"])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1779333363.57062, nfs=[\\\"rtpengine\\\"]) -> \\\"rtpengine.errors_per_second_(total) = 0\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"The lack of application-layer errors contradicts the plan's expectation of relay loop drops, but refines the fault to the container's network interface.\"\n      },\n      {\n        \"probe_description\": \"upf to rtpengine\",\n        \"tool_call\": \"measure_rtt(\\\"upf\\\", \\\"rtpengine\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"upf\\\", \\\"rtpengine\\\") -> \\\"24.2424% packet loss\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"Packet loss observed on the path from UPF to RTPEngine, confirming the deviation on the media path.\"\n      },\n      {\n        \"probe_description\": \"pcscf to rtpengine\",\n        \"tool_call\": \"measure_rtt(\\\"pcscf\\\", \\\"rtpengine\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"pcscf\\\", \\\"rtpengine\\\") -> \\\"39.3939% packet loss\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"Packet loss observed on the path from P-CSCF to RTPEngine, confirming drops affect multiple paths terminating at RTPEngine.\"\n      },\n      {\n        \"probe_description\": \"upf to pcscf for triangulation\",\n        \"tool_call\": \"measure_rtt(\\\"upf\\\", \\\"pcscf\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"upf\\\", \\\"pcscf\\\") -> \\\"0% packet loss\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"Traffic bypassing RTPEngine experiences no packet loss, confirming the network itself is healthy and isolating the fault squarely to RTPEngine's boundary.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"upf\"\n    ]\n  },\n  {\n    \"hypothesis_id\": \"h2\",\n    \"hypothesis_statement\": \"UPF is the source of the collapsed upf_activity_during_calls (matching branch vonr_media_stops), causing the deficit in data plane throughput.\",\n    \"verdict\": \"DISPROVEN\",\n    \"reasoning\": \"[Multi-shot consensus \\u2014 both shots returned DISPROVEN.]\\n\\nShot 1: Data plane metrics confirm that upf_activity_during_calls has collapsed to 0.025, validating the data plane throughput deficit. Probing the network path from rtpengine to upf revealed ~28.7% packet loss, which initially appeared consistent with a UPF issue. However, a triangulation probe from smf to upf showed 0% packet loss. According to triangulation principles, since the path from smf to upf is healthy while the path from rtpengine to upf is lossy, the packet loss originates at rtpengine's egress or the intervening network, not at UPF ingress. This contradicts the hypothesis that UPF is the source.\\n\\nShot 2: Triangulation probes confirm that UPF is not the source of the dropped packets. While the path from RTPEngine to UPF experiences ~26% packet loss, the path from SMF to UPF experiences 0% packet loss. This isolates the loss to RTPEngine's egress or the network path between RTPEngine and UPF, falsifying the hypothesis that UPF itself is the source of the fault.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"window_seconds=120 to check upf.activity_during_calls\",\n        \"tool_call\": \"get_diagnostic_metrics(at_time_ts=1779333363.57062, nfs=[\\\"upf\\\"])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(at_time_ts=1779333363.57062, nfs=[\\\"upf\\\"]) -> \\\"derived.upf_activity_during_calls = 0.02519 [derived, ratio]\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"The upf_activity_during_calls metric has dropped to near zero (well below the healthy range of [0.3, 1]), indicating active calls exist but no media is flowing. This confirms the symptoms but does not isolate the source.\"\n      },\n      {\n        \"probe_description\": \"rtpengine to upf\",\n        \"tool_call\": \"measure_rtt(\\\"rtpengine\\\", \\\"upf\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"rtpengine\\\", \\\"upf\\\") -> \\\"66 packets transmitted, 47 received, 28.7879% packet loss\\\"]\",\n        \"compared_to_expected\": \"CONSISTENT\",\n        \"outcome\": \"consistent\",\n        \"commentary\": \"The ~28.7% packet loss observed on this path is consistent with the hypothesis, but as noted in the plan, it conflates UPF issues with drops at rtpengine egress or the intervening network.\"\n      },\n      {\n        \"probe_description\": \"smf to upf\",\n        \"tool_call\": \"measure_rtt(\\\"smf\\\", \\\"upf\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"smf\\\", \\\"upf\\\") -> \\\"66 packets transmitted, 66 received, 0% packet loss\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"Triangulating by pinging UPF from SMF shows 0% loss. This localizes the drop to RTPEngine (or the path specifically from RTPEngine), exonerating UPF as the source.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"rtpengine\"\n    ]\n  },\n  {\n    \"hypothesis_id\": \"h_promoted_rtpengine\",\n    \"hypothesis_statement\": \"rtpengine is the source of the anomaly named in the alternative_suspects of the original verdict tree.\",\n    \"verdict\": \"DISPROVEN\",\n    \"reasoning\": \"Evidence directly contradicts the hypothesis that rtpengine is the source of the anomaly. The rtpengine container is currently UP and running normally, and its internal relay loop is healthy with 0 errors per second. Furthermore, network reachability probes from both the UPF and P-CSCF to RTPEngine returned 0% packet loss, confirming there are no unreachability or inbound network congestion issues on those paths.\",\n    \"probes_executed\": [\n      {\n        \"probe_description\": \"Check the container state for rtpengine.\",\n        \"tool_call\": \"get_network_status()\",\n        \"observation\": \"[EVIDENCE: get_network_status() -> \\\"\\\"rtpengine\\\": \\\"running\\\"\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"The rtpengine container is running normally, which contradicts the hypothesis expectation that it would be EXITED, DOWN, or continuously restarting.\"\n      },\n      {\n        \"probe_description\": \"Read rtpengine.errors_per_second over a 120s window.\",\n        \"tool_call\": \"get_diagnostic_metrics(at_time_ts=1779333363.57062, nfs=[\\\"rtpengine\\\"])\",\n        \"observation\": \"[EVIDENCE: get_diagnostic_metrics(1779333363.57062, [\\\"rtpengine\\\"]) -> \\\"rtpengine.errors_per_second_(total) = 0 [gauge, errors_per_second]\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"The errors_per_second metric is 0, showing that the rtpengine internal relay loop is healthy and not experiencing any drops, contradicting the expectation of a spike.\"\n      },\n      {\n        \"probe_description\": \"upf -> rtpengine_ip\",\n        \"tool_call\": \"measure_rtt(\\\"upf\\\", \\\"rtpengine\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"upf\\\", \\\"rtpengine\\\") -> \\\"66 packets transmitted, 66 received, 0% packet loss\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"Zero packet loss from the UPF to RTPEngine contradicts the expectation of packet loss or unreachability on this path.\"\n      },\n      {\n        \"probe_description\": \"pcscf -> rtpengine_ip (Disambiguation partner to isolate RTPEngine from the UPF path)\",\n        \"tool_call\": \"measure_rtt(\\\"pcscf\\\", \\\"rtpengine\\\")\",\n        \"observation\": \"[EVIDENCE: measure_rtt(\\\"pcscf\\\", \\\"rtpengine\\\") -> \\\"66 packets transmitted, 66 received, 0% packet loss\\\"]\",\n        \"compared_to_expected\": \"CONTRADICTS\",\n        \"outcome\": \"contradicts\",\n        \"commentary\": \"Zero packet loss from P-CSCF to RTPEngine confirms RTPEngine is fully reachable, exonerating RTPEngine's ingress as the source of loss.\"\n      }\n    ],\n    \"alternative_suspects\": [\n      \"upf\",\n      \"nr_gnb\"\n    ]\n  }\n]",
+    "evidence_validation": "{\n  \"overall_verdict\": \"clean\",\n  \"overall_confidence\": \"high\",\n  \"per_agent\": [\n    {\n      \"agent_name\": \"InvestigatorAgent_h1\",\n      \"tool_calls_made\": 12,\n      \"citations_found\": 4,\n      \"citations_matched\": 4,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h2\",\n      \"tool_calls_made\": 9,\n      \"citations_found\": 3,\n      \"citations_matched\": 3,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    },\n    {\n      \"agent_name\": \"InvestigatorAgent_h_promoted_rtpengine\",\n      \"tool_calls_made\": 5,\n      \"citations_found\": 4,\n      \"citations_matched\": 4,\n      \"citations_unmatched\": 0,\n      \"verdict\": \"clean\",\n      \"confidence\": \"high\",\n      \"notes\": []\n    }\n  ],\n  \"summary\": \"Evidence validation across 3 sub-Investigator(s): overall verdict=clean, confidence=high.\\n  - InvestigatorAgent_h1: 12 tool calls, 4/4 citations verified (clean, high)\\n  - InvestigatorAgent_h2: 9 tool calls, 3/3 citations verified (clean, high)\\n  - InvestigatorAgent_h_promoted_rtpengine: 5 tool calls, 4/4 citations verified (clean, high)\"\n}",
+    "fired_events": "**1 events fired during the observation window:**\n\n- `core.upf.activity_during_calls_collapsed` (source: `core.upf.activity_during_calls`, nf: `upf`, t=1779333397.2)  [current_value=0.02445716666666667]",
+    "correlation_analysis": "1 events fired but no composite hypothesis emerged. The events may be from independent faults or lack registered correlation hints in the KB.",
+    "symptom_classification": {
+      "label": "mixed",
+      "rationale": "label=mixed. Both transport-layer (3) and application-layer (1) signals are load-bearing. Path walk runs first; falls through to the application-layer pipeline if the walk produces null localization.\n\nTransport signals: derived.rtpengine_loss_ratio (spike, score=4.28) \u2014 KB-labeled transport: ims.rtpengine.loss_ratio (spike, score=4.28); derived.upf_activity_during_calls (drop, score=4.28) \u2014 KB-labeled transport: core.upf.activity_during_calls (drop, score=4.28); normalized.upf.gtp_indatapktn3upf_per_ue (spike, score=4.28) \u2014 KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (spike, score=4.28)\n\nApplication signals: normalized.smf.bearers_per_ue (spike, score=4.28) \u2014 KB-labeled application: core.smf.bearers_per_ue (spike, score=4.28)\n\nAmbiguous signals: normalized.icscf.cdp_replies_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.icscf.cdp_replies_per_ue (spike, score=4.28); normalized.icscf.core:rcv_requests_register_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.icscf.rcv_requests_register_per_ue (spike, score=4.28); normalized.pcscf.core:rcv_requests_register_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.pcscf.rcv_requests_register_per_ue (spike, score=4.28); normalized.pcscf.dialogs_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.pcscf.dialogs_per_ue (spike, score=4.28); normalized.scscf.cdp_replies_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.scscf.cdp_replies_per_ue (spike, score=4.28) [+1 more]",
+      "flag_counts": {
+        "transport": 3,
+        "application": 1,
+        "ambiguous": 6
+      },
+      "transport_flags": [
+        {
+          "metric": "rtpengine_loss_ratio",
+          "component": "derived",
+          "current": 22.4977,
+          "learned_normal": 0.0,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "ims.rtpengine.loss_ratio",
+          "bucket": "transport",
+          "owner_layer": "ims",
+          "reason": "KB-labeled transport: ims.rtpengine.loss_ratio (spike, score=4.28)"
+        },
+        {
+          "metric": "upf_activity_during_calls",
+          "component": "derived",
+          "current": 0.0252,
+          "learned_normal": 0.5431,
+          "direction": "drop",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "core.upf.activity_during_calls",
+          "bucket": "transport",
+          "owner_layer": "core",
+          "reason": "KB-labeled transport: core.upf.activity_during_calls (drop, score=4.28)"
+        },
+        {
+          "metric": "upf.gtp_indatapktn3upf_per_ue",
+          "component": "normalized",
+          "current": 5.3955,
+          "learned_normal": 1.4539,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "core.upf.gtp_indatapktn3upf_per_ue",
+          "bucket": "transport",
+          "owner_layer": "core",
+          "reason": "KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (spike, score=4.28)"
+        }
+      ],
+      "application_flags": [
+        {
+          "metric": "smf.bearers_per_ue",
+          "component": "normalized",
+          "current": 5.0,
+          "learned_normal": 2.4783,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "core.smf.bearers_per_ue",
+          "bucket": "application",
+          "owner_layer": "core",
+          "reason": "KB-labeled application: core.smf.bearers_per_ue (spike, score=4.28)"
+        }
+      ],
+      "ambiguous_flags": [
+        {
+          "metric": "icscf.cdp_replies_per_ue",
+          "component": "normalized",
+          "current": 0.0745,
+          "learned_normal": 0.0319,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "ims.icscf.cdp_replies_per_ue",
+          "bucket": "ambiguous",
+          "owner_layer": "ims",
+          "reason": "KB-labeled mixed: ims.icscf.cdp_replies_per_ue (spike, score=4.28)"
+        },
+        {
+          "metric": "icscf.core:rcv_requests_register_per_ue",
+          "component": "normalized",
+          "current": 0.1192,
+          "learned_normal": 0.0604,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "ims.icscf.rcv_requests_register_per_ue",
+          "bucket": "ambiguous",
+          "owner_layer": "ims",
+          "reason": "KB-labeled mixed: ims.icscf.rcv_requests_register_per_ue (spike, score=4.28)"
+        },
+        {
+          "metric": "pcscf.core:rcv_requests_register_per_ue",
+          "component": "normalized",
+          "current": 0.1192,
+          "learned_normal": 0.0604,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "ims.pcscf.rcv_requests_register_per_ue",
+          "bucket": "ambiguous",
+          "owner_layer": "ims",
+          "reason": "KB-labeled mixed: ims.pcscf.rcv_requests_register_per_ue (spike, score=4.28)"
+        },
+        {
+          "metric": "pcscf.dialogs_per_ue",
+          "component": "normalized",
+          "current": 3.0,
+          "learned_normal": 0.483,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "ims.pcscf.dialogs_per_ue",
+          "bucket": "ambiguous",
+          "owner_layer": "ims",
+          "reason": "KB-labeled mixed: ims.pcscf.dialogs_per_ue (spike, score=4.28)"
+        },
+        {
+          "metric": "scscf.cdp_replies_per_ue",
+          "component": "normalized",
+          "current": 0.1192,
+          "learned_normal": 0.0604,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "ims.scscf.cdp_replies_per_ue",
+          "bucket": "ambiguous",
+          "owner_layer": "ims",
+          "reason": "KB-labeled mixed: ims.scscf.cdp_replies_per_ue (spike, score=4.28)"
+        },
+        {
+          "metric": "scscf.core:rcv_requests_register_per_ue",
+          "component": "normalized",
+          "current": 0.1192,
+          "learned_normal": 0.0604,
+          "direction": "spike",
+          "severity": "MEDIUM",
+          "anomaly_score": 4.277,
+          "kb_metric_id": "ims.scscf.rcv_requests_register_per_ue",
+          "bucket": "ambiguous",
+          "owner_layer": "ims",
+          "reason": "KB-labeled mixed: ims.scscf.rcv_requests_register_per_ue (spike, score=4.28)"
+        }
+      ]
+    },
+    "resolved_path": {
+      "flow_id": "vonr_media",
+      "flow_name": "VoNR Media Path",
+      "direction": "both",
+      "hops": [
+        {
+          "node": "e2e_ue1",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "nr_gnb",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "upf",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "rtpengine",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "upf",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "nr_gnb",
+          "kind": "container",
+          "iface": "eth0"
+        },
+        {
+          "node": "docker_open5gs_default",
+          "kind": "docker_bridge",
+          "iface": "br-docker_open5gs"
+        },
+        {
+          "node": "e2e_ue2",
+          "kind": "container",
+          "iface": "eth0"
+        }
+      ],
+      "rationale": "Resolved transport path to flow `vonr_media` (score=14, 13 hops on the walk). Load-bearing components: ['icscf', 'pcscf', 'rtpengine', 'scscf', 'smf', 'upf']. Other candidate flows considered: vonr_call_teardown=10, vonr_call_setup=10, ims_registration=8, data_pdu_session_user_traffic=7.",
+      "candidate_flows": [
+        {
+          "flow_id": "vonr_media",
+          "score": 14
+        },
+        {
+          "flow_id": "vonr_call_teardown",
+          "score": 10
+        },
+        {
+          "flow_id": "vonr_call_setup",
+          "score": 10
+        },
+        {
+          "flow_id": "ims_registration",
+          "score": 8
+        },
+        {
+          "flow_id": "data_pdu_session_user_traffic",
+          "score": 7
+        }
+      ]
+    },
+    "path_walk_report": {
+      "flow_id": "vonr_media",
+      "direction": "both",
+      "anchor_ts": 1779333363.5706232,
+      "window_seconds": 5,
+      "is_localized": true,
+      "first_attributed_hop": {
+        "node": "rtpengine",
+        "kind": "container",
+        "iface": "eth0"
+      },
+      "hops": [
+        {
+          "hop": {
+            "node": "e2e_ue1",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "e2e_ue1[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=6108 rx_pkts=10260 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "nr_gnb",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "nr_gnb[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=22962 rx_pkts=30253 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "upf",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "upf[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=169155 rx_pkts=263306 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "rtpengine",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "drops_attributed_here",
+            "counter_kind": "qdisc_netem",
+            "dropped_pkts": 341,
+            "dropped_pct": 0.44285714285714284,
+            "evidence": "rtpengine[eth0] qdisc=netem, authored loss=30%: sent=770 dropped=341 (44.29%)\n---tc -s qdisc show dev eth0---\nqdisc netem 80a2: root refcnt 9 limit 1000 loss 30%\n Sent 640297 bytes 770 pkt (dropped 341, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "upf",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "upf[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=169158 rx_pkts=263310 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "nr_gnb",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "nr_gnb[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=22978 rx_pkts=30268 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        },
+        {
+          "hop": {
+            "node": "docker_open5gs_default",
+            "kind": "docker_bridge",
+            "iface": "br-docker_open5gs"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "docker_open5gs_default[br-docker_open5gs] bridge counters clean:\n  iptables FORWARD: 0 packets dropped\n  conntrack: 0 drops\n  bridge: 5: veth6f29b23@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n200: veth74d757b@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n203: veth1e4f38f@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n204: vethaebb1f5@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 master br-79b005de1e20 state forwarding priority 32 cost 2 \n205: vethb"
+          },
+          "prober": "DockerBridgeProber"
+        },
+        {
+          "hop": {
+            "node": "e2e_ue2",
+            "kind": "container",
+            "iface": "eth0"
+          },
+          "attribution": {
+            "kind": "clean",
+            "evidence": "e2e_ue2[eth0]: qdisc=noqueue, sent=0 dropped=0; iface tx_pkts=7373 rx_pkts=10321 tx_err=0 rx_err=0 tx_drop=0 rx_drop=0"
+          },
+          "prober": "KernelHopProber"
+        }
+      ]
+    },
+    "diagnosis_report": {
+      "summary": "Transport-layer fault localized to rtpengine[eth0]: qdisc_netem reports 341 packets dropped (44.29%).",
+      "root_cause": "Kernel-level packet drop on rtpengine's egress: `tc netem` qdisc dropping 30% of packets.",
+      "root_cause_confidence": "high",
+      "primary_suspect_nf": "rtpengine",
+      "verdict_kind": "localized",
+      "affected_components": [
+        {
+          "name": "rtpengine",
+          "role": "Root Cause"
+        }
+      ],
+      "timeline": [
+        "Path walk initiated on flow `vonr_media`.",
+        "Attribution at rtpengine[eth0]: drops_attributed_here due to qdisc_netem dropping 341 packets (44.29%).",
+        "Path walk concluded with high confidence transport-layer localization."
+      ],
+      "recommendation": "Inspect tc qdisc on rtpengine: `docker exec rtpengine tc -s qdisc show dev eth0`",
+      "explanation": "| # | hop | kind | iface | prober | attribution |\n|---|-----|------|-------|--------|-------------|\n| 1 | e2e_ue1 | container | eth0 | KernelHopProber | clean |\n| 2 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 3 | nr_gnb | container | eth0 | KernelHopProber | clean |\n| 4 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 5 | upf | container | eth0 | KernelHopProber | clean |\n| 6 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 7 | rtpengine | container | eth0 | KernelHopProber | drops_attributed_here (qdisc_netem, 341 dropped, 44.3%) \ud83c\udfaf |\n| 8 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 9 | upf | container | eth0 | KernelHopProber | clean |\n| 10 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 11 | nr_gnb | container | eth0 | KernelHopProber | clean |\n| 12 | docker_open5gs_default | docker_bridge | br-docker_open5gs | DockerBridgeProber | clean |\n| 13 | e2e_ue2 | container | eth0 | KernelHopProber | clean |\n\n```\nrtpengine[eth0] qdisc=netem, authored loss=30%: sent=770 dropped=341 (44.29%)\n---tc -s qdisc show dev eth0---\nqdisc netem 80a2: root refcnt 9 limit 1000 loss 30%\n Sent 640297 bytes 770 pkt (dropped 341, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0\n```\n\nClassifier rationale: label=mixed. Both transport-layer (3) and application-layer (1) signals are load-bearing. Path walk runs first; falls through to the application-layer pipeline if the walk produces null localization.\nTransport signals: derived.rtpengine_loss_ratio (spike, score=4.28) \u2014 KB-labeled transport: ims.rtpengine.loss_ratio (spike, score=4.28); derived.upf_activity_during_calls (drop, score=4.28) \u2014 KB-labeled transport: core.upf.activity_during_calls (drop, score=4.28); normalized.upf.gtp_indatapktn3upf_per_ue (spike, score=4.28) \u2014 KB-labeled transport: core.upf.gtp_indatapktn3upf_per_ue (spike, score=4.28)\nApplication signals: normalized.smf.bearers_per_ue (spike, score=4.28) \u2014 KB-labeled application: core.smf.bearers_per_ue (spike, score=4.28)\nAmbiguous signals: normalized.icscf.cdp_replies_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.icscf.cdp_replies_per_ue (spike, score=4.28); normalized.icscf.core:rcv_requests_register_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.icscf.rcv_requests_register_per_ue (spike, score=4.28); normalized.pcscf.core:rcv_requests_register_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.pcscf.rcv_requests_register_per_ue (spike, score=4.28); normalized.pcscf.dialogs_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.pcscf.dialogs_per_ue (spike, score=4.28); normalized.scscf.cdp_replies_per_ue (spike, score=4.28) \u2014 KB-labeled mixed: ims.scscf.cdp_replies_per_ue (spike, score=4.28) [+1 more]",
+      "localization": {
+        "hop_node": "rtpengine",
+        "hop_kind": "container",
+        "hop_iface": "eth0",
+        "attribution_kind": "drops_attributed_here",
+        "counter_kind": "qdisc_netem",
+        "dropped_pkts": 341,
+        "dropped_pct": 0.44285714285714284,
+        "observed_delay_ms": null,
+        "evidence": "rtpengine[eth0] qdisc=netem, authored loss=30%: sent=770 dropped=341 (44.29%)\n---tc -s qdisc show dev eth0---\nqdisc netem 80a2: root refcnt 9 limit 1000 loss 30%\n Sent 640297 bytes 770 pkt (dropped 341, overlimits 0 requeues 0) \n backlog 0b 0p requeues 0"
+      },
+      "additional_root_causes": []
+    },
+    "rag_retrieval_metadata": {
+      "status": "hits",
+      "summary": "hits=5, top_sim=0.92, top_case=v6/ep_20260501_012004_data_plane_degradation",
+      "hits": [
+        {
+          "rank": 0,
+          "similarity": 0.9206,
+          "case_id": "v6/ep_20260501_012004_data_plane_degradation",
+          "scenario_name": "Data Plane Degradation",
+          "ground_truth_affected_components": [
+            "upf"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v6",
+          "score_pct": 90,
+          "diagnosis_primary_suspect_nf": "upf",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v6/docs/agent_logs/run_20260501_012613_data_plane_degradation.json"
+        },
+        {
+          "rank": 1,
+          "similarity": 0.8867,
+          "case_id": "v7/ep_20260510_185748_call_quality_degradation",
+          "scenario_name": "Call Quality Degradation",
+          "ground_truth_affected_components": [
+            "rtpengine"
+          ],
+          "ground_truth_failure_domain": "ims_media",
+          "agent_version": "v7",
+          "score_pct": 100,
+          "diagnosis_primary_suspect_nf": "rtpengine",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v7/docs/agent_logs/run_20260510_190041_call_quality_degradation.json"
+        },
+        {
+          "rank": 2,
+          "similarity": 0.8797,
+          "case_id": "v6/ep_20260430_015439_data_plane_degradation",
+          "scenario_name": "Data Plane Degradation",
+          "ground_truth_affected_components": [
+            "upf"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v6",
+          "score_pct": 85,
+          "diagnosis_primary_suspect_nf": "upf",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v6/docs/agent_logs/run_20260430_020037_data_plane_degradation.json"
+        },
+        {
+          "rank": 3,
+          "similarity": 0.8561,
+          "case_id": "v6/ep_20260501_021728_data_plane_degradation",
+          "scenario_name": "Data Plane Degradation",
+          "ground_truth_affected_components": [
+            "upf"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v6",
+          "score_pct": 100,
+          "diagnosis_primary_suspect_nf": "upf",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v6/docs/agent_logs/run_20260501_022351_data_plane_degradation.json"
+        },
+        {
+          "rank": 4,
+          "similarity": 0.8411,
+          "case_id": "v7/ep_20260514_221925_data_plane_degradation",
+          "scenario_name": "Data Plane Degradation",
+          "ground_truth_affected_components": [
+            "upf"
+          ],
+          "ground_truth_failure_domain": "data_plane",
+          "agent_version": "v7",
+          "score_pct": 100,
+          "diagnosis_primary_suspect_nf": "upf",
+          "source_episode_path": "/home/ehoskas/agentic-network-ops/agentic_ops_v7/docs/agent_logs/run_20260514_222937_data_plane_degradation.json"
+        }
+      ],
+      "index_dir": "/home/ehoskas/agentic-network-ops/rag_index",
+      "corpus_size": 102,
+      "anomaly_flag_count": 10,
+      "classifier_label": "mixed",
+      "k": 5,
+      "min_similarity": 0.4,
+      "block_chars": 4742
+    },
+    "lessons_injection_metadata": {
+      "status": "injected",
+      "summary": "lessons=16, chars=15678",
+      "path": "/home/ehoskas/agentic-network-ops/agentic_ops_common/rag/lessons.yaml",
+      "lesson_ids": [
+        "L01",
+        "L02",
+        "L03",
+        "L04",
+        "L05",
+        "L06",
+        "L07",
+        "L08",
+        "L09",
+        "L10",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15",
+        "L16"
+      ],
+      "lesson_count": 16,
+      "block_chars": 15678
+    },
+    "rag_na_citations": {
+      "cited_case_ids": [],
+      "cited_lesson_ids": [],
+      "any_citation": false
+    }
+  }
+}

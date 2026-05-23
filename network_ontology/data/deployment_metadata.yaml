@@ -1,0 +1,277 @@
+# =============================================================================
+# Deployment Metadata — Port Semantics
+# =============================================================================
+# Per-component port semantics. Each NF's listening ports are tagged with
+# structured `purpose: {protocol, interface, role}` annotations and bound
+# to either an env-var name (which resolves at runtime against
+# `network/.env`) or a literal port number.
+#
+# Why this file exists:
+#   Agents have strong training-corpus priors about IANA-standard port
+#   assignments (Diameter on 3868, MongoDB on 27017, SIP on 5060). These
+#   priors don't always match the deployment's actual config. When an
+#   agent asserts "service X is not listening on port Y" using a prior
+#   instead of the deployment's actual configured port, it fabricates
+#   faults that don't exist.
+#
+#   The `get_deployment_config(component)` tool reads this file to answer
+#   "what port serves the Cx interface (Diameter, server role) for the
+#   HSS in THIS deployment?" with a deterministic structured lookup.
+#
+#   See ADR `docs/ADR/stack_config_tool_for_agents.md`.
+#
+# Sources:
+#   - env_key resolves against `network/.env` at tool-call time
+#   - port is a literal value (used for fixed ports like MongoDB's 27017
+#     or RTPEngine's NG-control port 22222 — neither is in the .env file)
+#
+# Coverage:
+#   The first iteration covers the NFs that appear in chaos scenarios.
+#   Adding an NF is a small per-entry addition; the schema is in
+#   `network_ontology/schema.py:DeploymentMetadataFile`.
+# =============================================================================
+
+deployment_metadata:
+
+  # =========================================================================
+  # IMS layer (Kamailio CSCFs, HSS, RTPEngine)
+  # =========================================================================
+
+  pyhss:
+    ports:
+      - env_key: PYHSS_BIND_PORT
+        transport: tcp
+        purpose:
+          protocol: diameter
+          interface: cx
+          role: server
+      # PyHSS exposes a REST API on a hardcoded port (not in .env).
+      # The chaos pipeline's `query_subscriber` tool reaches it here.
+      - port: 8080
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: rest_api
+          role: server
+
+  pcscf:
+    ports:
+      - env_key: PCSCF_BIND_PORT
+        transport: tcp
+        purpose:
+          protocol: diameter
+          interface: rx
+          role: server
+      # SIP signaling — UDP per the stack's kamailio_pcscf.cfg
+      # (`udp_mtu_try_proto=UDP` per ADR-documented transport choice).
+      - port: 5060
+        transport: udp
+        purpose:
+          protocol: sip
+          interface: mw
+          role: both
+
+  icscf:
+    ports:
+      - env_key: ICSCF_BIND_PORT
+        transport: tcp
+        purpose:
+          protocol: diameter
+          interface: cx
+          role: client
+      - port: 5060
+        transport: udp
+        purpose:
+          protocol: sip
+          interface: mw
+          role: both
+
+  scscf:
+    ports:
+      - env_key: SCSCF_BIND_PORT
+        transport: tcp
+        purpose:
+          protocol: diameter
+          interface: cx
+          role: client
+      # S-CSCF SIP listens on 6060 per the stack's scscf.cfg
+      # (non-standard to avoid conflict with the I-CSCF on the same host).
+      - port: 6060
+        transport: udp
+        purpose:
+          protocol: sip
+          interface: mw
+          role: both
+
+  rtpengine:
+    ports:
+      # NG control protocol — the ports `agentic_chaos.tools.application_tools`
+      # uses to talk to rtpengine for call setup/teardown.
+      - port: 22222
+        transport: udp
+        purpose:
+          protocol: ng_control
+          interface: rtpengine_ng
+          role: server
+
+  # =========================================================================
+  # 5G Core SBI / control plane
+  # =========================================================================
+
+  amf:
+    ports:
+      # SBI (HTTP/2) — Open5GS default.
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: both
+      # N2 (NGAP/SCTP) — gNB connects here.
+      - port: 38412
+        transport: sctp
+        purpose:
+          protocol: ngap
+          interface: n2
+          role: server
+
+  smf:
+    ports:
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: both
+      # N4 (PFCP) toward UPF.
+      - port: 8805
+        transport: udp
+        purpose:
+          protocol: pfcp
+          interface: n4
+          role: client
+
+  upf:
+    ports:
+      # N4 (PFCP) toward SMF.
+      - port: 8805
+        transport: udp
+        purpose:
+          protocol: pfcp
+          interface: n4
+          role: server
+      # N3 (GTP-U) — gNB → UPF user-plane traffic.
+      - port: 2152
+        transport: udp
+        purpose:
+          protocol: gtp_u
+          interface: n3
+          role: server
+
+  pcf:
+    ports:
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: both
+
+  ausf:
+    ports:
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: both
+
+  udm:
+    ports:
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: both
+
+  udr:
+    ports:
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: both
+
+  nrf:
+    ports:
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: server  # NRF is the registry; everyone else is a client
+
+  scp:
+    ports:
+      - port: 7777
+        transport: tcp
+        purpose:
+          protocol: http
+          interface: sbi
+          role: both
+
+  # =========================================================================
+  # Infrastructure layer (data stores, DNS, RAN)
+  # =========================================================================
+
+  mongo:
+    ports:
+      - port: 27017
+        transport: tcp
+        purpose:
+          protocol: mongodb
+          interface: mongo_wire
+          role: server
+
+  mysql:
+    ports:
+      - port: 3306
+        transport: tcp
+        purpose:
+          protocol: mysql
+          interface: mysql_wire
+          role: server
+
+  dns:
+    ports:
+      - port: 53
+        transport: udp
+        purpose:
+          protocol: dns
+          interface: dns
+          role: server
+      - port: 53
+        transport: tcp
+        purpose:
+          protocol: dns
+          interface: dns
+          role: server
+
+  nr_gnb:
+    ports:
+      # NGAP toward AMF.
+      - port: 38412
+        transport: sctp
+        purpose:
+          protocol: ngap
+          interface: n2
+          role: client
+      # GTP-U toward UPF.
+      - port: 2152
+        transport: udp
+        purpose:
+          protocol: gtp_u
+          interface: n3
+          role: client

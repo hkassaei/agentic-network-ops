@@ -1,0 +1,320 @@
+# ADR: Path Resolver — NF-Burden Scoring Replaces Observable-Metrics Token Matching
+
+**Date:** 2026-05-22
+**Status:** Proposed
+**Related:**
+- Triggering episodes (Gemini-3.1 batch, 5/21):
+    - [`agentic_ops_v7/docs/agent_logs/run_20260521_021756_p_cscf_latency.md`](../../agentic_ops_v7/docs/agent_logs/run_20260521_021756_p_cscf_latency.md) — resolver picked `data_pdu_session_user_traffic` (score 12) over the correct `ims_registration` (score 8); walker null-localized; app-layer recovered (100% final score, ~30k extra tokens spent).
+    - [`agentic_ops_v7/docs/agent_logs/run_20260521_022431_s_cscf_crash.md`](../../agentic_ops_v7/docs/agent_logs/run_20260521_022431_s_cscf_crash.md) — same 12 vs 8 split, same mis-pick; 88% final score.
+    - [`agentic_ops_v7/docs/agent_logs/run_20260521_130330_ims_network_partition.md`](../../agentic_ops_v7/docs/agent_logs/run_20260521_130330_ims_network_partition.md) — same 12 vs 8 split; 96% final score.
+- Earlier batch cases pinned as xfails in `agentic_ops_v7/tests/test_path_resolver.py:494-536` (`_F1_BROKEN_CASES`): three of the four are the same mechanism as the 5/21 batch above — confirming this is a recurring structural failure, not a one-time symptom.
+- [`docs/work-plan-may-11.md`](../work-plan-may-11.md) §B4 — the screener-side fix path the original author chose to defer to. This ADR argues that the resolver-side fix is feasible *and* preferable.
+- [`anomaly_model_overflagging.md`](anomaly_model_overflagging.md) — the screener model design that produces the legitimately-correct UPF GTP transport flags whose downstream-consequence interpretation breaks the resolver.
+- [`flow-based-causal-chain-reasoning.md`](flow-based-causal-chain-reasoning.md) — the ADR that introduces flows as first-class topological objects the resolver consumes.
+- [`path_anchored_probe_planning_for_transport_layer_faults.md`](path_anchored_probe_planning_for_transport_layer_faults.md) — the transport-layer pipeline this resolver feeds. Wrong-flow selection silently degrades that pipeline's value.
+- [`rag_episode_retrieval_and_lesson_injection.md`](rag_episode_retrieval_and_lesson_injection.md) — lesson L09 ("upstream silent vs. downstream noisy is a partition signature") is the operational principle this ADR encodes structurally into the resolver. Today L09 lives only in the RAG block; this ADR makes the resolver apply it deterministically before the LLM ever sees the case.
+- [`screener_starvation_partial_metric_collection.md`](screener_starvation_partial_metric_collection.md) — sibling resolver/Phase 0 fix; both are pre-LLM determinism improvements.
+
+---
+
+## Decision
+
+Replace the `observable_metrics`-blob token-matching component of `_score_flows` (in `agentic_ops_v7/path_resolver.py`) with **NF-burden scoring**: each flagged metric votes for the flow(s) whose hop list contains the NF the flag is on, weighted by the same per-bucket weights (transport=5, application=3, ambiguous=1). The component-overlap term and the tie-break order are unchanged.
+
+This is the structural encoding of operational lesson L09 in the resolver: a flow is implicated by the NFs in its hop list that show evidence of fault, not by whether the flow author happened to list the moving metrics in their `observable_metrics` blob.
+
+Pair it with one coupled change:
+
+- **Flip the three `_F1_BROKEN_CASES` xfail entries to expected-to-pass** in `agentic_ops_v7/tests/test_path_resolver.py:494-536`. The xfail reasons explicitly cite "Needs B4 (screener over-flagging fix)" — under NF-burden scoring those cases pass without any screener-side change.
+
+We deliberately *do not* extend this ADR to cover the fourth pinned-xfail case (`rtpengine_latency_injection`). That case has a different root cause (the screener has no rtpengine-direct latency feature, so rtpengine never gets flagged at all and no scoring mechanism can recover it). It needs a screener-feature ADR, not a resolver change.
+
+## Context
+
+### The failure mechanism — verified by manual scoring
+
+`_score_flows` at `agentic_ops_v7/path_resolver.py:367-393` computes:
+
+```
+score = _COMPONENT_WEIGHT (=2) * component_score
+      + _BUCKET_WEIGHTS["transport"] (=5)    * transport_flag_hits
+      + _BUCKET_WEIGHTS["application"] (=3)  * application_flag_hits
+      + _BUCKET_WEIGHTS["ambiguous"] (=1)    * ambiguous_flag_hits
+```
+
+Where:
+- `component_score` = number of load-bearing NFs (the union of NFs the screener flagged, recovered via `_flag_nf_metric`) that appear in the flow's hop list.
+- `*_flag_hits` = number of unique flagged metrics from that bucket whose token (short or `nf.metric` dotted form) appears in the flow's `observable_metrics` blob (`_count_unique_flag_hits`, `_flow_observable_metrics_blob`).
+
+This formulation has a structural flaw: **the `*_flag_hits` term rewards flows whose `observable_metrics` blob — a free-text descriptor authored at flow-spec time — happens to contain a string match for a flagged metric**, even when the metric in question is on an NF that is NOT in the flow's hop list, or is in the hop list only as a downstream consumer.
+
+Concrete trace on `run_20260521_021756_p_cscf_latency` (ground truth: pcscf fault):
+
+The screener fired 9 flags, bucketed as:
+- Transport (2): `upf.gtp_indatapktn3upf_per_ue` drop, `upf.gtp_outdatapktn3upf_per_ue` drop — both anomaly_score 4.59
+- Application (1): `smf.bearers_per_ue` shift — anomaly_score 0.01 (negligible)
+- Ambiguous (6): `icscf.cdp_replies_per_ue`, `icscf.rcv_requests_register_per_ue`, `scscf.cdp_replies_per_ue`, `scscf.rcv_requests_register_per_ue`, `pcscf.rcv_requests_register_per_ue`, `context.cx_active` — all anomaly_score 4.59 or 2.65
+
+Load-bearing NF set: `{upf, smf, icscf, scscf, pcscf}` (context.cx_active has no NF).
+
+Score computation for each flow:
+
+| Flow | hop list ∩ load-bearing | component_score×2 | transport_hits×5 | ambiguous_hits×1 | **Total** |
+|---|---|---:|---:|---:|---:|
+| `data_pdu_session_user_traffic` | `{upf}` (1) | 2 | 10 (both UPF GTP flags' tokens appear in `core.upf.gtp_indatapktn3upf_per_ue` / `core.upf.gtp_outdatapktn3upf_per_ue` literal strings in the blob) | 0 (CSCF flag tokens don't appear in the data-plane blob) | **12** |
+| `vonr_media` | `{upf}` (1) | 2 | 10 (same UPF GTP token match) | 0 | **12** |
+| `ims_registration` | `{upf, icscf, scscf, pcscf}` (4) | 8 | 0 (UPF GTP tokens absent from the IMS blob, which lists `ims_usrloc_pcscf:registered_contacts` etc.) | 0 (the IMS flag tokens use `rcv_requests_register_per_ue` shape which doesn't match the `script:register_success` shape in the blob) | **8** |
+
+`ims_registration` has **4× the load-bearing-NF coverage** but loses 8 to 12 because of the `+10` boost from the two UPF GTP transport flags whose tokens text-match the data-plane flow's blob.
+
+The same exact 12-vs-8 split repeats verbatim for `run_20260521_022431_s_cscf_crash` and `run_20260521_130330_ims_network_partition`. Three of the four current wrong-flow cases share **identical** scoring breakdowns.
+
+### Why the deferred fix (B4) is hard
+
+The existing xfail reasons cite "Needs B4 (screener over-flagging fix when only IMS metrics are also moving)." But B4 is structurally hard:
+
+1. **The screener uses ECOD (statistical), not rule-based.** Adding "only flag UPF when UPF is the cause" requires either (a) retraining the bucket model with conditional features that encode "IMS is also active," or (b) hand-authored suppression rules that the screener applies post-scoring. (a) is a model-engineering effort with its own correctness risk; (b) reintroduces the per-scenario hand-authoring B4 was supposed to avoid.
+2. **The KB labels UPF GTP as `transport` correctly.** Those metrics DO move under N3 packet loss / UPF egress drops. The label isn't wrong; it's just under-specified for the downstream-symptom interpretation.
+3. **The UPF GTP drops are real.** IMS signaling collapse genuinely causes call setup to fail and N3 traffic to dry up. The signal isn't spurious. Suppressing it would lose information.
+
+The actual mistake isn't the flag firing — it's treating that flag as a fault *locator* rather than a downstream *symptom*. **The resolver is the right place to apply that distinction**, because it's the layer that converts "evidence about which NFs are moving" into "which flow to walk." That conversion is exactly where the upstream-vs-downstream distinction matters.
+
+The operational lesson L09 already encodes this principle for the NA. The proposed fix lifts it from "LLM-prompt-readable lesson" to "deterministic scoring rule applied before the LLM ever sees the case."
+
+### Scope of impact across the recent batch
+
+| Run | Wrong-flow mechanism | Fixable by NF-burden scoring? | Score the run achieved despite wrong flow |
+|---|---|---|---:|
+| `run_20260521_021756_p_cscf_latency` | 12 vs 8 (UPF GTP boost) | ✓ yes | 100% (app-layer recovered) |
+| `run_20260521_022431_s_cscf_crash` | 12 vs 8 (UPF GTP boost) | ✓ yes | 88% (app-layer recovered) |
+| `run_20260521_130330_ims_network_partition` | 12 vs 8 (UPF GTP boost) | ✓ yes | 96% (app-layer recovered) |
+| `run_20260521_033823_rtpengine_latency_injection` | Different — rtpengine never flagged | ✗ no (needs screener feature) | 75% (app-layer partially recovered) |
+
+End-to-end scores aren't catastrophic because the LLM app-layer fallback recovers the diagnosis. But each wrong-flow run carries a real cost:
+
+- **The walker's deterministic high-confidence localization is wasted.** The walker is the cheapest, most-trustworthy phase. When it walks the wrong flow, it null-localizes and the pipeline falls through to LLM reasoning that should have been confirmation rather than recovery.
+- **~30k extra tokens per run.** The NA + Investigator phases consume substantially more tokens recovering the diagnosis than they would corroborating a walker-localized one.
+- **The walker's "no drops attributed on data_pdu" output is mildly misleading to the NA.** It correctly tells the NA the data plane is clean, but it tells the NA *nothing* about whether pcscf is clean — because pcscf wasn't on the walked path. The NA has to derive "investigate pcscf" from scratch, with a missing-evidence shape that pre-prejudices it against IMS hypotheses.
+
+## Design
+
+### The new scoring formula
+
+```python
+# Per-flag NF-and-bucket vector — built once.
+# Each flag contributes its bucket weight to the NF it's flagged on.
+def _per_nf_flag_burden(c: SymptomClassification) -> dict[str, int]:
+    """Map NF name → sum of bucket weights across that NF's flags.
+
+    Each flag is resolved to (nf, metric_short) via `_flag_nf_metric` and
+    contributes bucket_weight to nf's entry. Flags without a recoverable
+    NF (e.g. `context.cx_active`) are skipped — they vote for no flow.
+    """
+    weights = {"transport": 5, "application": 3, "ambiguous": 1}
+    burden: dict[str, int] = {}
+    for bucket_name, flags in (
+        ("transport",   c.transport_flags),
+        ("application", c.application_flags),
+        ("ambiguous",   c.ambiguous_flags),
+    ):
+        w = weights[bucket_name]
+        for fb in flags:
+            nf, _metric = _flag_nf_metric(fb)
+            if nf:
+                burden[nf] = burden.get(nf, 0) + w
+    return burden
+
+
+def _score_flows(
+    flows: dict,
+    load_bearing: set[str],
+    classification: SymptomClassification,
+) -> list[tuple[str, int]]:
+    """Score every flow by:
+       score = _COMPONENT_WEIGHT * component_score
+             + sum over NFs in flow's hop list of nf_burden[nf]
+
+    component_score is unchanged — it rewards flows whose hop list
+    overlaps with the union of flagged NFs. The new NF-burden term
+    weights that overlap by per-flag bucket weight, replacing the old
+    observable_metrics-blob token-matching term.
+    """
+    _COMPONENT_WEIGHT = 2
+    nf_burden = _per_nf_flag_burden(classification)
+
+    scored: list[tuple[str, int, int, int, int, int]] = []
+    for flow_id, flow_def in flows.items():
+        components = _flow_components(flow_def)
+        component_score = len(components & load_bearing)
+
+        burden_in_flow = sum(nf_burden.get(nf, 0) for nf in components)
+
+        score = _COMPONENT_WEIGHT * component_score + burden_in_flow
+        if score == 0:
+            continue
+
+        # Tie-break vector: transport-NF-flagged-in-flow, app-NF-flagged-in-flow,
+        # component count, display_order. The bucket-affinity tie-break is
+        # reformulated against NFs (not blob token presence) but preserves
+        # the same intent: prefer flows containing transport-flagged NFs
+        # over application-flagged-only flows when the score ties.
+        transport_in_flow = _flow_contains_bucket_nf(
+            components, classification.transport_flags,
+        )
+        app_in_flow = _flow_contains_bucket_nf(
+            components, classification.application_flags,
+        )
+        display_order = flow_def.get("display_order", 999)
+        scored.append((
+            flow_id, score,
+            1 if transport_in_flow else 0,
+            1 if app_in_flow else 0,
+            len(components), display_order,
+        ))
+
+    scored.sort(key=lambda t: (-t[1], -t[2], -t[3], t[4], t[5]))
+    return [(t[0], t[1]) for t in scored]
+
+
+def _flow_contains_bucket_nf(
+    components: set[str], flag_buckets,
+) -> bool:
+    """True iff any flag in this bucket is on an NF that is in the flow's
+    hop list. Used for the bucket-affinity tie-break."""
+    for fb in flag_buckets:
+        nf, _ = _flag_nf_metric(fb)
+        if nf and nf in components:
+            return True
+    return False
+```
+
+The two removed helpers — `_metrics_from_bucket`, `_count_unique_flag_hits`, `_flow_observable_metrics_blob`, `_load_bearing_metrics_by_bucket` — go away. `_load_bearing_components` and `_flag_nf_metric` are unchanged.
+
+### Validation walkthrough — all four cases plus the regression-protector
+
+The NF-burden of each scenario is computed once; the per-flow score is then the sum of in-flow burden plus the component-overlap term.
+
+**1. p_cscf_latency (and identically: s_cscf_crash, ims_network_partition)**
+
+NF-burden: `{upf: 2×5=10, icscf: 2×1=2, scscf: 2×1=2, pcscf: 1×1=1, smf: 1×3=3}`
+
+| Flow | NFs in hop list ∩ flagged | component×2 | NF-burden in flow | **Total** |
+|---|---|---:|---:|---:|
+| `data_pdu_session_user_traffic` | `{upf}` | 2 | 10 | 12 |
+| `vonr_media` | `{upf}` | 2 | 10 | 12 |
+| `ims_registration` | `{upf, icscf, scscf, pcscf}` | 8 | 10+2+2+1=15 | **23** ✓ wins |
+
+The IMS flow wins by 11 points. Tie-break never engages.
+
+**2. rtpengine_latency_injection (still expected to mis-resolve under this fix; out of scope)**
+
+The screener emits 0 flags on rtpengine for delay-only injection. NF-burden: `{upf: 5, icscf: 9, pcscf: 9, scscf: 9}` (one transport flag on upf, nine ambiguous flags spread across the CSCFs and pcscf dialogs counter).
+
+| Flow | NFs in hop list ∩ flagged | component×2 | NF-burden in flow | **Total** |
+|---|---|---:|---:|---:|
+| `vonr_media` (the correct flow) | `{upf}` | 2 | 5 | 7 |
+| `ims_registration` | `{upf, icscf, pcscf, scscf}` | 8 | 5+9+9+9=32 | 40 (wins, incorrect) |
+
+The fix doesn't help here. This is the documented out-of-scope case — needs a screener-feature change to flag rtpengine-specific latency.
+
+**3. Regression-protector: rtpengine_loss (single transport flag on `rtpengine.loss_ratio`)**
+
+NF-burden: `{rtpengine: 5}`
+
+| Flow | NFs in hop list ∩ flagged | component×2 | NF-burden in flow | **Total** |
+|---|---|---:|---:|---:|
+| `vonr_media` | `{rtpengine}` | 2 | 5 | **7** ✓ wins |
+| `vonr_call_teardown` | ∅ (no rtpengine in hop list, CSCFs aren't flagged) | 0 | 0 | filtered (0) |
+| `ims_registration` | ∅ | 0 | 0 | filtered (0) |
+
+The original author's regression concern — `vonr_call_teardown` beating `vonr_media` on CSCF component overlap when component_weight was bumped — does not arise under NF-burden scoring. Flags on rtpengine vote *only* for flows containing rtpengine. **No regression.**
+
+**4. Pure data-plane fault (e.g., `data_plane_degradation`, ground truth: UPF)**
+
+NF-burden: `{upf: 5+5=10, rtpengine: 5}` (typical: two UPF GTP transport flags plus an rtpengine loss-ratio transport flag).
+
+| Flow | NFs in hop list ∩ flagged | component×2 | NF-burden in flow | **Total** |
+|---|---|---:|---:|---:|
+| `vonr_media` | `{upf, rtpengine}` | 4 | 10+5=15 | **19** ✓ wins |
+| `data_pdu_session_user_traffic` | `{upf}` | 2 | 10 | 12 |
+| `ims_registration` | `{upf}` | 2 | 10 | 12 |
+
+`vonr_media` correctly wins because the rtpengine flag votes for it specifically.
+
+**5. Pure UPF fault with no rtpengine flag (e.g., `upf_bandwidth_cap`)**
+
+NF-burden: `{upf: 5+5=10}`.
+
+| Flow | NFs in hop list ∩ flagged | component×2 | NF-burden in flow | **Total** | tie-break |
+|---|---|---:|---:|---:|---|
+| `data_pdu_session_user_traffic` | `{upf}` | 2 | 10 | 12 | smallest hop count → **wins** |
+| `vonr_media` | `{upf}` | 2 | 10 | 12 | next |
+| `ims_registration` | `{upf}` | 2 | 10 | 12 | largest hop count → last |
+
+Three-way tie broken by component-count-ASC (smaller, more specific flows win). `data_pdu_session_user_traffic` is the right answer for a pure data-plane PDU-session bandwidth cap. ✓
+
+### What's lost: the `observable_metrics` blob signal
+
+The removed `*_flag_hits` term was rewarding flows whose author explicitly listed a flagged metric in their `observable_metrics` blob. That had one useful job: capture the flow author's modeling intent ("for VoNR media, watch these specific metrics").
+
+NF-burden scoring drops that signal. The argument for dropping it is that **the signal is largely redundant** with hop-list membership:
+
+- A flow whose author would list `rtpengine.loss_ratio` in `observable_metrics` is a flow whose hop list contains `rtpengine`. NF-burden captures that via hop-list membership.
+- A flow whose author would list `upf.gtp_indatapktn3upf_per_ue` is one whose hop list contains `upf`. Same coverage.
+
+The cases where the observable_metrics signal added independent information are the very cases where it goes wrong: when a downstream-consumer NF's metric appears in a flow's blob (because the flow author thought "this metric is observable in this flow") even though the metric's movement actually indicates an upstream fault that's outside this flow's hop list. Removing the blob-matching is removing exactly the source of the failure mode.
+
+If a future flow author wants to express "this metric is the highest-signal observable for THIS flow," the right home for that signal is the flow's tie-break metadata or a new `primary_observables` field — not as an additive score term that competes with hop-list membership. Out of scope for this ADR.
+
+## Trade-offs and limitations
+
+- **Tie-break behavior changes.** Today's bucket-affinity tie-breaks check whether *any* flag's token appears in the flow's blob. The proposed tie-break checks whether any flag's NF is in the flow's hop list. The intent is the same; the test surface differs. The xfail-flip in `test_path_resolver.py` will catch regressions on the bucket-affinity dimension.
+
+- **Flags without a resolvable NF are silent voters.** `context.cx_active` and similar synthetic features that don't map to a single NF contribute nothing to NF-burden. They still contribute to `_load_bearing_components` only if they happen to resolve to an NF name (they don't, today). Concretely: `context.*` flags no longer add the +1 ambiguous boost they used to add via blob-token matching to flows whose blob mentions "cx" or similar. That's a small dampening on synthetic-feature signals; acceptable given those features are not designed as fault locators.
+
+- **The fix doesn't unblock `rtpengine_latency_injection`.** Documented out of scope. The case needs a screener-feature change (an rtpengine-side latency-measurement feature) — the resolver cannot recover from "no flag on the faulted NF."
+
+- **No protection against future screener over-flagging on new metric/NF combinations.** This ADR fixes the specific failure mode where downstream-consumer transport flags dominate the upstream IMS flow. If a future screener change creates a new over-flagging pattern on a different downstream signal, NF-burden scoring will mitigate it (because the upstream-NF flag burden still votes for the right flow) but won't eliminate it (the downstream-NF burden still counts). The mitigation is principled, not absolute.
+
+- **The xfail re-baselining is a behavior change visible to anyone reading the test file.** It implies the original author's "needs B4" assertion was overcautious; we should be clear in the PR description that the fix is *resolver-side*, not *screener-side*, and that the choice of layer was a design decision that updates the work plan's B4 framing.
+
+## Implementation outline
+
+1. **`agentic_ops_v7/path_resolver.py`**
+    - Add `_per_nf_flag_burden(c)` helper.
+    - Add `_flow_contains_bucket_nf(components, bucket_flags)` helper.
+    - Rewrite `_score_flows` per the formula above; change its signature from `(flows, load_bearing, metrics_by_bucket)` to `(flows, load_bearing, classification)`.
+    - Remove `_metrics_from_bucket`, `_count_unique_flag_hits`, `_flow_observable_metrics_blob`, `_load_bearing_metrics_by_bucket`, `_load_bearing_metrics`.
+    - Update the lone caller of `_score_flows` (in `resolve_path`) to pass the classification directly.
+2. **`agentic_ops_v7/tests/test_path_resolver.py`**
+    - Flip the three xfail entries (`p_cscf_packet_loss` is already passing per F1; `p_cscf_latency`, `ims_network_partition` flip from xfail to expected-to-pass). The `rtpengine_latency_injection` entry stays xfail with its existing reason updated to reference this ADR.
+    - Add new pin tests using the four 5/21-batch episode files referenced in this ADR, to lock in the post-fix behavior end-to-end.
+3. **No prompt or KB changes.** No schema migration. No RAG-corpus rebuild.
+4. **Comment hygiene.** Remove the "cases the current weighting CANNOT fix" paragraph at `path_resolver.py:360-366` and the F1 weight-tuning comments at `path_resolver.py:344-358`; replace with a brief comment pointing to this ADR for the rationale of NF-burden scoring.
+
+## Validation target
+
+- All 285 existing tests in the `agentic_ops_v7` suite pass.
+- All 15 `test_screener_ecod` tests pass (unaffected).
+- The three previously-xfail `_F1_BROKEN_CASES` flip to passing.
+- A new parameterized test against the four 5/21 episode files (`run_20260521_021756`, `_022431`, `_130330`, `_033823`) confirms: the first three pick `ims_registration`; the fourth remains an xfail with its updated reason.
+- Re-run the four scenarios against a freshly-deployed stack to confirm end-to-end pickup of the right flow and walker localization at the correct NF. Expected token savings: ~30k per case for the three fixable ones.
+
+## Out of scope
+
+- **Screener feature additions for rtpengine latency.** Needs a separate ADR.
+- **The `observable_metrics` blob as a first-class scoring signal.** If we want to bring back flow-author-encoded "primary observables" for a flow, do it as a structured field with explicit semantics, not as a free-text additive score term. Out of scope.
+- **Anomaly-score (severity) weighting of NF burden.** Currently each flag contributes the same bucket weight regardless of its individual anomaly_score. We could multiply by `flag.anomaly_score` to let higher-severity flags vote more strongly. Defer — the current bucket weighting is doing the heavy lifting; severity weighting is a refinement worth evaluating empirically after this fix lands.
+- **Replacing the bucket weights with KB-driven NF-layer priors.** A future ADR could express "an IMS-layer NF with a flag has higher fault-locator prior than a CORE-layer NF whose metric also moved" via an explicit topological prior. That's a richer model; the current bucket weights are a reasonable proxy and let this ADR stay scoped.
+
+## Open questions (for review)
+
+1. **Should `_flag_nf_metric` be relied upon to recover the NF for every flag, or should we also pull from `flag.component` directly when `kb_metric_id` is unset?** Today `_flag_nf_metric` already handles both paths (`kb_metric_id` preferred, `flag.component` fallback). The fix as drafted inherits that. Recommendation: leave as-is — the existing fallback is sufficient.
+
+2. **Should the `score == 0` filter at the end of `_score_flows` stay?** Today any flow that didn't match the blob OR the components gets filtered out. Under NF-burden scoring, a flow scores zero only if its hop list has no overlap with any flagged NF — which is the right filter ("don't propose flows that can't possibly explain the evidence"). Recommendation: keep.
+
+3. **Should the bucket-affinity tie-break re-check NF presence per bucket (as drafted), or check per-flow burden contribution from each bucket?** The latter is more discriminating (e.g., a flow with 10 transport-burden beats a flow with 5 transport-burden). The former is simpler and matches the existing intent. Recommendation: simpler.
+
+4. **Should `display_order` be the final tie-break, or should we add anomaly_score weighting in?** Recommendation: leave `display_order` as the final tie-break for this ADR; revisit anomaly_score weighting as a follow-up if we see ties drive wrong picks.
+
+5. **Should we also remove the now-unused `_load_bearing_metrics` flat-union helper?** It's currently used only as a "thin compatibility wrapper" per its docstring. Nothing in the rewritten code path calls it. Recommendation: remove with the rest, keep `_load_bearing_components` only.

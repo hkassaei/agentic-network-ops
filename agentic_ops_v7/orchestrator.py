@@ -3132,16 +3132,12 @@ def _parse_diagnosis_report(raw: Any) -> DiagnosisReport:
     guardrail then sees `verdict_kind=inconclusive` and passes (empty
     pool branch).
 
-    Also applies one deterministic repair: for `localized` verdicts where
-    the LLM left `affected_components` empty (or filled with empty/invalid
-    dicts), auto-populate from `localization.hop_node`. The walker's
-    attribution IS the affected component for a localized verdict —
-    requiring the LLM to copy that string from `localization` into
-    `affected_components` is needless ceremony and a frequent miss
-    (observed on `run_20260526_013942_upf_bandwidth_cap`: LLM emitted
-    `[{}]` despite the synthesis prompt explicitly stating the rule).
-    Same principle as ADR `path_prioritizer_walks_all_candidates.md` —
-    move correctness off the LLM when deterministic code can do it.
+    `affected_components` is populated correctly at the source: the
+    Synthesis agent's `output_schema` types it as `list[AffectedComponent]`
+    with `name`/`role` as required properties, so Gemini's controlled
+    generation cannot emit the empty `[{}]` element it used to produce
+    when the field was an untyped `list[dict]`. No post-parse repair is
+    needed — see ADR commentary on the AffectedComponent typing fix.
     """
     if raw is None:
         return _empty_diagnosis_report("Synthesis produced no output")
@@ -3150,42 +3146,10 @@ def _parse_diagnosis_report(raw: Any) -> DiagnosisReport:
             data = json.loads(raw)
         else:
             data = raw
-        report = DiagnosisReport(**data)
+        return DiagnosisReport(**data)
     except Exception as e:
         log.warning("Could not parse Synthesis output: %s", e)
         return _empty_diagnosis_report(f"Synthesis output unparseable: {e}")
-
-    # Deterministic affected_components repair for localized verdicts.
-    if (
-        report.verdict_kind == "localized"
-        and report.localization is not None
-        and report.localization.hop_node
-        and _affected_components_is_empty_or_invalid(report.affected_components)
-    ):
-        repaired = [{"name": report.localization.hop_node, "role": "Root Cause"}]
-        log.info(
-            "Repaired affected_components for localized verdict: LLM emitted "
-            "%r; auto-populating from localization.hop_node → %r",
-            report.affected_components, repaired,
-        )
-        report = report.model_copy(update={"affected_components": repaired})
-    return report
-
-
-def _affected_components_is_empty_or_invalid(
-    components: list[dict],
-) -> bool:
-    """True when affected_components is missing, empty, or contains only
-    entries without a usable `name` field. These all render as `'?': ?`
-    in the episode markdown and dock the operator's score for no
-    diagnostic reason.
-    """
-    if not components:
-        return True
-    for c in components:
-        if isinstance(c, dict) and c.get("name"):
-            return False
-    return True
 
 
 def _render_diagnosis_report_to_markdown(report: DiagnosisReport) -> str:
@@ -3211,8 +3175,15 @@ def _render_diagnosis_report_to_markdown(report: DiagnosisReport) -> str:
     if report.affected_components:
         lines.append("- **affected_components**:")
         for c in report.affected_components:
-            name = c.get("name", "?") if isinstance(c, dict) else str(c)
-            role = c.get("role", "?") if isinstance(c, dict) else "?"
+            # `affected_components` is `list[AffectedComponent]`; handle
+            # both the typed object and a raw dict (defensive — some code
+            # paths construct the report from already-dumped dicts).
+            if isinstance(c, dict):
+                name = c.get("name", "?")
+                role = c.get("role", "?")
+            else:
+                name = getattr(c, "name", "?")
+                role = getattr(c, "role", "?")
             lines.append(f"    - `{name}`: {role}")
     else:
         lines.append("- **affected_components**: []")

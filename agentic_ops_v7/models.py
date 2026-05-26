@@ -358,6 +358,41 @@ class RootCause(BaseModel):
     )
 
 
+class AffectedComponent(BaseModel):
+    """One entry in a DiagnosisReport's `affected_components` list.
+
+    Strongly typed on purpose. The field was previously an untyped
+    `list[dict]`, whose derived JSON schema declared an object with NO
+    properties (`{"type": "object", "additionalProperties": true}`).
+    Under the Synthesis agent's controlled generation, that gave Gemini
+    no field-level constraint, so it routinely emitted an empty element
+    `[{}]` (the prompt's prose asked for {name, role} but the schema
+    didn't carry those keys). Declaring `name` and `role` as REQUIRED
+    properties makes `{}` schema-invalid — controlled generation must
+    populate them. This is the root-cause fix for the empty
+    affected_components seen on the 5/26 upf_bandwidth_cap and
+    mongodb_gone runs.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        ...,
+        description=(
+            "The component this entry implicates — an NF name "
+            "(e.g. `mongo`, `pcscf`) or, for a localized verdict, the "
+            "walker's attributed hop node."
+        ),
+    )
+    role: Literal["Root Cause", "Secondary", "Symptomatic"] = Field(
+        ...,
+        description=(
+            "This component's role in the diagnosis. `Root Cause` for the "
+            "primary (and each additional) root cause; `Secondary` / "
+            "`Symptomatic` for downstream-affected NFs."
+        ),
+    )
+
+
 class DiagnosisReport(BaseModel):
     """Final NOC-ready diagnosis produced by Synthesis.
 
@@ -413,7 +448,19 @@ class DiagnosisReport(BaseModel):
             "multi_fault_orchestration.md."
         ),
     )
-    affected_components: list[dict] = Field(default_factory=list)
+    affected_components: list[AffectedComponent] = Field(
+        default_factory=list,
+        description=(
+            "Components implicated by this diagnosis, each with a typed "
+            "`name` + `role`. Required `name`/`role` properties prevent "
+            "the empty-element artifact the old `list[dict]` schema "
+            "allowed. For `localized`: a single Root Cause entry naming "
+            "the walker's hop node. For `confirmed`/`promoted`: the "
+            "primary_suspect_nf as Root Cause plus any "
+            "Secondary/Symptomatic NFs. For `compound`: one Root Cause "
+            "per root cause plus downstream NFs."
+        ),
+    )
     timeline: list[str] = Field(default_factory=list)
     recommendation: str
     explanation: str

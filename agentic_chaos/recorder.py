@@ -1320,36 +1320,45 @@ def _format_transport_layer_route(
     # warning and hard-cap truncation.
     if path_walk_all_reports and len(path_walk_all_reports) > 1:
         primary_flow = flow_id_walked  # whatever the primary walker walked
-        other_reports = {
-            fid: rep for fid, rep in path_walk_all_reports.items()
-            if fid != primary_flow
-        }
-        if other_reports:
-            out.append("### Prioritized Candidates Walked In Parallel")
-            out.append("")
-            walked_count = len(path_walk_all_reports)
-            out.append(
-                f"The walker probed {walked_count} candidate flows in "
-                f"parallel. The primary outcome (above) is "
-                f"`{primary_flow}`; the others are listed here so the "
-                f"deterministic disambiguation is fully auditable."
-            )
-            out.append("")
-            out.append("| Flow | Walker outcome | First attributed hop |")
-            out.append("|---|---|---|")
-            for fid, alt_report in other_reports.items():
-                alt_localized = bool(alt_report.get("is_localized"))
-                alt_status = "✅ localized" if alt_localized else "⚠️ null"
-                alt_first_hop = alt_report.get("first_attributed_hop") or {}
-                if isinstance(alt_first_hop, dict) and alt_first_hop:
-                    hop_str = (
-                        f"`{alt_first_hop.get('node','?')}"
-                        f"[{alt_first_hop.get('iface','?')}]`"
-                    )
-                else:
-                    hop_str = "—"
-                out.append(f"| `{fid}` | {alt_status} | {hop_str} |")
-            out.append("")
+        out.append("### Prioritized Candidates Walked In Parallel")
+        out.append("")
+        walked_count = len(path_walk_all_reports)
+        out.append(
+            f"The walker probed {walked_count} candidate flows in parallel. "
+            f"All walked flows are listed below (primary marked); the "
+            f"primary's full per-hop walk is in the Walker section above. "
+            f"Listing every walked flow makes the deterministic "
+            f"disambiguation fully auditable."
+        )
+        out.append("")
+        out.append("| Flow | Walker outcome | First attributed hop |")
+        out.append("|---|---|---|")
+
+        def _walk_row(fid: str, rep: dict, *, is_primary: bool) -> str:
+            localized = bool(rep.get("is_localized"))
+            status = "✅ localized" if localized else "⚠️ null"
+            first_hop = rep.get("first_attributed_hop") or {}
+            if isinstance(first_hop, dict) and first_hop:
+                hop_str = (
+                    f"`{first_hop.get('node', '?')}"
+                    f"[{first_hop.get('iface', '?')}]`"
+                )
+            else:
+                hop_str = "—"
+            marker = " ← primary" if is_primary else ""
+            return f"| `{fid}`{marker} | {status} | {hop_str} |"
+
+        # Primary first, then the rest in their existing order.
+        if primary_flow in path_walk_all_reports:
+            out.append(_walk_row(
+                primary_flow, path_walk_all_reports[primary_flow],
+                is_primary=True,
+            ))
+        for fid, rep in path_walk_all_reports.items():
+            if fid == primary_flow:
+                continue
+            out.append(_walk_row(fid, rep, is_primary=False))
+        out.append("")
 
     # Soft-cap warning + hard-cap truncation (from resolved_path).
     if resolved_path:

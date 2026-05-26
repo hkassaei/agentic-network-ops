@@ -146,3 +146,75 @@ def test_target_marker_lands_on_the_right_walk_row():
     # and AFTER upf_row_idx.
     assert target_idx < pyhss_row_idx
     assert target_idx > upf_row_idx
+
+
+def test_prioritized_candidates_table_includes_primary_with_marker():
+    """ADR path_prioritizer_walks_all_candidates.md: when the walker walks
+    multiple candidate flows, the "Prioritized Candidates Walked In Parallel"
+    table must list EVERY walked flow — including the primary, marked
+    `← primary`. The earlier rendering excluded the primary, so the table
+    header said "probed N flows" but listed only N-1 rows. This pins that
+    all N appear in one place.
+    """
+    primary = PathWalkReport(
+        flow_id="ims_registration",
+        direction="both",
+        window_seconds=5,
+        anchor_ts=None,
+        hops=[
+            HopRecord(
+                hop=Hop(node="pcscf", kind="container", iface="eth0"),
+                attribution=LatencyAtHop(
+                    counter_kind="qdisc_netem_delay", observed_delay_ms=2000.0,
+                    evidence="qdisc netem delay 2s",
+                ),
+                prober="KernelHopProber",
+            ),
+        ],
+    )
+    # Two alternatives: one null-localized, one localized.
+    alt_null = PathWalkReport(
+        flow_id="data_pdu_session_user_traffic",
+        direction="both", window_seconds=5, anchor_ts=None,
+        hops=[
+            HopRecord(
+                hop=Hop(node="upf", kind="container", iface="eth0"),
+                attribution=__import__(
+                    "agentic_ops_common.path_walk", fromlist=["CleanHop"],
+                ).CleanHop(),
+                prober="KernelHopProber",
+            ),
+        ],
+    )
+    alt_localized = PathWalkReport(
+        flow_id="vonr_call_setup",
+        direction="both", window_seconds=5, anchor_ts=None,
+        hops=[
+            HopRecord(
+                hop=Hop(node="pcscf", kind="container", iface="eth0"),
+                attribution=LatencyAtHop(
+                    counter_kind="qdisc_netem_delay", observed_delay_ms=2000.0,
+                    evidence="qdisc netem delay 2s",
+                ),
+                prober="KernelHopProber",
+            ),
+        ],
+    )
+
+    episode = _make_episode(_path_walk_report_to_dict(primary))
+    episode["challenge_result"]["path_walk_all_reports"] = {
+        "ims_registration": _path_walk_report_to_dict(primary),
+        "data_pdu_session_user_traffic": _path_walk_report_to_dict(alt_null),
+        "vonr_call_setup": _path_walk_report_to_dict(alt_localized),
+    }
+    md = _generate_markdown_summary(episode, agent_version="v7")
+
+    # The header advertises 3 walked flows.
+    assert "probed 3 candidate flows" in md
+    # All three flows appear in the section (primary included).
+    section = md[md.find("### Prioritized Candidates"):]
+    assert "`ims_registration` ← primary" in section
+    assert "`data_pdu_session_user_traffic`" in section
+    assert "`vonr_call_setup`" in section
+    # The primary's row shows its localization, not a dash.
+    assert "← primary | ✅ localized | `pcscf[eth0]`" in section

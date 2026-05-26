@@ -39,7 +39,7 @@ from agentic_ops_common.path_walk import (
 )
 
 from agentic_ops_v7.orchestrator import _render_path_walk_for_synthesis
-from agentic_ops_v7.path_resolver import resolve_path
+from agentic_ops_v7.path_prioritizer import prioritize_paths
 from agentic_ops_v7.subagents import path_walk_investigator as walker_mod
 from agentic_ops_v7.subagents.path_walk_investigator import walk_path
 from agentic_ops_v7.symptom_classifier import classify, SymptomClassification
@@ -121,7 +121,7 @@ def test_rtpengine_30pct_loss_localizes_correctly(monkeypatch):
     ])
     assert classification.label in ("transport_layer", "mixed")
 
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert resolved.flow_id == "vonr_media"
 
@@ -187,7 +187,7 @@ def test_pcscf_30pct_loss_localizes_correctly(monkeypatch):
     ])
     assert classification.label in ("transport_layer", "mixed")
 
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     walked = {h.node for h in resolved.hops}
     assert "pcscf" in walked
@@ -234,7 +234,7 @@ def test_upf_bandwidth_cap_localizes_via_qdisc_tbf(monkeypatch):
     ])
     assert classification.label in ("transport_layer", "mixed")
 
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     walked = {h.node for h in resolved.hops}
     assert "upf" in walked
@@ -287,7 +287,7 @@ def test_rtpengine_latency_injection_localizes_via_latency_at_hop(monkeypatch):
     ])
     assert classification.label in ("transport_layer", "mixed")
 
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     walked = {h.node for h in resolved.hops}
     assert "rtpengine" in walked
@@ -341,7 +341,7 @@ def test_null_localization_does_not_engage_synthesis(monkeypatch):
     # Cx timeouts and reply drops are KB-labeled mixed -> walker runs first.
     assert classification.label in ("mixed", "transport_layer")
 
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
 
     # All hops report clean — application-layer fault doesn't show up

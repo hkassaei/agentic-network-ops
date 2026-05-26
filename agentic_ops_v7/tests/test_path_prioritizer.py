@@ -1,11 +1,12 @@
-"""PathResolver — flow + hop-list resolution tests.
+"""PathPrioritizer — flow scoring + hop-list prioritization tests.
 
-Per Phase 4 of ADR `path_anchored_probe_planning_for_transport_layer_faults.md`.
+Per Phase 4 of ADR `path_anchored_probe_planning_for_transport_layer_faults.md`
+and ADR `path_prioritizer_walks_all_candidates.md`.
 
 Tests build flags in the SCREENER's actual emission format
 (component='derived'/'normalized', metric=<remainder>) and run them
 through the real `enrich_anomaly_report` before classifying and
-resolving. That round-trip is the contract under test — it's the
+prioritizing. That round-trip is the contract under test — it's the
 boundary that the previous fixture-based tests bypassed, which is
 why the original v7 run resolved the wrong flow on the rtpengine
 30% loss case.
@@ -19,7 +20,7 @@ import pytest
 
 from agentic_ops_common.anomaly.screener import AnomalyFlag, AnomalyReport
 from agentic_ops_common.metric_kb import enrich_anomaly_report, load_kb
-from agentic_ops_v7.path_resolver import resolve_path
+from agentic_ops_v7.path_prioritizer import prioritize_paths
 from agentic_ops_v7.symptom_classifier import classify, SymptomClassification
 
 
@@ -84,7 +85,7 @@ def test_resolves_vonr_media_for_rtpengine_loss():
         _flag("normalized.upf.gtp_outdatapktn3upf_per_ue",
               current=3.26, learned_normal=1.45, direction="spike", score=1.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert resolved.flow_id == "vonr_media", (
         f"expected vonr_media, got {resolved.flow_id}. "
@@ -112,7 +113,7 @@ def test_resolves_signaling_path_for_pcscf_loss():
         _flag("normalized.scscf.mar_timeout_ratio",
               current=0.6, learned_normal=0.0, direction="spike", score=1.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert resolved.flow_id != "vonr_media", (
         f"P-CSCF signaling fault should not resolve to vonr_media; "
@@ -137,7 +138,7 @@ def test_resolves_data_path_for_upf_outage():
         _flag("normalized.upf.activity_during_calls",
               current=0.0, learned_normal=1.0, direction="drop", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert resolved.flow_id in ("data_pdu_session_user_traffic", "vonr_media"), (
         f"UPF data-plane outage should resolve to a data-path flow; "
@@ -158,7 +159,7 @@ def test_resolves_diameter_path_for_hss_unresponsive():
         _flag("normalized.icscf.cdp_replies_per_ue",
               current=0.0, learned_normal=0.05, direction="drop", score=1.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     walked = {h.node for h in resolved.hops}
     assert "pyhss" in walked, (
@@ -180,7 +181,7 @@ def test_inserts_bridge_hops_between_containers():
         _flag("derived.rtpengine_loss_ratio",
               current=10.0, learned_normal=0.0, direction="spike", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     for i in range(len(resolved.hops) - 1):
         a = resolved.hops[i]
@@ -200,7 +201,7 @@ def test_walks_load_bearing_nf_on_resolved_path():
         _flag("derived.rtpengine_loss_ratio",
               current=10.0, learned_normal=0.0, direction="spike", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     walked = {h.node for h in resolved.hops}
     assert "rtpengine" in walked, (
@@ -218,7 +219,7 @@ def test_returns_none_on_empty_classification():
     to score against and returns None — caller falls through to the
     application-layer pipeline."""
     empty = SymptomClassification(label="application_layer", rationale="no flags")
-    assert resolve_path(empty) is None
+    assert prioritize_paths(empty) is None
 
 
 def test_legacy_nf_metric_format_still_resolves():
@@ -241,7 +242,7 @@ def test_legacy_nf_metric_format_still_resolves():
     )
     # NO enrichment — testing the fallback path.
     classification = classify(report, load_kb())
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert resolved.flow_id == "vonr_media"
 
@@ -257,7 +258,7 @@ def test_to_dict_serializable():
         _flag("derived.rtpengine_loss_ratio",
               current=10.0, learned_normal=0.0, direction="spike", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     payload = resolved.to_dict()
     rendered = json.dumps(payload)
@@ -273,7 +274,7 @@ def test_rationale_cites_chosen_flow():
         _flag("derived.rtpengine_loss_ratio",
               current=10.0, learned_normal=0.0, direction="spike", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert resolved.flow_id in resolved.rationale
 
@@ -287,7 +288,7 @@ def test_candidate_list_includes_runners_up():
         _flag("normalized.upf.gtp_indatapktn3upf_per_ue",
               current=3.39, learned_normal=1.45, direction="spike", score=1.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert len(resolved.candidate_flows) >= 2
     assert resolved.candidate_flows[0][0] == resolved.flow_id
@@ -322,7 +323,7 @@ def test_rtpengine_loss_metric_decisively_boosts_vonr_media():
         _flag("normalized.upf.gtp_outdatapktn3upf_per_ue",
               current=3.26, learned_normal=1.45, direction="spike", score=1.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     by_id = dict(resolved.candidate_flows)
     vonr = by_id.get("vonr_media", 0)
@@ -380,7 +381,7 @@ def test_classification_roundtrip_preserves_resolver_input():
     assert rehydrated is not None
 
     # Resolver must still pick the right flow.
-    resolved = resolve_path(rehydrated)
+    resolved = prioritize_paths(rehydrated)
     assert resolved is not None, (
         "Resolver returned None after round-trip — `kb_metric_id` was "
         "almost certainly dropped during reconstruction, leaving the "
@@ -534,7 +535,7 @@ def test_prioritizer_includes_expected_flow_in_candidates(
     ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
     """
     classification = _load_classification_from_episode(episode_path)
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
 
     assert resolved is not None, (
         f"{scenario}: resolver returned None — no flow scored above zero. "
@@ -599,7 +600,7 @@ def test_prioritizer_keeps_walker_localized_flow_in_candidates(
     ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
     """
     classification = _load_classification_from_episode(episode_path)
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
 
     assert resolved is not None, (
         f"{scenario}: resolver returned None for a previously-passing "
@@ -634,7 +635,7 @@ def test_resolved_path_exposes_candidates_list_and_caps():
         _flag("derived.rtpengine_loss_ratio",
               current=10.0, learned_normal=0.0, direction="spike", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     assert resolved.candidates, "candidates list must not be empty when resolver returned non-None"
     assert all(c.hops and len(c.hops) >= 2 for c in resolved.candidates), (
@@ -655,7 +656,7 @@ def test_zero_evidence_returns_none():
         rationale="no flags",
         transport_flags=[], application_flags=[], ambiguous_flags=[],
     )
-    assert resolve_path(classification) is None
+    assert prioritize_paths(classification) is None
 
 
 def test_hard_cap_truncates_at_five_candidates():
@@ -677,14 +678,14 @@ def test_hard_cap_truncates_at_five_candidates():
         _flag("derived.rtpengine_loss_ratio",
               current=10.0, learned_normal=0.0, direction="spike", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     # Conditional: if the scored list naturally exceeded 5, we expect a
     # truncated set. We don't assert hard_cap_truncated unconditionally
     # because the flag set might not actually produce >5 candidates against
     # the current flows.yaml. What we DO assert: the candidates list is at
     # most _HARD_CAP_FLOWS.
-    from agentic_ops_v7.path_resolver import _HARD_CAP_FLOWS
+    from agentic_ops_v7.path_prioritizer import _HARD_CAP_FLOWS
     assert len(resolved.candidates) <= _HARD_CAP_FLOWS, (
         f"candidates list must not exceed hard cap "
         f"({_HARD_CAP_FLOWS}); got {len(resolved.candidates)}"
@@ -703,7 +704,7 @@ def test_backward_compat_properties_read_from_primary_candidate():
         _flag("derived.rtpengine_loss_ratio",
               current=10.0, learned_normal=0.0, direction="spike", score=2.0),
     ])
-    resolved = resolve_path(classification)
+    resolved = prioritize_paths(classification)
     assert resolved is not None
     primary = resolved.candidates[0]
     assert resolved.flow_id == primary.flow_id

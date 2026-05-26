@@ -429,7 +429,12 @@ def _parse_json(path: Path) -> Optional[RetrievedCase]:
         if isinstance(fah, dict):
             walker_attributed_hop_node = fah.get("node")
     resolved_flow_id: Optional[str] = None
-    rp = cr.get("resolved_path")
+    # Phase 0.6 output key was renamed `resolved_path` → `prioritized_paths`
+    # (ADR path_prioritizer_walks_all_candidates.md). New episodes carry
+    # `prioritized_paths`; fall back to `resolved_path` for pre-rename
+    # episodes already in the corpus. The internal `flow_id` key (the
+    # primary candidate) is unchanged in both shapes.
+    rp = cr.get("prioritized_paths") or cr.get("resolved_path")
     if isinstance(rp, dict):
         resolved_flow_id = rp.get("flow_id")
 

@@ -50,7 +50,7 @@ def _make_episode(path_walk_report_dict: dict) -> dict:
                 "label": "mixed",
                 "flag_counts": {"transport": 1, "application": 0, "ambiguous": 9},
             },
-            "resolved_path": {"flow_id": "ims_registration", "hops": [], "candidate_flows": []},
+            "prioritized_paths": {"flow_id": "ims_registration", "hops": [], "candidate_flows": []},
             "path_walk_report": path_walk_report_dict,
             "diagnosis_report": None,  # exercise the deliberate-fall-through branch
         },

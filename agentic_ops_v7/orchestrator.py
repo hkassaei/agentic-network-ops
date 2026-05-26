@@ -683,14 +683,14 @@ async def _phase06_transport_layer_route(
         `short_circuit_on_localize=False` regardless of walker outcome
         (caller falls through to the application-layer pipeline).
     """
-    from .path_resolver import resolve_path
+    from .path_prioritizer import prioritize_paths
     from .symptom_classifier import SymptomClassification, FlagBucket
     from .subagents.path_walk_investigator import walk_path
 
     phase_start = time.time()
 
     # Reconstruct the structured SymptomClassification from the dict
-    # form Phase 0.5 stored — the resolver and synthesis need the
+    # form Phase 0.5 stored — the prioritizer and synthesis need the
     # rich rationale + flag buckets.
     classification = _reconstruct_classification(state)
     if classification is None:
@@ -700,42 +700,45 @@ async def _phase06_transport_layer_route(
         )
         return None
 
-    # ---- Resolve path ----
+    # ---- Prioritize candidate paths ----
     try:
-        resolved = resolve_path(classification)
+        resolved = prioritize_paths(classification)
     except Exception as e:
         log.warning(
-            "Phase 0.6 path resolver raised (non-fatal): %s",
+            "Phase 0.6 path prioritizer raised (non-fatal): %s",
             e, exc_info=True,
         )
         all_phases.append(PhaseTrace(
-            agent_name="PathResolver",
+            agent_name="PathPrioritizer",
             started_at=phase_start,
             finished_at=time.time(),
             duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary=f"resolver raised: {e}",
+            output_summary=f"prioritizer raised: {e}",
         ))
         return None
 
     if resolved is None or not resolved.is_resolved:
-        log.info("Phase 0.6 path resolver returned no path; falling through.")
+        log.info(
+            "Phase 0.6 path prioritizer returned no candidates "
+            "(no evidence-bearing flow); falling through."
+        )
         all_phases.append(PhaseTrace(
-            agent_name="PathResolver",
+            agent_name="PathPrioritizer",
             started_at=phase_start,
             finished_at=time.time(),
             duration_ms=int((time.time() - phase_start) * 1000),
-            output_summary="no path resolved (falling through to app-layer)",
+            output_summary="no candidates (falling through to app-layer)",
         ))
         return None
 
-    state["resolved_path"] = resolved.to_dict()
+    state["prioritized_paths"] = resolved.to_dict()
     all_phases.append(PhaseTrace(
-        agent_name="PathResolver",
+        agent_name="PathPrioritizer",
         started_at=phase_start,
         finished_at=time.time(),
         duration_ms=int((time.time() - phase_start) * 1000),
         output_summary=(
-            f"flow={resolved.flow_id} hops={len(resolved.hops)}"
+            f"primary={resolved.flow_id} candidates={len(resolved.candidates)}"
         ),
     ))
 
@@ -3361,7 +3364,12 @@ def _build_result(
         # without engaging Phase 0.6 (label=application_layer or
         # classifier failure).
         "symptom_classification": state.get("symptom_classification"),
-        "resolved_path":          state.get("resolved_path"),
+        # Renamed from `resolved_path` per ADR
+        # path_prioritizer_walks_all_candidates.md — it carries the
+        # prioritized candidate list, not a single resolved flow.
+        # Consumers that read persisted episodes (RAG parser, recorder)
+        # fall back to the old `resolved_path` key for pre-rename JSONs.
+        "prioritized_paths":      state.get("prioritized_paths"),
         "path_walk_report":       state.get("path_walk_report"),
         # Per-flow walker reports keyed by flow_id. Populated whenever
         # Phase 0.6 ran (i.e. one or more candidates were walked). The

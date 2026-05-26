@@ -1,10 +1,22 @@
-"""PathResolver — flow → ordered hop list.
+"""PathPrioritizer — flow scoring → prioritized hop-list candidates.
 
 Per ADR `path_anchored_probe_planning_for_transport_layer_faults.md`,
 when the SymptomClassifier labels an episode `transport_layer` (or
 `mixed`), the v7 orchestrator routes to the path-walk pipeline. The
-walker needs an ordered list of `(node, hop_kind, iface)` hops to
-traverse — this resolver produces that list from:
+walker needs ordered `(node, hop_kind, iface)` hop lists to traverse.
+
+This module does NOT select a single flow. Per ADR
+`path_prioritizer_walks_all_candidates.md`, it PRIORITIZES the
+evidence-bearing flows (those whose hop list contains at least one
+flagged NF) and returns up to `_HARD_CAP_FLOWS` of them in priority
+order. The walker then walks ALL of them in parallel — localization
+correctness lives with the deterministic walker, not with this
+scoring step, which only decides walk order and which candidates make
+the cap. (The module was previously named `path_resolver` / the
+function `resolve_path`, from when it selected one flow; renamed to
+reflect the prioritize-not-select contract.)
+
+Inputs:
 
   1. The `SymptomClassification` (which NFs are load-bearing).
   2. `network_ontology/data/flows.yaml` (which protocol flows touch
@@ -23,8 +35,10 @@ Algorithm:
   2. Score each flow by the count of load-bearing components present
      in its `from`/`to`/`via` step references. Tie-break by total
      coverage (more specific flows win) and by `display_order`
-     ascending (canonical preference).
-  3. Walk the chosen flow's steps. For each step, expand to:
+     ascending (canonical preference). Flows scoring 0 (no flagged NF
+     in the hop list) are dropped — this is the evidence-bearing gate
+     that prevents brute-force walking.
+  3. For each surviving flow, expand its steps to an ordered hop list:
         Hop(from)
         Hop(bridge)   ← inserted between every adjacent container pair
         Hop(via_1)
@@ -36,10 +50,12 @@ Algorithm:
      — subject to the topology's default_inter_container_bridge rule.
   4. Deduplicate consecutive identical-node hops (e.g. when step N's
      `to` equals step N+1's `from`).
+  5. Apply the hard cap (top `_HARD_CAP_FLOWS` by score); surface the
+     rest as `truncated`.
 
-The resolver is deterministic Python — no LLM. It returns a
-`ResolvedPath` carrying the ordered Hop list plus the rationale
-(which flow won and why) for episode-log auditability.
+The prioritizer is deterministic Python — no LLM. It returns a
+`PrioritizedPaths` carrying the ranked candidate list (each with its
+ordered Hop list) plus the rationale, for episode-log auditability.
 """
 
 from __future__ import annotations
@@ -61,7 +77,7 @@ _TOPOLOGY_PATH = _REPO_ROOT / "network_ontology" / "data" / "topology.yaml"
 
 
 # ---------------------------------------------------------------------------
-# Resolver output
+# Prioritizer output
 # ---------------------------------------------------------------------------
 
 
@@ -80,8 +96,8 @@ _HARD_CAP_FLOWS = 5
 class PathCandidate:
     """One evidence-bearing flow the walker should probe.
 
-    The prioritizer (`resolve_path`) returns a list of these in priority
-    order. The walker walks all of them in parallel (Phase 0.6).
+    The prioritizer (`prioritize_paths`) returns a list of these in
+    priority order. The walker walks all of them in parallel (Phase 0.6).
     ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
     """
     flow_id: str
@@ -92,22 +108,22 @@ class PathCandidate:
 
 
 @dataclass(frozen=True)
-class ResolvedPath:
+class PrioritizedPaths:
     """Prioritized list of evidence-bearing candidate flows.
 
-    Renamed conceptually from "the chosen flow" to "the prioritized list
-    of candidates the walker should probe" per ADR
-    `path_prioritizer_walks_all_candidates.md`. The class name is kept as
-    `ResolvedPath` to minimize disruption to existing call sites; the
-    backward-compat properties (`flow_id`, `flow_name`, `direction`,
-    `hops`) return the *primary candidate's* values, where "primary" =
-    first in priority order. Phase 0.6 reads `.candidates` for the
-    parallel walk.
+    Returned by `prioritize_paths`. Carries the ranked candidate list
+    (each with its own ordered hop list); the walker walks all of them
+    in parallel (Phase 0.6). The backward-compat properties (`flow_id`,
+    `flow_name`, `direction`, `hops`) return the *primary candidate's*
+    values, where "primary" = first in priority order — these let older
+    call sites that expect a single resolved path keep working.
 
     Caps (`_SOFT_CAP_FLOWS=3`, `_HARD_CAP_FLOWS=5`) limit how many
     candidates the walker probes. `truncated` surfaces flows that scored
     > 0 but were dropped past the hard cap, so the episode log can show
     them as "not walked".
+
+    ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
     """
     candidates: list[PathCandidate]
     rationale: str
@@ -147,8 +163,9 @@ class ResolvedPath:
 
     @property
     def is_resolved(self) -> bool:
-        """A path is resolved when at least one candidate produced ≥ 2 hops
-        (otherwise there's nothing for the walker to do)."""
+        """True when at least one candidate produced ≥ 2 hops (otherwise
+        there's nothing for the walker to do). Kept named `is_resolved`
+        for call-site compatibility."""
         return any(len(c.hops) >= 2 for c in self.candidates)
 
     def to_dict(self) -> dict:
@@ -195,18 +212,20 @@ class ResolvedPath:
 # ---------------------------------------------------------------------------
 
 
-def resolve_path(
+def prioritize_paths(
     classification: SymptomClassification,
     flows_yaml_path: Optional[_PathLib] = None,
     topology_yaml_path: Optional[_PathLib] = None,
-) -> Optional[ResolvedPath]:
-    """Resolve the implicated path for a transport-layer / mixed symptom.
+) -> Optional[PrioritizedPaths]:
+    """Prioritize the evidence-bearing flows for a transport-layer / mixed
+    symptom — the walker walks all of them (up to the hard cap) in parallel.
 
     Returns:
-        A `ResolvedPath` when a flow scored > 0 and produced ≥ 2 hops.
-        `None` when no flow scored or all candidates produced empty hop
-        lists — the caller (orchestrator) treats `None` as "fall back
-        to the application-layer pipeline."
+        A `PrioritizedPaths` when at least one flow scored > 0 and produced
+        ≥ 2 hops. `None` when no flow scored (no flagged NF appears in any
+        flow's hop list — the "no smoking gun" case) or all candidates
+        produced empty hop lists — the caller (orchestrator) treats `None`
+        as "fall back to the application-layer pipeline; don't walk."
     """
     flows_yaml_path = flows_yaml_path or _FLOWS_PATH
     topology_yaml_path = topology_yaml_path or _TOPOLOGY_PATH
@@ -260,7 +279,7 @@ def resolve_path(
         candidate_count=len(candidates),
         truncated_count=len(truncated),
     )
-    return ResolvedPath(
+    return PrioritizedPaths(
         candidates=candidates,
         rationale=rationale,
         candidate_flows=scored[:5],

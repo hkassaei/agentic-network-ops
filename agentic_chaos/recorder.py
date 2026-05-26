@@ -695,7 +695,7 @@ def _render_v6_pipeline(challenge: dict) -> list[str]:
 
 def _render_v7_pipeline(challenge: dict) -> list[str]:
     """v7 pipeline layout: v6's 8 phases plus the transport-layer route
-    (Phase 0.5 SymptomClassifier + Phase 0.6 PathResolver/PathWalker)
+    (Phase 0.5 SymptomClassifier + Phase 0.6 PathPrioritizer/PathWalker)
     inserted between Phase 0 and Phase 1; on path-walker localization
     Phase 7 Synthesis is invoked directly via the unified Synthesis
     LLM agent (the deterministic LocalizedSynthesis was deleted per
@@ -742,7 +742,13 @@ def _render_v7_pipeline(challenge: dict) -> list[str]:
     out.append("")
     out.extend(_format_transport_layer_route(
         symptom_classification=challenge.get("symptom_classification"),
-        resolved_path=challenge.get("resolved_path"),
+        # New key is `prioritized_paths` (ADR
+        # path_prioritizer_walks_all_candidates.md); fall back to the old
+        # `resolved_path` key so pre-rename episode JSONs still render.
+        prioritized_paths=(
+            challenge.get("prioritized_paths")
+            or challenge.get("resolved_path")
+        ),
         path_walk_report=challenge.get("path_walk_report"),
         path_walk_all_reports=challenge.get("path_walk_all_reports"),
         diagnosis_report=challenge.get("diagnosis_report"),
@@ -1176,7 +1182,7 @@ def _format_symptom_classification(payload) -> list[str]:
 def _format_transport_layer_route(
     *,
     symptom_classification,
-    resolved_path,
+    prioritized_paths,
     path_walk_report,
     path_walk_all_reports=None,
     diagnosis_report=None,
@@ -1185,10 +1191,15 @@ def _format_transport_layer_route(
 
     Three states:
       * Skipped (classifier said application_layer) → one-line note.
-      * Engaged but null-localization → resolver + walker output, plus
+      * Engaged but null-localization → prioritizer + walker output, plus
         a "fell through to app-layer pipeline" footer.
-      * Engaged and localized → resolver + walker + synthesis (which is
+      * Engaged and localized → prioritizer + walker + synthesis (which is
         the agent's final diagnosis).
+
+    `prioritized_paths` is the Phase 0.6 prioritizer output (ADR
+    path_prioritizer_walks_all_candidates.md). The internal dict keys
+    (`flow_id`, `candidate_flows`, etc.) are unchanged from the old
+    `resolved_path` shape, so both pre- and post-rename episodes render.
     """
     label = (symptom_classification or {}).get("label")
     if label == "application_layer":
@@ -1204,16 +1215,16 @@ def _format_transport_layer_route(
 
     out: list[str] = []
 
-    # ── Resolver ──────────────────────────────────────────────────────
-    out.append("### Resolver")
+    # ── Prioritizer ───────────────────────────────────────────────────
+    out.append("### Prioritizer")
     out.append("")
-    if resolved_path:
-        flow_id = resolved_path.get("flow_id", "?")
-        flow_name = resolved_path.get("flow_name", flow_id)
-        direction = resolved_path.get("direction", "?")
-        hops = resolved_path.get("hops", []) or []
-        candidates = resolved_path.get("candidate_flows", []) or []
-        rationale = resolved_path.get("rationale", "")
+    if prioritized_paths:
+        flow_id = prioritized_paths.get("flow_id", "?")
+        flow_name = prioritized_paths.get("flow_name", flow_id)
+        direction = prioritized_paths.get("direction", "?")
+        hops = prioritized_paths.get("hops", []) or []
+        candidates = prioritized_paths.get("candidate_flows", []) or []
+        rationale = prioritized_paths.get("rationale", "")
 
         out.append(
             f"**Flow:** `{flow_id}` ({flow_name})  \n"
@@ -1241,9 +1252,10 @@ def _format_transport_layer_route(
             out.append("")
     else:
         out.append(
-            "*Resolver returned no path (no flow scored > 0, or all candidate "
-            "flows produced empty hop lists). Phase 0.6 returned None and the "
-            "orchestrator fell through to the application-layer pipeline.*"
+            "*Prioritizer returned no candidates (no flow scored > 0, or all "
+            "candidate flows produced empty hop lists). Phase 0.6 returned "
+            "None and the orchestrator fell through to the application-layer "
+            "pipeline.*"
         )
         out.append("")
         return out
@@ -1360,9 +1372,9 @@ def _format_transport_layer_route(
             out.append(_walk_row(fid, rep, is_primary=False))
         out.append("")
 
-    # Soft-cap warning + hard-cap truncation (from resolved_path).
-    if resolved_path:
-        if resolved_path.get("soft_cap_exceeded"):
+    # Soft-cap warning + hard-cap truncation (from prioritized_paths).
+    if prioritized_paths:
+        if prioritized_paths.get("soft_cap_exceeded"):
             walked_n = len(path_walk_all_reports or {})
             out.append(
                 f"> ⚠️ **Soft cap exceeded** — walker probed {walked_n} flows "
@@ -1370,7 +1382,7 @@ def _format_transport_layer_route(
                 f"screener flag bucketing if this recurs."
             )
             out.append("")
-        truncated = resolved_path.get("truncated") or []
+        truncated = prioritized_paths.get("truncated") or []
         if truncated:
             truncated_names = ", ".join(
                 f"`{t.get('flow_id','?')}` ({t.get('score',0)})"

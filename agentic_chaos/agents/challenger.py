@@ -229,7 +229,7 @@ class ChallengeAgent(BaseAgent):
             # Populated for v7 runs that engaged the path-walk route;
             # None for application-layer v7 runs and for all v3-v6 runs.
             "symptom_classification": diagnosis_dict.get("_symptom_classification"),
-            "resolved_path":          diagnosis_dict.get("_resolved_path"),
+            "prioritized_paths":      diagnosis_dict.get("_prioritized_paths"),
             "path_walk_report":       diagnosis_dict.get("_path_walk_report"),
             "path_walk_all_reports":  diagnosis_dict.get("_path_walk_all_reports"),
             "diagnosis_report":       diagnosis_dict.get("_diagnosis_report"),
@@ -461,7 +461,9 @@ class ChallengeAgent(BaseAgent):
             # test runbook can verify them and so debug runs can see why
             # Phase 0.6 returned null localization.
             "_symptom_classification": result.get("symptom_classification"),
-            "_resolved_path":          result.get("resolved_path"),
+            # Renamed from resolved_path per ADR
+            # path_prioritizer_walks_all_candidates.md.
+            "_prioritized_paths":      result.get("prioritized_paths"),
             "_path_walk_report":       result.get("path_walk_report"),
             # Per-flow walker reports keyed by flow_id — populated when the
             # prioritizer returned multiple candidates and the walker walked

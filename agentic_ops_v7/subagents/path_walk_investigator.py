@@ -2,8 +2,9 @@
 
 Per ADR `path_anchored_probe_planning_for_transport_layer_faults.md`,
 when the SymptomClassifier labels an episode `transport_layer` (or
-`mixed`) and the PathResolver produced an ordered hop list, this
-walker traverses the list and produces a structured `PathWalkReport`.
+`mixed`) and the PathPrioritizer produced ordered hop lists, this
+walker traverses them and produces structured `PathWalkReport`s (one
+per candidate flow; ADR `path_prioritizer_walks_all_candidates.md`).
 
 The walker is deliberately deterministic — no LLM, no narrative
 reasoning. The kernel and network elements are the source of truth

@@ -1719,30 +1719,29 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
                 lines.append(f"**Scorer assessment:** {scorer_summary}")
                 lines.append("")
 
-            lines.append("| Dimension | Result | Rationale |")
-            lines.append("|-----------|--------|-----------|")
+            # Weight column mirrors the scorer's total_score formula
+            # (agentic_chaos/scorer.py) so anyone reading the report can see
+            # how much each dimension contributes to the overall score.
+            lines.append("| Dimension | Weight | Result | Rationale |")
+            lines.append("|-----------|-------:|--------|-----------|")
             lines.append(
-                f"| Root cause correct | {'Yes' if score.get('root_cause_correct') else 'No'} "
+                f"| Root cause correct | 0.40 | {'Yes' if score.get('root_cause_correct') else 'No'} "
                 f"| {score.get('root_cause_rationale', '')} |"
             )
             lines.append(
-                f"| Component overlap | {score.get('component_overlap', 0):.0%} "
+                f"| Component overlap | 0.25 | {score.get('component_overlap', 0):.0%} "
                 f"| {score.get('component_rationale', '')} |"
             )
             lines.append(
-                f"| Severity correct | {'Yes' if score.get('severity_correct') else 'No'} "
+                f"| Severity correct | 0.15 | {'Yes' if score.get('severity_correct') else 'No'} "
                 f"| {score.get('severity_rationale', '')} |"
             )
             lines.append(
-                f"| Fault type identified | {'Yes' if score.get('fault_type_identified') else 'No'} "
+                f"| Fault type identified | 0.10 | {'Yes' if score.get('fault_type_identified') else 'No'} "
                 f"| {score.get('fault_type_rationale', '')} |"
             )
             lines.append(
-                f"| Layer accuracy | {'Yes' if score.get('layer_accuracy') else 'No'} "
-                f"| {score.get('layer_accuracy_rationale', '')} |"
-            )
-            lines.append(
-                f"| Confidence calibrated | {'Yes' if score.get('confidence_calibrated') else 'No'} "
+                f"| Confidence calibrated | 0.10 | {'Yes' if score.get('confidence_calibrated') else 'No'} "
                 f"| {score.get('confidence_rationale', '')} |"
             )
             lines.append("")

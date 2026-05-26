@@ -65,37 +65,128 @@ _TOPOLOGY_PATH = _REPO_ROOT / "network_ontology" / "data" / "topology.yaml"
 # ---------------------------------------------------------------------------
 
 
+# Caps on the number of evidence-bearing candidates the walker will probe.
+# ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
+#   * Soft cap = 3: walk all candidates, emit a warning if more than 3
+#     were walked. Signals a noisy load-bearing set worth inspecting.
+#   * Hard cap = 5: never walk more than the top 5 by priority. Anything
+#     ranked 6+ is dropped and surfaced as "not walked (hard cap)" in the
+#     episode log.
+_SOFT_CAP_FLOWS = 3
+_HARD_CAP_FLOWS = 5
+
+
 @dataclass(frozen=True)
-class ResolvedPath:
-    """The walker's input: an ordered hop list plus how it was derived."""
+class PathCandidate:
+    """One evidence-bearing flow the walker should probe.
+
+    The prioritizer (`resolve_path`) returns a list of these in priority
+    order. The walker walks all of them in parallel (Phase 0.6).
+    ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
+    """
     flow_id: str
     flow_name: str
     direction: str  # "uplink" | "downlink" | "both"
     hops: list[Hop]
+    score: int
+
+
+@dataclass(frozen=True)
+class ResolvedPath:
+    """Prioritized list of evidence-bearing candidate flows.
+
+    Renamed conceptually from "the chosen flow" to "the prioritized list
+    of candidates the walker should probe" per ADR
+    `path_prioritizer_walks_all_candidates.md`. The class name is kept as
+    `ResolvedPath` to minimize disruption to existing call sites; the
+    backward-compat properties (`flow_id`, `flow_name`, `direction`,
+    `hops`) return the *primary candidate's* values, where "primary" =
+    first in priority order. Phase 0.6 reads `.candidates` for the
+    parallel walk.
+
+    Caps (`_SOFT_CAP_FLOWS=3`, `_HARD_CAP_FLOWS=5`) limit how many
+    candidates the walker probes. `truncated` surfaces flows that scored
+    > 0 but were dropped past the hard cap, so the episode log can show
+    them as "not walked".
+    """
+    candidates: list[PathCandidate]
     rationale: str
     candidate_flows: list[tuple[str, int]] = field(default_factory=list)
     """list of (flow_id, score) considered, for auditability."""
+    truncated: list[tuple[str, int]] = field(default_factory=list)
+    """list of (flow_id, score) dropped past the hard cap. Empty when
+    the candidate count ≤ _HARD_CAP_FLOWS."""
+
+    @property
+    def soft_cap_exceeded(self) -> bool:
+        return len(self.candidates) > _SOFT_CAP_FLOWS
+
+    @property
+    def hard_cap_truncated(self) -> bool:
+        return bool(self.truncated)
+
+    # ── Backward-compat properties (primary candidate access) ────────
+    # Existing callers read `resolved.flow_id`, `resolved.hops`, etc.
+    # These return the highest-priority candidate's values so call sites
+    # that haven't been updated for the multi-walk model still work.
+    @property
+    def flow_id(self) -> str:
+        return self.candidates[0].flow_id if self.candidates else ""
+
+    @property
+    def flow_name(self) -> str:
+        return self.candidates[0].flow_name if self.candidates else ""
+
+    @property
+    def direction(self) -> str:
+        return self.candidates[0].direction if self.candidates else "both"
+
+    @property
+    def hops(self) -> list[Hop]:
+        return self.candidates[0].hops if self.candidates else []
 
     @property
     def is_resolved(self) -> bool:
-        """A path is resolved when at least one flow scored > 0 and
-        produced ≥ 2 hops (otherwise there's nothing for the walker
-        to do)."""
-        return bool(self.flow_id) and len(self.hops) >= 2
+        """A path is resolved when at least one candidate produced ≥ 2 hops
+        (otherwise there's nothing for the walker to do)."""
+        return any(len(c.hops) >= 2 for c in self.candidates)
 
     def to_dict(self) -> dict:
+        # `flow_id` / `flow_name` / `direction` / `hops` keys preserved for
+        # backward compat — they reflect the primary candidate. The new
+        # `candidates` list carries the full prioritized set.
+        primary = self.candidates[0] if self.candidates else None
         return {
-            "flow_id": self.flow_id,
-            "flow_name": self.flow_name,
-            "direction": self.direction,
+            "flow_id": primary.flow_id if primary else "",
+            "flow_name": primary.flow_name if primary else "",
+            "direction": primary.direction if primary else "both",
             "hops": [
                 {"node": h.node, "kind": h.kind, "iface": h.iface}
-                for h in self.hops
+                for h in (primary.hops if primary else [])
             ],
             "rationale": self.rationale,
             "candidate_flows": [
                 {"flow_id": f, "score": s} for f, s in self.candidate_flows
             ],
+            # New under the prioritizer ADR:
+            "candidates": [
+                {
+                    "flow_id": c.flow_id,
+                    "flow_name": c.flow_name,
+                    "direction": c.direction,
+                    "score": c.score,
+                    "hops": [
+                        {"node": h.node, "kind": h.kind, "iface": h.iface}
+                        for h in c.hops
+                    ],
+                }
+                for c in self.candidates
+            ],
+            "truncated": [
+                {"flow_id": f, "score": s} for f, s in self.truncated
+            ],
+            "soft_cap_exceeded": self.soft_cap_exceeded,
+            "hard_cap_truncated": self.hard_cap_truncated,
         }
 
 
@@ -132,28 +223,48 @@ def resolve_path(
     if not load_bearing:
         return None
 
-    candidates = _score_flows(flows, load_bearing, metrics_by_bucket)
-    if not candidates:
+    scored = _score_flows(flows, load_bearing, metrics_by_bucket)
+    if not scored:
         return None
 
-    best_flow_id, best_score = candidates[0]
-    flow_def = flows.get(best_flow_id, {})
-    hops = _expand_flow_to_hops(
-        flow_def, nodes_topology, bridges, default_bridge_id,
-    )
-    if len(hops) < 2:
+    # Expand each scored flow to its hop list. Drop flows whose expansion
+    # produced fewer than 2 hops — there's nothing for the walker to do.
+    expanded: list[PathCandidate] = []
+    for flow_id, score in scored:
+        flow_def = flows.get(flow_id, {})
+        hops = _expand_flow_to_hops(
+            flow_def, nodes_topology, bridges, default_bridge_id,
+        )
+        if len(hops) < 2:
+            continue
+        expanded.append(PathCandidate(
+            flow_id=flow_id,
+            flow_name=flow_def.get("name", flow_id),
+            direction="both",
+            hops=hops,
+            score=score,
+        ))
+
+    if not expanded:
         return None
+
+    # Apply hard cap. Anything past _HARD_CAP_FLOWS is surfaced as
+    # "truncated" so the episode log can render "not walked (hard cap)".
+    # ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
+    candidates = expanded[:_HARD_CAP_FLOWS]
+    truncated = [(c.flow_id, c.score) for c in expanded[_HARD_CAP_FLOWS:]]
 
     rationale = _render_rationale(
-        best_flow_id, best_score, candidates, load_bearing, len(hops),
+        candidates[0].flow_id, candidates[0].score, scored,
+        load_bearing, len(candidates[0].hops),
+        candidate_count=len(candidates),
+        truncated_count=len(truncated),
     )
     return ResolvedPath(
-        flow_id=best_flow_id,
-        flow_name=flow_def.get("name", best_flow_id),
-        direction="both",
-        hops=hops,
+        candidates=candidates,
         rationale=rationale,
-        candidate_flows=candidates[:5],
+        candidate_flows=scored[:5],
+        truncated=truncated,
     )
 
 
@@ -549,11 +660,21 @@ def _render_rationale(
     candidates: list[tuple[str, int]],
     load_bearing: set[str],
     hop_count: int,
+    candidate_count: int = 1,
+    truncated_count: int = 0,
 ) -> str:
-    """Render a one-paragraph explanation of which flow won and why."""
+    """Render a one-paragraph explanation of which flow is primary and how
+    many candidates the walker will probe.
+
+    Under ADR `path_prioritizer_walks_all_candidates.md` the walker walks
+    ALL surviving candidates (up to the hard cap); the "chosen" flow here
+    is just the primary (highest-priority) one — the rationale notes how
+    many total flows the walker will probe.
+    """
     parts: list[str] = [
-        f"Resolved transport path to flow `{chosen_flow_id}` "
-        f"(score={chosen_score}, {hop_count} hops on the walk).",
+        f"Primary flow `{chosen_flow_id}` (score={chosen_score}, "
+        f"{hop_count} hops); walker probes {candidate_count} candidate "
+        f"flow{'s' if candidate_count != 1 else ''} in parallel.",
         f"Load-bearing components: {sorted(load_bearing)}.",
     ]
     if len(candidates) > 1:
@@ -561,4 +682,15 @@ def _render_rationale(
             f"{f}={s}" for f, s in candidates[1:5]
         )
         parts.append(f"Other candidate flows considered: {runners_up}.")
+    if truncated_count > 0:
+        parts.append(
+            f"Hard cap (5 flows) truncated {truncated_count} additional "
+            f"candidate{'s' if truncated_count != 1 else ''} below the cut."
+        )
+    if candidate_count > _SOFT_CAP_FLOWS:
+        parts.append(
+            f"Soft cap exceeded ({candidate_count} > {_SOFT_CAP_FLOWS}): "
+            f"noisy load-bearing set — inspect screener flag bucketing if "
+            f"this recurs."
+        )
     return " ".join(parts)

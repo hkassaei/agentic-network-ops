@@ -231,6 +231,7 @@ class ChallengeAgent(BaseAgent):
             "symptom_classification": diagnosis_dict.get("_symptom_classification"),
             "resolved_path":          diagnosis_dict.get("_resolved_path"),
             "path_walk_report":       diagnosis_dict.get("_path_walk_report"),
+            "path_walk_all_reports":  diagnosis_dict.get("_path_walk_all_reports"),
             "diagnosis_report":       diagnosis_dict.get("_diagnosis_report"),
             # v7 RAG observability (Phase 2.5 / 2.5b + post-Phase-3 citation
             # scan). Recorder reads these via challenge.get(...) to render
@@ -462,6 +463,11 @@ class ChallengeAgent(BaseAgent):
             "_symptom_classification": result.get("symptom_classification"),
             "_resolved_path":          result.get("resolved_path"),
             "_path_walk_report":       result.get("path_walk_report"),
+            # Per-flow walker reports keyed by flow_id — populated when the
+            # prioritizer returned multiple candidates and the walker walked
+            # them all in parallel. None when only one candidate was walked.
+            # ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
+            "_path_walk_all_reports":  result.get("path_walk_all_reports"),
             "_diagnosis_report":       result.get("diagnosis_report"),
             # v7 RAG observability (Phase 2.5 / 2.5b + post-Phase-3 citation
             # scan). All three are None when the localized branch fired

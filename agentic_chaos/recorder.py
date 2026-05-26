@@ -744,6 +744,7 @@ def _render_v7_pipeline(challenge: dict) -> list[str]:
         symptom_classification=challenge.get("symptom_classification"),
         resolved_path=challenge.get("resolved_path"),
         path_walk_report=challenge.get("path_walk_report"),
+        path_walk_all_reports=challenge.get("path_walk_all_reports"),
         diagnosis_report=challenge.get("diagnosis_report"),
     ))
     out.append("")
@@ -1177,7 +1178,8 @@ def _format_transport_layer_route(
     symptom_classification,
     resolved_path,
     path_walk_report,
-    diagnosis_report,
+    path_walk_all_reports=None,
+    diagnosis_report=None,
 ) -> list[str]:
     """Render the Phase 0.6 path-walk pipeline.
 
@@ -1309,6 +1311,69 @@ def _format_transport_layer_route(
                 f"`{kind}` | {detail} |"
             )
         out.append("")
+
+    # ── Prioritized candidates (multi-walk under the prioritizer ADR) ─
+    # Per ADR docs/ADR/path_prioritizer_walks_all_candidates.md, the walker
+    # walks ALL evidence-bearing candidate flows in parallel (up to a hard
+    # cap of 5). The block above renders the PRIMARY walker outcome; this
+    # block surfaces every other flow the walker probed, plus any soft-cap
+    # warning and hard-cap truncation.
+    if path_walk_all_reports and len(path_walk_all_reports) > 1:
+        primary_flow = flow_id_walked  # whatever the primary walker walked
+        other_reports = {
+            fid: rep for fid, rep in path_walk_all_reports.items()
+            if fid != primary_flow
+        }
+        if other_reports:
+            out.append("### Prioritized Candidates Walked In Parallel")
+            out.append("")
+            walked_count = len(path_walk_all_reports)
+            out.append(
+                f"The walker probed {walked_count} candidate flows in "
+                f"parallel. The primary outcome (above) is "
+                f"`{primary_flow}`; the others are listed here so the "
+                f"deterministic disambiguation is fully auditable."
+            )
+            out.append("")
+            out.append("| Flow | Walker outcome | First attributed hop |")
+            out.append("|---|---|---|")
+            for fid, alt_report in other_reports.items():
+                alt_localized = bool(alt_report.get("is_localized"))
+                alt_status = "✅ localized" if alt_localized else "⚠️ null"
+                alt_first_hop = alt_report.get("first_attributed_hop") or {}
+                if isinstance(alt_first_hop, dict) and alt_first_hop:
+                    hop_str = (
+                        f"`{alt_first_hop.get('node','?')}"
+                        f"[{alt_first_hop.get('iface','?')}]`"
+                    )
+                else:
+                    hop_str = "—"
+                out.append(f"| `{fid}` | {alt_status} | {hop_str} |")
+            out.append("")
+
+    # Soft-cap warning + hard-cap truncation (from resolved_path).
+    if resolved_path:
+        if resolved_path.get("soft_cap_exceeded"):
+            walked_n = len(path_walk_all_reports or {})
+            out.append(
+                f"> ⚠️ **Soft cap exceeded** — walker probed {walked_n} flows "
+                f"(soft cap = 3). Signals a noisy load-bearing set; inspect "
+                f"screener flag bucketing if this recurs."
+            )
+            out.append("")
+        truncated = resolved_path.get("truncated") or []
+        if truncated:
+            truncated_names = ", ".join(
+                f"`{t.get('flow_id','?')}` ({t.get('score',0)})"
+                for t in truncated
+            )
+            out.append(
+                f"> 🔪 **Hard cap (5 flows) truncated {len(truncated)} "
+                f"additional candidate(s)** below the cut: {truncated_names}. "
+                f"These scored above zero but ranked beyond the top 5 by "
+                f"the prioritizer; not walked."
+            )
+            out.append("")
 
     # ── Synthesis ─────────────────────────────────────────────────────
     out.append("### Localized Synthesis")

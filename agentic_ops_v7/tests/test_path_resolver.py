@@ -477,126 +477,93 @@ def _load_classification_from_episode(episode_rel_path: str) -> SymptomClassific
     return _rehydrate_classification(payload)
 
 
-# F1.3 — Resolver regression cases from the 2026-05-10 batch.
+# Resolver regression cases from the 2026-05-10 batch.
 #
-# Each tuple: (scenario_name, episode_relative_path, expected_flow_id,
-#              xfail_reason_or_None).
+# Under ADR docs/ADR/path_prioritizer_walks_all_candidates.md the
+# resolver no longer makes a load-bearing SELECTION — it generates a
+# prioritized list of evidence-bearing candidates and the walker walks
+# them all (up to a hard cap of 5). The operational invariant is no
+# longer "the resolver picked the right flow" but "the right flow is in
+# the candidate list and gets walked."
 #
-# Three of the four "broken" batch cases are NOT fixable by resolver
-# scoring alone — they're symptoms of B4 (screener over-flagging of UPF
-# GTP metrics in registration-only state). When the screener emits two
-# UPF GTP transport-bucket flags, both `data_pdu_session_user_traffic`
-# and `vonr_media` get +10 from matching them in observable_metrics —
-# the right signaling flow (`ims_registration`) has no UPF GTP in its
-# observable_metrics and can't catch up. F1 cleans up the per-flag
-# dedup and the bucket-affinity tie-break; the residual mis-routing
-# is a screener-side problem.
-_F1_BROKEN_CASES = [
+# These tests pin that invariant against the four batch-broken cases.
+# Each scenario's expected flow must appear in `resolved.candidates`
+# within the hard-cap window. The primary flow (highest-priority) may
+# or may not be the expected one — that's no longer the contract.
+_PRIORITIZER_BATCH_CASES = [
     (
         "p_cscf_packet_loss",
         "agentic_ops_v7/docs/agent_logs/run_20260510_185152_p_cscf_packet_loss.json",
         "ims_registration",
-        None,  # FIXED by F1 — only 1 UPF GTP transport flag, so the right
-               # flow's 4-component overlap wins decisively.
     ),
     (
         "rtpengine_latency_injection",
         "agentic_ops_v7/docs/agent_logs/run_20260510_191148_rtpengine_latency_injection.json",
         "vonr_media",
-        "Unfixable by F1 alone: rtpengine_loss_ratio was NOT flagged in "
-        "this episode (the screener doesn't surface rtpengine signals "
-        "under delay-only injection). With only over-flagged UPF GTP in "
-        "the transport bucket, neither data_pdu nor vonr_media can be "
-        "differentiated from each other on this resolver — both match "
-        "the same UPF GTP observable_metrics. Needs B4 (screener over-"
-        "flagging fix) or a rtpengine-specific delay feature.",
     ),
     (
         "p_cscf_latency",
         "agentic_ops_v7/docs/agent_logs/run_20260510_130115_p_cscf_latency.json",
         "ims_registration",
-        "Unfixable by F1 alone: 2 UPF GTP transport flags give data_pdu "
-        "and vonr_media +10 each via observable_metrics match. The right "
-        "flow ims_registration has no UPF GTP in its observable_metrics "
-        "and scores only on component overlap (8 with weight=2). "
-        "Bumping component weight to 4+ would let ims_registration win "
-        "BUT regresses the rtpengine-loss roundtrip test (vonr_call_teardown "
-        "would then beat vonr_media on its CSCF component overlap). "
-        "Needs B4 — when the screener stops over-flagging UPF GTP, the "
-        "data_pdu transport boost goes away and ims_registration wins.",
     ),
     (
         "ims_network_partition",
         "agentic_ops_v7/docs/agent_logs/run_20260510_195908_ims_network_partition.json",
         "ims_registration",
-        "Unfixable by F1 alone: same root cause as p_cscf_latency. 2 UPF "
-        "GTP transport flags dominate; ims_registration scores only via "
-        "component overlap and loses 8 vs 12.",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "scenario,episode_path,expected_flow_id,xfail_reason",
-    _F1_BROKEN_CASES,
-    ids=[t[0] for t in _F1_BROKEN_CASES],
+    "scenario,episode_path,expected_flow_id",
+    _PRIORITIZER_BATCH_CASES,
+    ids=[t[0] for t in _PRIORITIZER_BATCH_CASES],
 )
-def test_f1_resolver_picks_right_flow_for_broken_batch_case(
-    scenario: str, episode_path: str,
-    expected_flow_id: str, xfail_reason,
-    request,
+def test_prioritizer_includes_expected_flow_in_candidates(
+    scenario: str, episode_path: str, expected_flow_id: str,
 ):
-    """F1 regression: after the resolver scoring + tie-break rework,
-    each batch-broken case must route to its implicated flow rather
-    than to `data_pdu_session_user_traffic`.
+    """Under the prioritizer ADR, the operational invariant is "the
+    expected flow appears in the candidate list (walker will walk it),"
+    not "the resolver picked it first."
 
-    The cases marked `xfail_reason` are documented as not-fixable by
-    F1 alone (the resolver-scoring layer). Their xfail status flips
-    to `xpassed` (which pytest reports loudly) once the underlying
-    screener issue (B4) is fixed and the resolver can finally do its
-    job — at which point remove the xfail mark.
+    All four previously-broken batch cases must satisfy this — the walker
+    needs the chance to probe the right flow, regardless of where the
+    prioritizer ranked it. If the expected flow is anywhere in
+    `resolved.candidates` (the post-cap list), the walker will reach it.
 
-    Running this test against the saved batch's symptom_classification
-    is the operational answer to "would re-running the chaos batch
-    produce a different resolver pick now that F1 has landed?"
+    ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
     """
-    if xfail_reason is not None:
-        request.applymarker(pytest.mark.xfail(reason=xfail_reason, strict=True))
-
     classification = _load_classification_from_episode(episode_path)
     resolved = resolve_path(classification)
 
     assert resolved is not None, (
         f"{scenario}: resolver returned None — no flow scored above zero. "
-        f"Investigate the load_bearing_components / metrics_by_bucket."
+        f"The walker won't run at all."
     )
-    assert resolved.flow_id == expected_flow_id, (
-        f"{scenario}: resolver picked `{resolved.flow_id}` instead of "
-        f"`{expected_flow_id}`.\n"
-        f"Candidates considered:\n"
-        + "\n".join(
-            f"  {fid}: {score}" for fid, score in resolved.candidate_flows[:5]
-        )
-        + f"\n\nF1 broke or hasn't landed yet. See "
-        f"docs/work-plan-may-11.md → 'Fix (1) — Implementation steps'."
+    candidate_ids = [c.flow_id for c in resolved.candidates]
+    assert expected_flow_id in candidate_ids, (
+        f"{scenario}: expected flow `{expected_flow_id}` is NOT in the "
+        f"walker's candidate list — the walker won't probe it.\n"
+        f"Candidates the walker will probe ({len(candidate_ids)}): "
+        f"{candidate_ids}\n"
+        f"Truncated past hard cap: {[t[0] for t in resolved.truncated]}\n"
+        f"All scored candidates: "
+        + ", ".join(f"{f}={s}" for f, s in resolved.candidate_flows[:8])
     )
 
 
 # ---------------------------------------------------------------------------
-# F1.5 — Regression tests for currently-passing scenarios.
+# Regression tests for scenarios that walker-localized in the 2026-05-10 batch.
 #
-# F1's scoring change could in principle regress the scenarios that
-# CURRENTLY pass at 100%. The load-bearing regressions are the
-# walker-localized cases — if F1 changes which flow the resolver
-# picks, the walker walks the wrong flow and won't localize the fault.
-#
-# The null-localized cases (gnb_radio, amf_restart, cascading_ims_failure)
-# get their 100% from the app-layer fall-through. Their resolver pick is
-# operationally irrelevant; F1 is allowed to change it.
+# Under ADR path_prioritizer_walks_all_candidates.md the walker walks
+# every candidate the prioritizer returns. The operational invariant for
+# these scenarios is: "the flow whose walk actually localized the fault
+# must still be in the candidate list." That flow doesn't need to be the
+# primary (highest-priority) — it just needs to be probed.
 # ---------------------------------------------------------------------------
 
 
-_F1_PASSING_LOCALIZED_CASES = [
+_PRIORITIZER_LOCALIZED_CASES = [
     (
         "data_plane_degradation",
         "agentic_ops_v7/docs/agent_logs/run_20260510_183452_data_plane_degradation.json",
@@ -617,39 +584,129 @@ _F1_PASSING_LOCALIZED_CASES = [
 
 @pytest.mark.parametrize(
     "scenario,episode_path,expected_flow_id",
-    _F1_PASSING_LOCALIZED_CASES,
-    ids=[t[0] for t in _F1_PASSING_LOCALIZED_CASES],
+    _PRIORITIZER_LOCALIZED_CASES,
+    ids=[t[0] for t in _PRIORITIZER_LOCALIZED_CASES],
 )
-def test_f1_does_not_regress_currently_passing_localized_scenario(
+def test_prioritizer_keeps_walker_localized_flow_in_candidates(
     scenario: str, episode_path: str, expected_flow_id: str,
 ):
-    """F1 regression: the walker-localized scenarios that scored 100% in
-    the 2026-05-10 batch MUST keep their resolver pick. If F1 changes
-    the chosen flow for one of these, the walker walks the wrong flow
-    on the next run and the localization fails — i.e., the score drops.
+    """Pin the scenarios that walker-localized in the 2026-05-10 batch:
+    the flow whose walk produced the localization MUST appear in the
+    prioritizer's candidate list (within the hard-cap window). The walker
+    can then probe it and produce the same localization regardless of
+    which candidate ranks first.
 
-    The 3 cases here are the scenarios where Phase 0.6's walker
-    actually attributed a hop (`is_localized = True`). Their resolver
-    pick is load-bearing for that attribution. The other 4 currently-
-    passing scenarios (s_cscf_crash, gnb_radio, amf_restart,
-    cascading_ims_failure) null-localized either by skipping Phase 0.6
-    entirely or by falling through to the app-layer pipeline; F1 may
-    change their resolver pick without affecting the score.
+    ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
     """
     classification = _load_classification_from_episode(episode_path)
     resolved = resolve_path(classification)
 
     assert resolved is not None, (
         f"{scenario}: resolver returned None for a previously-passing "
-        f"localized scenario — F1 has regressed."
+        f"localized scenario — the prioritizer would skip the walker entirely."
     )
-    assert resolved.flow_id == expected_flow_id, (
-        f"{scenario}: F1 changed resolver pick from `{expected_flow_id}` "
-        f"to `{resolved.flow_id}` — the walker won't reach the hop "
-        f"where the fault is, and the 100% score for this scenario "
-        f"will drop on the next batch run.\n"
-        f"Candidates considered:\n"
-        + "\n".join(
-            f"  {fid}: {score}" for fid, score in resolved.candidate_flows[:5]
+    candidate_ids = [c.flow_id for c in resolved.candidates]
+    assert expected_flow_id in candidate_ids, (
+        f"{scenario}: walker-localized flow `{expected_flow_id}` is NOT "
+        f"in the walker's candidate list — the walker won't probe it, "
+        f"and the 100% score for this scenario will drop.\n"
+        f"Candidates the walker will probe ({len(candidate_ids)}): "
+        f"{candidate_ids}\n"
+        f"Truncated past hard cap: {[t[0] for t in resolved.truncated]}\n"
+        f"All scored candidates: "
+        + ", ".join(f"{f}={s}" for f, s in resolved.candidate_flows[:8])
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prioritizer caps + return-shape pin tests.
+# ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
+# ---------------------------------------------------------------------------
+
+
+def test_resolved_path_exposes_candidates_list_and_caps():
+    """Schema pin for the new prioritizer return shape:
+      * `candidates: list[PathCandidate]` is populated and non-empty.
+      * `truncated`, `soft_cap_exceeded`, `hard_cap_truncated` exist
+        and reflect the cap state.
+    """
+    classification = _classify_real([
+        _flag("derived.rtpengine_loss_ratio",
+              current=10.0, learned_normal=0.0, direction="spike", score=2.0),
+    ])
+    resolved = resolve_path(classification)
+    assert resolved is not None
+    assert resolved.candidates, "candidates list must not be empty when resolver returned non-None"
+    assert all(c.hops and len(c.hops) >= 2 for c in resolved.candidates), (
+        "every candidate must have ≥ 2 hops"
+    )
+    assert isinstance(resolved.truncated, list)
+    assert isinstance(resolved.soft_cap_exceeded, bool)
+    assert isinstance(resolved.hard_cap_truncated, bool)
+
+
+def test_zero_evidence_returns_none():
+    """The 'no smoking gun' principle: an empty classification produces no
+    candidates and the prioritizer returns None — Phase 0.6 then skips
+    the walker entirely rather than brute-force probing.
+    """
+    classification = SymptomClassification(
+        label="application_layer",
+        rationale="no flags",
+        transport_flags=[], application_flags=[], ambiguous_flags=[],
+    )
+    assert resolve_path(classification) is None
+
+
+def test_hard_cap_truncates_at_five_candidates():
+    """When the score-filtered list exceeds 5 flows, the prioritizer keeps
+    the top 5 and surfaces the rest via `truncated`. The hard cap is the
+    safety net against ontology bloat or pathological flag patterns.
+    """
+    # Flag the entire ontology by hitting every NF we can think of —
+    # forces every flow with any NF overlap into the candidate set.
+    classification = _classify_real([
+        _flag("normalized.upf.gtp_indatapktn3upf_per_ue",
+              current=0.0, learned_normal=10.0, direction="drop", score=2.0),
+        _flag("normalized.pcscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=0.5, direction="drop", score=2.0),
+        _flag("normalized.icscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=0.5, direction="drop", score=2.0),
+        _flag("normalized.scscf.core:rcv_requests_register_per_ue",
+              current=0.0, learned_normal=0.5, direction="drop", score=2.0),
+        _flag("derived.rtpengine_loss_ratio",
+              current=10.0, learned_normal=0.0, direction="spike", score=2.0),
+    ])
+    resolved = resolve_path(classification)
+    assert resolved is not None
+    # Conditional: if the scored list naturally exceeded 5, we expect a
+    # truncated set. We don't assert hard_cap_truncated unconditionally
+    # because the flag set might not actually produce >5 candidates against
+    # the current flows.yaml. What we DO assert: the candidates list is at
+    # most _HARD_CAP_FLOWS.
+    from agentic_ops_v7.path_resolver import _HARD_CAP_FLOWS
+    assert len(resolved.candidates) <= _HARD_CAP_FLOWS, (
+        f"candidates list must not exceed hard cap "
+        f"({_HARD_CAP_FLOWS}); got {len(resolved.candidates)}"
+    )
+    if resolved.hard_cap_truncated:
+        assert resolved.truncated, (
+            "hard_cap_truncated=True must come with a non-empty truncated list"
         )
-    )
+
+
+def test_backward_compat_properties_read_from_primary_candidate():
+    """Old call sites that read `resolved.flow_id`, `resolved.hops`,
+    `resolved.flow_name`, `resolved.direction` must continue to work.
+    Each returns the primary (highest-priority) candidate's value."""
+    classification = _classify_real([
+        _flag("derived.rtpengine_loss_ratio",
+              current=10.0, learned_normal=0.0, direction="spike", score=2.0),
+    ])
+    resolved = resolve_path(classification)
+    assert resolved is not None
+    primary = resolved.candidates[0]
+    assert resolved.flow_id == primary.flow_id
+    assert resolved.flow_name == primary.flow_name
+    assert resolved.direction == primary.direction
+    assert resolved.hops is primary.hops or resolved.hops == primary.hops

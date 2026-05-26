@@ -739,27 +739,125 @@ async def _phase06_transport_layer_route(
         ),
     ))
 
-    # ---- Walk path ----
+    # ---- Walk all evidence-bearing candidates in parallel ----
+    # ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
+    #
+    # The walker probes every candidate the prioritizer returned (up to
+    # the hard cap of 5). Per-flow walks run in parallel via asyncio.gather
+    # — wall-clock is bounded by the longest single-flow walk, not the
+    # sum. No short-circuit on first localization: walking all flows
+    # surfaces compound-fault patterns (different flows attributing to
+    # different NFs).
+    #
+    # Backward compat: `state["path_walk_report"]` (singular) carries the
+    # PRIMARY report — highest-priority localized, or first in list if
+    # none localized. The Synthesis prompt and the existing scorer read
+    # this key. `state["path_walk_all_reports"]` (new, plural) carries
+    # every per-flow report keyed by flow_id — the recorder renders them.
     walk_start = time.time()
     anchor_ts = state.get("anomaly_screener_snapshot_ts")
+
     try:
-        walk_report = await walk_path(
-            flow_id=resolved.flow_id,
-            hops=resolved.hops,
-            anchor_ts=anchor_ts,
-        )
+        walk_tasks = [
+            walk_path(
+                flow_id=cand.flow_id,
+                hops=cand.hops,
+                anchor_ts=anchor_ts,
+            )
+            for cand in resolved.candidates
+        ]
+        walk_results = await asyncio.gather(*walk_tasks, return_exceptions=True)
     except Exception as e:
-        log.warning("Phase 0.6 path walker raised (non-fatal): %s", e, exc_info=True)
+        log.warning(
+            "Phase 0.6 path walker fan-out raised (non-fatal): %s",
+            e, exc_info=True,
+        )
         all_phases.append(PhaseTrace(
             agent_name="PathWalkInvestigator",
             started_at=walk_start,
             finished_at=time.time(),
             duration_ms=int((time.time() - walk_start) * 1000),
-            output_summary=f"walker raised: {e}",
+            output_summary=f"walker fan-out raised: {e}",
         ))
         return None
 
+    # Pair each candidate with its walker result. Failed walks (exceptions)
+    # are logged and skipped — the surviving walks still produce evidence.
+    paired: list[tuple[object, object]] = []  # (PathCandidate, PathWalkReport)
+    for cand, result in zip(resolved.candidates, walk_results):
+        if isinstance(result, BaseException):
+            log.warning(
+                "Phase 0.6 walker raised on flow `%s` (non-fatal): %s",
+                cand.flow_id, result,
+            )
+            continue
+        paired.append((cand, result))
+
+    if not paired:
+        log.warning("Phase 0.6: all walker invocations failed; falling through.")
+        all_phases.append(PhaseTrace(
+            agent_name="PathWalkInvestigator",
+            started_at=walk_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - walk_start) * 1000),
+            output_summary="all walkers raised — fallthrough to app-layer",
+        ))
+        return None
+
+    # Soft-cap warning — operator visibility into noisy load-bearing sets.
+    if resolved.soft_cap_exceeded:
+        log.warning(
+            "Phase 0.6: walked %d flows (soft cap = 3 exceeded). "
+            "Inspect screener flag bucketing if this recurs.",
+            len(paired),
+        )
+
+    # Hard-cap truncation note — surface what was dropped.
+    if resolved.hard_cap_truncated:
+        log.info(
+            "Phase 0.6: hard cap (5 flows) truncated %d additional "
+            "candidates: %s",
+            len(resolved.truncated),
+            [fid for fid, _ in resolved.truncated],
+        )
+
+    # Pick primary: highest-priority localized walker report; falls back
+    # to the first in priority order if none localized. Priority order
+    # matches `resolved.candidates` order (the prioritizer's ranking).
+    primary_cand, primary_report = paired[0]
+    for cand, rep in paired:
+        if rep.is_localized:
+            primary_cand, primary_report = cand, rep
+            break
+
+    # Multi-walker compound observation. If ≥2 walks localized at distinct
+    # NFs, that's real multi-fault territory. The Synthesis compound path
+    # was designed for walker+app-layer, not walker+walker — extending it
+    # is a follow-up. For now, log it and let the primary (highest-priority
+    # localized) drive Synthesis.
+    localized = [
+        (cand, rep) for cand, rep in paired if rep.is_localized
+    ]
+    if len(localized) > 1:
+        nodes = sorted({
+            rep.first_attributed_hop.hop.node for _cand, rep in localized
+        })
+        if len(nodes) > 1:
+            log.warning(
+                "Phase 0.6: %d flows localized at distinct NFs %s — "
+                "primary (`%s`) wins for Synthesis this iteration; "
+                "compound-from-walker+walker is scope-reduced "
+                "(see ADR path_prioritizer_walks_all_candidates.md).",
+                len(localized), nodes, primary_cand.flow_id,
+            )
+
+    walk_report = primary_report
     state["path_walk_report"] = _path_walk_report_to_dict(walk_report)
+    state["path_walk_all_reports"] = {
+        cand.flow_id: _path_walk_report_to_dict(rep)
+        for cand, rep in paired
+    }
+
     walk_summary = (
         f"localized" if walk_report.is_localized else "null_localization"
     )
@@ -767,6 +865,11 @@ async def _phase06_transport_layer_route(
         walk_summary += (
             f" at {walk_report.first_attributed_hop.hop.node}"
             f"[{walk_report.first_attributed_hop.hop.iface}]"
+        )
+    if len(paired) > 1:
+        walk_summary += (
+            f" (walked {len(paired)} candidate flows in parallel; "
+            f"primary=`{primary_cand.flow_id}`)"
         )
     all_phases.append(PhaseTrace(
         agent_name="PathWalkInvestigator",
@@ -3025,6 +3128,17 @@ def _parse_diagnosis_report(raw: Any) -> DiagnosisReport:
     Returns the empty sentinel on missing/unparseable input — the pool
     guardrail then sees `verdict_kind=inconclusive` and passes (empty
     pool branch).
+
+    Also applies one deterministic repair: for `localized` verdicts where
+    the LLM left `affected_components` empty (or filled with empty/invalid
+    dicts), auto-populate from `localization.hop_node`. The walker's
+    attribution IS the affected component for a localized verdict —
+    requiring the LLM to copy that string from `localization` into
+    `affected_components` is needless ceremony and a frequent miss
+    (observed on `run_20260526_013942_upf_bandwidth_cap`: LLM emitted
+    `[{}]` despite the synthesis prompt explicitly stating the rule).
+    Same principle as ADR `path_prioritizer_walks_all_candidates.md` —
+    move correctness off the LLM when deterministic code can do it.
     """
     if raw is None:
         return _empty_diagnosis_report("Synthesis produced no output")
@@ -3033,10 +3147,42 @@ def _parse_diagnosis_report(raw: Any) -> DiagnosisReport:
             data = json.loads(raw)
         else:
             data = raw
-        return DiagnosisReport(**data)
+        report = DiagnosisReport(**data)
     except Exception as e:
         log.warning("Could not parse Synthesis output: %s", e)
         return _empty_diagnosis_report(f"Synthesis output unparseable: {e}")
+
+    # Deterministic affected_components repair for localized verdicts.
+    if (
+        report.verdict_kind == "localized"
+        and report.localization is not None
+        and report.localization.hop_node
+        and _affected_components_is_empty_or_invalid(report.affected_components)
+    ):
+        repaired = [{"name": report.localization.hop_node, "role": "Root Cause"}]
+        log.info(
+            "Repaired affected_components for localized verdict: LLM emitted "
+            "%r; auto-populating from localization.hop_node → %r",
+            report.affected_components, repaired,
+        )
+        report = report.model_copy(update={"affected_components": repaired})
+    return report
+
+
+def _affected_components_is_empty_or_invalid(
+    components: list[dict],
+) -> bool:
+    """True when affected_components is missing, empty, or contains only
+    entries without a usable `name` field. These all render as `'?': ?`
+    in the episode markdown and dock the operator's score for no
+    diagnostic reason.
+    """
+    if not components:
+        return True
+    for c in components:
+        if isinstance(c, dict) and c.get("name"):
+            return False
+    return True
 
 
 def _render_diagnosis_report_to_markdown(report: DiagnosisReport) -> str:
@@ -3217,6 +3363,12 @@ def _build_result(
         "symptom_classification": state.get("symptom_classification"),
         "resolved_path":          state.get("resolved_path"),
         "path_walk_report":       state.get("path_walk_report"),
+        # Per-flow walker reports keyed by flow_id. Populated whenever
+        # Phase 0.6 ran (i.e. one or more candidates were walked). The
+        # primary report also lives in `path_walk_report` for backward
+        # compat with existing consumers.
+        # ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
+        "path_walk_all_reports":  state.get("path_walk_all_reports"),
         "diagnosis_report":       state.get("diagnosis_report"),
         # Phase 0 outcome — `scored` / `starved` / `clean`. Surfaced so the
         # episode markdown distinguishes "screener was starved of input"

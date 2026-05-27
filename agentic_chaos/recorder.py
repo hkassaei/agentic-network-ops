@@ -1798,6 +1798,12 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
         lines.append("Challenge mode was not run — no agent diagnosis available.")
     lines.append("")
 
+    # Blast Radius & Downstream Impact (Phase 8) — consequence-of-failure
+    # view for NOC + service stakeholders. Rendered from the deterministic
+    # structured fields plus the grounded narrative. Omitted entirely when
+    # the episode has no blast_radius (pre-Phase-8 episodes, or no run).
+    lines.extend(_format_blast_radius(challenge.get("blast_radius") if challenge else None))
+
     # Resolution
     lines.append("## Resolution")
     lines.append("")
@@ -1806,6 +1812,77 @@ def _generate_markdown_summary(episode: dict, agent_version: str) -> str:
     lines.append("")
 
     return "\n".join(lines)
+
+
+_IMPACT_STATUS_BADGE = {
+    "failing": "🔴 failing",
+    "degraded": "🟡 degraded",
+    "at_risk": "⚪ at-risk",
+}
+
+
+def _format_blast_radius(blast_radius) -> list[str]:
+    """Render the Phase 8 Blast Radius & Downstream Impact section.
+
+    `blast_radius` is the serialized BlastRadius dict (or None). Returns an
+    empty list when absent (pre-Phase-8 episodes / no run) so the section
+    is simply omitted. The structured tables come straight from the
+    deterministic compute; the narrative is the grounded prose.
+    ADR: docs/ADR/blast_radius_downstream_impact_phase8.md
+    """
+    if not blast_radius or not isinstance(blast_radius, dict):
+        return []
+
+    out: list[str] = ["## Blast Radius & Downstream Impact", ""]
+
+    rc_nfs = blast_radius.get("root_cause_nfs") or []
+    if not rc_nfs:
+        out.append(
+            "*Impact undetermined — no root cause was localized, so no "
+            "downstream impact could be computed.*"
+        )
+        out.append("")
+        return out
+
+    narrative = (blast_radius.get("narrative") or "").strip()
+    if narrative:
+        out.append(narrative)
+        out.append("")
+
+    services = blast_radius.get("affected_services") or []
+    if services:
+        out.append("### Affected Services")
+        out.append("")
+        for s in services:
+            badge = _IMPACT_STATUS_BADGE.get(s.get("status"), s.get("status", "?"))
+            out.append(f"- **{s.get('service', '?')}** — {badge}")
+        out.append("")
+
+    flows = blast_radius.get("affected_flows") or []
+    if flows:
+        out.append("### Affected Procedures")
+        out.append("")
+        out.append("| Procedure | Service | Status | Evidence |")
+        out.append("|---|---|---|---|")
+        for f in flows:
+            badge = _IMPACT_STATUS_BADGE.get(f.get("status"), f.get("status", "?"))
+            out.append(
+                f"| `{f.get('flow_id', '?')}` ({f.get('flow_name', '?')}) "
+                f"| {f.get('use_case', '?')} | {badge} | {f.get('evidence', '')} |"
+            )
+        out.append("")
+
+    nfs = blast_radius.get("affected_nfs") or []
+    if nfs:
+        downstream = ", ".join(
+            f"`{c.get('name', '?')}`" for c in nfs
+        )
+        out.append(
+            f"**Downstream-affected NFs (symptomatic):** {downstream}"
+        )
+        out.append("")
+
+    return out
 
 
 def _infer_failure_domain(scenario: dict) -> str:

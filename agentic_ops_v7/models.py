@@ -555,3 +555,103 @@ class Localization(BaseModel):
             "can verify the attribution against the source of truth."
         ),
     )
+
+
+# ============================================================================
+# Phase 8 — Blast Radius & Downstream Impact
+#
+# Computed deterministically from the final diagnosis's root-cause NF(s)
+# (`agentic_ops_v7/blast_radius.py`); the narrator LLM fills only
+# `BlastRadius.narrative`, grounded entirely in the structured fields below.
+# See ADR docs/ADR/blast_radius_downstream_impact_phase8.md.
+#
+# `status` encodes the potential-vs-observed distinction inline:
+#   * failing / degraded — corroborated by this episode's observed evidence
+#     (anomaly flags / walker attributions on the procedure's NFs).
+#   * at_risk            — in the ontology's potential set (the procedure
+#     traverses the down NF) but no observed signal this episode.
+# ============================================================================
+
+_ImpactStatus = Literal["failing", "degraded", "at_risk"]
+
+
+class AffectedFlow(BaseModel):
+    """One procedure (ontology flow) impacted by the diagnosed failure."""
+    model_config = ConfigDict(extra="forbid")
+
+    flow_id: str = Field(..., description="Ontology flow id, e.g. `ims_registration`.")
+    flow_name: str = Field(..., description="Human-readable flow name.")
+    use_case: str = Field(
+        ..., description="Flow's use_case grouping: `5g_core` | `vonr` | `ims`.",
+    )
+    status: _ImpactStatus = Field(
+        ...,
+        description=(
+            "failing/degraded = observed degradation on this procedure's "
+            "path this episode; at_risk = potential (traverses the down NF) "
+            "but no observed signal."
+        ),
+    )
+    evidence: str = Field(
+        ...,
+        description=(
+            "The observed signal that set the status, or "
+            "'potential — no direct signal this episode' for at_risk."
+        ),
+    )
+
+
+class AffectedService(BaseModel):
+    """A user-facing service impacted by the diagnosed failure.
+
+    Derived deterministically by grouping affected flows by use_case and
+    mapping to a plain-language label. This is the stakeholder-readable
+    layer (business/subscriber/SLA framing is deferred to a future ADR).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    service: str = Field(
+        ..., description="Plain-language service, e.g. 'VoNR voice calls'.",
+    )
+    status: _ImpactStatus = Field(
+        ...,
+        description="Worst status among the flows that carry this service.",
+    )
+    affected_flow_ids: list[str] = Field(
+        default_factory=list,
+        description="Flow ids contributing to this service's impact.",
+    )
+
+
+class BlastRadius(BaseModel):
+    """Phase 8 output: the downstream consequences of the diagnosed failure.
+
+    All structured fields are computed deterministically from the
+    diagnosis + ontology + this episode's observed evidence. `narrative`
+    is the ONLY LLM-authored field and must reference nothing outside the
+    structured fields (enforced by the grounding guardrail). Empty/default
+    on an inconclusive verdict (no root-cause NF to compute impact from).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    root_cause_nfs: list[str] = Field(
+        default_factory=list,
+        description="The NF(s) the impact was computed from (diagnosis root cause).",
+    )
+    affected_nfs: list[AffectedComponent] = Field(
+        default_factory=list,
+        description=(
+            "Downstream NFs showing observed degradation (excluding the "
+            "root cause), role=Symptomatic/Secondary."
+        ),
+    )
+    affected_flows: list[AffectedFlow] = Field(default_factory=list)
+    affected_services: list[AffectedService] = Field(default_factory=list)
+    narrative: str = Field(
+        default="",
+        description=(
+            "Human-readable prose for the report (NOC + service framing). "
+            "LLM-authored, grounded strictly in the structured fields above. "
+            "Empty when impact is undetermined (inconclusive verdict)."
+        ),
+    )

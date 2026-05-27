@@ -981,7 +981,7 @@ async def _phase06_transport_layer_route(
     state["diagnosis_structured"] = diagnosis_report.model_dump(mode="json")
     state["diagnosis_report"] = diagnosis_report.model_dump(mode="json")
 
-    return _build_result(state, all_phases, run_start)
+    return await _finalize(state, all_phases, run_start)
 
 
 def _reconstruct_classification(state: dict):
@@ -2627,7 +2627,7 @@ async def investigate(
     if not hypotheses:
         log.warning("No testable hypotheses from NA — skipping Investigator phase")
         state["diagnosis"] = _render_no_hypotheses_diagnosis(na_report)
-        return _build_result(state, all_phases, run_start)
+        return await _finalize(state, all_phases, run_start)
 
     # -------- Phase 4: InstructionGenerator --------
     # Render hypotheses back into state as a prompt-friendly structure
@@ -2994,7 +2994,7 @@ async def investigate(
     state["diagnosis_structured"] = diagnosis_report.model_dump(mode="json")
     state["diagnosis_report"] = diagnosis_report.model_dump(mode="json")
 
-    return _build_result(state, all_phases, run_start)
+    return await _finalize(state, all_phases, run_start)
 
 
 # ============================================================================
@@ -3255,6 +3255,107 @@ def _render_no_hypotheses_diagnosis(na: NetworkAnalystReport) -> str:
 """
 
 
+async def _phase8_impact_assessment(
+    state: dict, all_phases: list[PhaseTrace],
+) -> None:
+    """Phase 8 — Blast Radius & Downstream Impact.
+
+    8a deterministic compute (no LLM) → structured BlastRadius from the
+    final diagnosis + ontology + this episode's observed evidence.
+    8b grounded narrator (LLM, prose only) → fills BlastRadius.narrative.
+    8c grounding guardrail → rejects ungrounded narration; on double
+    failure falls back to the deterministic template narrative.
+
+    Always writes `state["blast_radius"]`. On an inconclusive verdict
+    (no root-cause NF) the compute returns an empty BlastRadius and the
+    LLM is skipped — nothing to narrate, nothing to invent.
+
+    ADR: docs/ADR/blast_radius_downstream_impact_phase8.md
+    """
+    from .blast_radius import compute_blast_radius, render_template_narrative
+
+    phase_start = time.time()
+    diagnosis = state.get("diagnosis_report") or {}
+
+    try:
+        br = compute_blast_radius(diagnosis, state)
+    except Exception as e:
+        log.warning("Phase 8 compute failed (non-fatal): %s", e, exc_info=True)
+        all_phases.append(PhaseTrace(
+            agent_name="ImpactAssessment",
+            started_at=phase_start,
+            finished_at=time.time(),
+            duration_ms=int((time.time() - phase_start) * 1000),
+            output_summary=f"compute failed: {e}",
+        ))
+        return
+
+    narration_source = "template"
+    if not br.root_cause_nfs:
+        # Inconclusive — undetermined impact, no LLM call.
+        br.narrative = render_template_narrative(br)
+        narration_source = "undetermined"
+    else:
+        narrative: Optional[str] = None
+        try:
+            from .guardrails.impact_grounding import check_narrative_grounding
+            from .subagents.impact_narrator import narrate_impact
+
+            summary = diagnosis.get("summary", "") if isinstance(diagnosis, dict) else ""
+            cand = await narrate_impact(br, summary)
+            ok, offending = check_narrative_grounding(cand, br)
+            if not ok:
+                # One resample with the offending references injected.
+                cand = await narrate_impact(
+                    br, summary,
+                    extra_instruction=(
+                        "Your previous narrative referenced entities NOT in the "
+                        "blast_radius object: " + "; ".join(offending) + ". "
+                        "Use ONLY entities present in the object."
+                    ),
+                )
+                ok, offending = check_narrative_grounding(cand, br)
+            if ok:
+                br.narrative = cand
+                narration_source = "llm"
+            else:
+                log.info(
+                    "Phase 8 narrator ungrounded after resample (offending=%s); "
+                    "using deterministic template.", offending,
+                )
+                br.narrative = render_template_narrative(br)
+        except Exception as e:
+            log.warning(
+                "Phase 8 narrator failed (non-fatal): %s; using template", e,
+            )
+            br.narrative = render_template_narrative(br)
+
+    state["blast_radius"] = br.model_dump(mode="json")
+    all_phases.append(PhaseTrace(
+        agent_name="ImpactAssessment",
+        started_at=phase_start,
+        finished_at=time.time(),
+        duration_ms=int((time.time() - phase_start) * 1000),
+        output_summary=(
+            f"{len(br.affected_flows)} flows, {len(br.affected_services)} "
+            f"services (narration={narration_source})"
+        ),
+    ))
+
+
+async def _finalize(
+    state: dict, all_phases: list[PhaseTrace], run_start: float,
+) -> dict:
+    """Single terminal chokepoint: run Phase 8, then build the result.
+
+    Every diagnosis path (localized short-circuit, no-hypotheses exit,
+    app-layer Synthesis) returns through here so Phase 8 runs exactly once
+    on the final diagnosis regardless of which branch produced it.
+    """
+    await _phase8_impact_assessment(state, all_phases)
+    return _build_result(state, all_phases, run_start)
+
+
 def _build_result(
     state: dict, all_phases: list[PhaseTrace], run_start: float,
 ) -> dict:
@@ -3349,6 +3450,9 @@ def _build_result(
         # ADR: docs/ADR/path_prioritizer_walks_all_candidates.md
         "path_walk_all_reports":  state.get("path_walk_all_reports"),
         "diagnosis_report":       state.get("diagnosis_report"),
+        # Phase 8 — Blast Radius & Downstream Impact (structured + narrative).
+        # ADR: docs/ADR/blast_radius_downstream_impact_phase8.md
+        "blast_radius":           state.get("blast_radius"),
         # Phase 0 outcome — `scored` / `starved` / `clean`. Surfaced so the
         # episode markdown distinguishes "screener was starved of input"
         # from "screener ran cleanly and found nothing" — they emit

@@ -192,11 +192,15 @@ class ChallengeAgent(BaseAgent):
             # Fallback: reconstruct from parsed fields
             diagnosis_text = diagnosis_dict.get("root_cause", diagnosis_dict.get("summary", ""))
 
-        # Score the diagnosis using LLM judge
+        # Score the diagnosis. Semantic dimensions are LLM-judged;
+        # component_overlap + total_score are computed mechanically from
+        # the structured diagnosis_report (primary_suspect_nf +
+        # affected_components) and the ground-truth fault targets.
         score = await score_diagnosis(
             diagnosis_text=diagnosis_text,
             injected_faults=faults_injected,
             scenario=scenario,
+            diagnosis_report=diagnosis_dict.get("_diagnosis_report"),
         )
 
         if agent_version == "v7":
@@ -229,6 +233,7 @@ class ChallengeAgent(BaseAgent):
             "symptom_classification": diagnosis_dict.get("_symptom_classification"),
             "prioritized_paths":      diagnosis_dict.get("_prioritized_paths"),
             "path_walk_report":       diagnosis_dict.get("_path_walk_report"),
+            "blast_radius":           diagnosis_dict.get("_blast_radius"),
             "path_walk_all_reports":  diagnosis_dict.get("_path_walk_all_reports"),
             "diagnosis_report":       diagnosis_dict.get("_diagnosis_report"),
             # v7 RAG observability (Phase 2.5 / 2.5b + post-Phase-3 citation
@@ -463,6 +468,9 @@ class ChallengeAgent(BaseAgent):
             # path_prioritizer_walks_all_candidates.md.
             "_prioritized_paths":      result.get("prioritized_paths"),
             "_path_walk_report":       result.get("path_walk_report"),
+            # Phase 8 — Blast Radius & Downstream Impact.
+            # ADR: docs/ADR/blast_radius_downstream_impact_phase8.md
+            "_blast_radius":           result.get("blast_radius"),
             # Per-flow walker reports keyed by flow_id — populated when the
             # prioritizer returned multiple candidates and the walker walked
             # them all in parallel. None when only one candidate was walked.

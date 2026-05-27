@@ -11,19 +11,29 @@ Example: "Kill gNB to simulate a radio link failure"
   - The scorer accepts any semantically equivalent description of the failure mode
 
 Scoring dimensions:
-  - root_cause_correct:    Did the agent identify the simulated failure mode?
-  - component_overlap:     Did it name the right affected component(s)?
-  - severity_correct:      Did it assess severity accurately?
-  - fault_type_identified: Did it identify the observable class of failure?
-  - confidence_calibrated: Is confidence justified by evidence quality?
-  - ranking_position:      Where did the correct cause rank in the agent's list?
+  - root_cause_correct:    Did the agent identify the simulated failure mode? (LLM)
+  - component_overlap:     Did it name the right affected component(s)? (MECHANICAL)
+  - severity_correct:      Did it assess severity accurately? (LLM)
+  - fault_type_identified: Did it identify the observable class of failure? (LLM)
+  - confidence_calibrated: Is confidence justified by evidence quality? (LLM)
+  - ranking_position:      Where did the correct cause rank? (LLM, unweighted)
 
-`layer_accuracy` was removed (2026-05): it carried only 0.05 weight, required
-the most scoring machinery (an ontology-layer map + the whole Phase-3
-network_analysis as a separate judge input), and penalized defensible calls
-on boundary components (e.g. MongoDB-as-core vs the ontology's
-MongoDB-as-infrastructure). Its weight was folded into component_overlap
-(0.20 → 0.25). The score formula now sums over five weighted dimensions.
+Score arithmetic is MECHANICAL, never LLM-driven (2026-05). The LLM judge
+returns only the semantic boolean verdicts; Python computes:
+  * `component_overlap` — a structured comparison of the ground-truth NF(s)
+    against the diagnosis's `affected_components` roles (Root Cause = 1.0,
+    present-but-not-root = 0.3, absent = 0.0). This was previously an LLM
+    guess and produced values that contradicted the rubric (a clean
+    Root-Cause placement scored 0.75).
+  * `total_score` — the weighted sum below, ALWAYS recomputed. The LLM used
+    to emit its own total, which contradicted its own per-dimension verdicts
+    (4×Yes + component 0.75 reported as 75% instead of 94%).
+
+`layer_accuracy` was removed (2026-05): only 0.05 weight, most machinery,
+penalized defensible boundary calls. Its weight folded into component_overlap
+(0.20 → 0.25). Five weighted dimensions remain:
+  total_score = 0.40·root_cause + 0.25·component_overlap + 0.15·severity
+              + 0.10·fault_type + 0.10·confidence
 """
 
 from __future__ import annotations
@@ -104,26 +114,12 @@ Score the diagnosis on these dimensions:
    score True. Ties, ambiguity, or "root cause is undetermined" are scored
    False even if the correct NF appears elsewhere in the block.
 
-2. **component_overlap** (float 0.0-1.0): Did the agent correctly identify
-   the affected component(s)? Evaluate against the final AGENT DIAGNOSIS's
-   `causes.affected_components` list. Score 1.0 if the primary affected
-   component is listed as **"Root Cause"** in that list (not merely as
-   "Secondary", "Symptomatic", or "Symptom"). Do NOT penalize for also
-   listing cascading/downstream components — that shows correct causal
-   reasoning.
-
-   If the primary affected component appears in `affected_components` only
-   as "Symptomatic" / "Secondary" while a different NF is labeled "Root
-   Cause", score proportionally (e.g. 0.3) — the agent saw the component
-   was involved but mis-ranked the causal role. Do NOT award 1.0 in that
-   case just because the NF name appears somewhere in the block.
-
-3. **severity_correct** (bool): Did the agent's severity assessment match the
+2. **severity_correct** (bool): Did the agent's severity assessment match the
    actual impact? A complete outage (container killed, network partitioned) =
    "down"/"outage"/"unreachable"/"100% loss". A degradation (packet loss,
    latency) = "degraded"/"slow"/"impaired"/"quality issues".
 
-4. **fault_type_identified** (bool): Did the agent identify the OBSERVABLE
+3. **fault_type_identified** (bool): Did the agent identify the OBSERVABLE
    class of failure? Score based on what can be observed from the network:
    - Component unreachable: "down"/"unreachable"/"not responding"/"100% packet loss"
    - Network degradation: "packet loss"/"latency"/"delay"/"congestion"
@@ -132,14 +128,19 @@ Score the diagnosis on these dimensions:
    Do NOT require the agent to name the simulation mechanism (container_kill,
    tc netem, docker pause).
 
-5. **confidence_calibrated** (bool): Is the agent's stated confidence level
+4. **confidence_calibrated** (bool): Is the agent's stated confidence level
    appropriate given the quality of its diagnosis? High confidence + correct
    diagnosis with tool evidence = well calibrated. High confidence + wrong
    diagnosis = poorly calibrated.
 
-6. **ranking_position** (int or null): If the agent returned multiple ranked
+5. **ranking_position** (int or null): If the agent returned multiple ranked
    candidates, what position (1-based) is the correct cause? 1 = top,
    null = correct cause not listed.
+
+NOTE: You do NOT score component overlap or the total score. Those are
+computed MECHANICALLY in Python from the structured diagnosis and the
+ground truth — they are not LLM judgments. Score only the dimensions
+above, which require semantic judgment.
 
 ## Output Format
 
@@ -148,8 +149,6 @@ Return ONLY a JSON object (no markdown fences, no extra text):
 {
   "root_cause_correct": true/false,
   "root_cause_rationale": "...",
-  "component_overlap": 0.0-1.0,
-  "component_rationale": "...",
   "severity_correct": true/false,
   "severity_rationale": "...",
   "fault_type_identified": true/false,
@@ -158,16 +157,8 @@ Return ONLY a JSON object (no markdown fences, no extra text):
   "confidence_rationale": "...",
   "ranking_position": 1/2/3/null,
   "ranking_rationale": "...",
-  "total_score": 0.0-1.0,
   "summary": "One-sentence overall assessment"
 }
-
-Compute total_score as:
-  0.40 × root_cause_correct
-+ 0.25 × component_overlap
-+ 0.15 × severity_correct
-+ 0.10 × fault_type_identified
-+ 0.10 × confidence_calibrated
 """
 
 
@@ -188,20 +179,99 @@ _FAULT_TYPE_DESCRIPTIONS = {
 }
 
 
+# Score weights. Single source of truth — used by the deterministic
+# total computation. Must sum to 1.0.
+_SCORE_WEIGHTS = {
+    "root_cause_correct": 0.40,
+    "component_overlap": 0.25,
+    "severity_correct": 0.15,
+    "fault_type_identified": 0.10,
+    "confidence_calibrated": 0.10,
+}
+
+
+def _mechanical_component_overlap(
+    gt_nfs: set[str], diagnosis_report: dict | None,
+) -> tuple[float, str]:
+    """Compute component_overlap deterministically — NOT an LLM judgment.
+
+    Compares the ground-truth affected NF(s) against the diagnosis's
+    structured root-cause set (primary_suspect_nf + any affected_component
+    tagged "Root Cause"). Per ground-truth NF:
+      Root Cause          → 1.0
+      present, other role → 0.3   (saw it, mis-ranked the causal role)
+      absent              → 0.0
+    component_overlap is the mean over the ground-truth NFs. Downstream
+    components in the diagnosis are not penalized.
+    """
+    if not gt_nfs:
+        return 0.0, "No ground-truth components to compare."
+
+    dr = diagnosis_report or {}
+    affected = dr.get("affected_components") or []
+    roots: set[str] = {
+        c.get("name") for c in affected
+        if isinstance(c, dict) and c.get("role") == "Root Cause" and c.get("name")
+    }
+    primary = dr.get("primary_suspect_nf")
+    if primary:
+        roots.add(primary)
+    others: set[str] = {
+        c.get("name") for c in affected
+        if isinstance(c, dict) and c.get("name")
+    } - roots
+
+    scores: list[float] = []
+    detail: list[str] = []
+    for nf in sorted(gt_nfs):
+        if nf in roots:
+            scores.append(1.0)
+            detail.append(f"{nf}=Root Cause (1.0)")
+        elif nf in others:
+            scores.append(0.3)
+            detail.append(f"{nf}=secondary/symptomatic (0.3)")
+        else:
+            scores.append(0.0)
+            detail.append(f"{nf}=absent (0.0)")
+
+    overlap = round(sum(scores) / len(scores), 3)
+    rationale = (
+        f"Mechanical comparison: ground truth {sorted(gt_nfs)} vs diagnosis "
+        f"root cause(s) {sorted(roots) or '[]'}. " + "; ".join(detail) + "."
+    )
+    return overlap, rationale
+
+
+def _compute_total_score(parsed: dict) -> float:
+    """Deterministic weighted sum — never trust an LLM-emitted total."""
+    return round(
+        sum(_SCORE_WEIGHTS[k] * float(parsed.get(k, False) or 0)
+            for k in _SCORE_WEIGHTS),
+        3,
+    )
+
+
 async def score_diagnosis(
     diagnosis_text: str,
     injected_faults: list[dict],
     scenario: dict,
+    diagnosis_report: dict | None = None,
 ) -> dict:
-    """Score an RCA diagnosis using an LLM judge.
+    """Score an RCA diagnosis.
 
-    The scorer evaluates against the SIMULATED FAILURE MODE, not the
-    injection mechanism.
+    The semantic dimensions (root_cause_correct, severity_correct,
+    fault_type_identified, confidence_calibrated, ranking_position) are
+    judged by an LLM against the SIMULATED FAILURE MODE. `component_overlap`
+    and `total_score` are computed MECHANICALLY in Python — the LLM never
+    does the arithmetic or the structured component comparison.
 
     Args:
-        diagnosis_text: The agent's raw diagnosis output.
-        injected_faults: List of fault dicts with target, fault_type, params.
+        diagnosis_text: The agent's raw diagnosis output (for the LLM judge).
+        injected_faults: Fault dicts with target/fault_type/params. The
+            `target`s are the ground-truth affected components.
         scenario: The scenario dict with name, description, expected_symptoms.
+        diagnosis_report: The structured DiagnosisReport dict (primary_suspect_nf
+            + affected_components). Used for the mechanical component_overlap.
     """
     # Build ground truth focused on the simulated failure mode
     fault_descriptions = []
@@ -258,18 +328,28 @@ async def score_diagnosis(
         f"## AGENT DIAGNOSIS\n\n{diagnosis_text}"
     )
 
+    # Ground-truth affected NFs = the fault targets.
+    gt_nfs = {f.get("target") for f in injected_faults if f.get("target")}
+
     try:
         result = await _call_scorer_llm(user_message)
-        log.info(
-            "LLM score: %.0f%% (root_cause=%s, components=%.0f%%)",
-            result.get("total_score", 0) * 100,
-            result.get("root_cause_correct"),
-            result.get("component_overlap", 0) * 100,
-        )
-        return result
     except Exception as e:
         log.error("LLM scorer failed, falling back to zero score: %s", e)
         return _fallback_score(str(e))
+
+    # MECHANICAL dimensions — computed in Python, never by the LLM.
+    overlap, overlap_rationale = _mechanical_component_overlap(gt_nfs, diagnosis_report)
+    result["component_overlap"] = overlap
+    result["component_rationale"] = overlap_rationale
+    result["total_score"] = _compute_total_score(result)
+
+    log.info(
+        "Score: %.0f%% (root_cause=%s, components=%.0f%% [mechanical])",
+        result["total_score"] * 100,
+        result.get("root_cause_correct"),
+        overlap * 100,
+    )
+    return result
 
 
 async def _call_scorer_llm(user_message: str) -> dict:
@@ -296,25 +376,17 @@ async def _call_scorer_llm(user_message: str) -> dict:
     text = response.text.strip()
     parsed = json.loads(text)
 
-    # Validate and ensure required fields
+    # The LLM judges ONLY the semantic boolean dimensions. component_overlap
+    # and total_score are computed mechanically by the caller — if the model
+    # emits them anyway, drop them so they can't leak into the result.
+    parsed.pop("component_overlap", None)
+    parsed.pop("total_score", None)
+
     required_bools = ["root_cause_correct", "severity_correct",
                       "fault_type_identified", "confidence_calibrated"]
     for key in required_bools:
         if key not in parsed:
             parsed[key] = False
-
-    if "component_overlap" not in parsed:
-        parsed["component_overlap"] = 0.0
-
-    if "total_score" not in parsed:
-        parsed["total_score"] = round(
-            0.40 * float(parsed.get("root_cause_correct", False))
-            + 0.25 * float(parsed.get("component_overlap", 0))
-            + 0.15 * float(parsed.get("severity_correct", False))
-            + 0.10 * float(parsed.get("fault_type_identified", False))
-            + 0.10 * float(parsed.get("confidence_calibrated", False)),
-            3,
-        )
 
     return parsed
 

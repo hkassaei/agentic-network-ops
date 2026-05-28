@@ -1,19 +1,67 @@
-"""v6 orchestrator — 9-phase pipeline with parallel per-hypothesis Investigators.
+"""v7 orchestrator — multi-phase RCA pipeline with parallel per-hypothesis Investigators.
 
-Pipeline:
-  Phase 0    AnomalyScreener           (ML, no LLM)
-  Phase 1    EventAggregator           (reads fired events from store)
-  Phase 2    CorrelationAnalyzer       (runs correlation engine, feeds NA)
-  Phase 3    NetworkAnalyst            (ranked hypotheses over KB + events + correlation)
-  Phase 4    InstructionGenerator      (one falsification plan per hypothesis)
-  Phase 5    Investigator × N          (parallel sub-agents, one per hypothesis)
-  Phase 6.5  CandidatePool + bounded   (Decision E aggregator; re-investigates the top
-             re-investigation            promoted suspect when the verdict tree has zero
-                                         NOT_DISPROVEN survivors)
-  Phase 6.6  EvidenceValidator         (per-sub-investigator citation check; PR 5.5a
-                                         moved this AFTER 6.5 so it covers the
-                                         re-investigation Investigator's trace)
-  Phase 7    Synthesis                 (aggregates N verdicts into NOC diagnosis)
+Pipeline (in execution order):
+  Phase 0    AnomalyScreener           (ECOD, no LLM; emits ScreenerStatus +
+                                         per-bucket anomaly flags. "starved"
+                                         routes to the conservative fallback;
+                                         "clean" can still short-circuit.)
+  Phase 0.5  SymptomClassifier         (Python only, no LLM; labels the flag
+                                         set transport / application / mixed /
+                                         ambiguous from the KB's per-metric
+                                         layer tags.)
+  Phase 0.6  PathPrioritizer +         (Deterministic, no LLM. Prioritizer scores
+             parallel PathWalker         candidate flows from flows.yaml against
+                                         the load-bearing NF set; walker probes
+                                         up to top-5 flows in parallel — soft
+                                         cap 3, hard cap 5. On localization the
+                                         pipeline calls Phase 7 Synthesis with
+                                         verdict_kind="localized" and skips
+                                         Phases 1-6. On null localization it
+                                         falls through to the app-layer pipeline.)
+  Phase 1    EventAggregator           (reads fired events from the metric-KB
+                                         trigger store.)
+  Phase 2    CorrelationAnalyzer       (runs the correlation engine, feeds NA.)
+  Phase 2.5  RAG injection             (a) prior-similar-episode retrieval over
+                                         the v6/v7 case index, injected into NA
+                                         as {prior_similar_episodes}; (b) the
+                                         hand-authored operational lessons
+                                         corpus, injected as
+                                         {operational_lessons}. Both are
+                                         citation-tracked by EvidenceValidator.)
+  Phase 3    NetworkAnalyst            (ranked hypotheses over KB + events +
+                                         correlation + RAG context.)
+  Phase 4    InstructionGenerator      (one falsification plan per hypothesis.
+                                         KB-grounded: {probe_candidates} from
+                                         how_to_verify_live, plus 100%-coverage
+                                         {nf_metric_inventory} and
+                                         {nf_liveness_probes} blocks. Guardrail
+                                         chain: lint_ig_plan (A1/A2) →
+                                         lint_ig_probe_grounding → sanitizer.
+                                         REJECT triggers one resample with the
+                                         rejection reason injected.)
+  Phase 5    Investigator × N          (parallel sub-agents, one per hypothesis;
+                                         multi-shot consensus — shot 2 skipped
+                                         when shot 1 is INCONCLUSIVE.)
+  Phase 6.5  CandidatePool + bounded   (Decision E aggregator; re-investigates
+             re-investigation            the top promoted suspect when the
+                                         verdict tree has zero NOT_DISPROVEN
+                                         survivors. Fires at most once.)
+  Phase 6    EvidenceValidator         (per-sub-investigator citation check;
+                                         runs AFTER 6.5 so it covers any
+                                         re-investigation trace.)
+  Phase 7    Synthesis                 (aggregates N verdicts into the NOC
+                                         diagnosis; emits a typed
+                                         DiagnosisReport with required
+                                         AffectedComponent[name, role].)
+  Phase 8    ImpactAssessment          (Blast Radius & Downstream Impact.
+                                         Deterministic compute over flows.yaml
+                                         + components.yaml produces the
+                                         affected services/flows; a small
+                                         grounded narrator (LlmAgent, flash)
+                                         renders the prose. Runs exactly once
+                                         via the _finalize chokepoint so the
+                                         localized-Phase-0.6 path and the full
+                                         app-layer path both reach it.)
 
 Notes:
   - The agentic_chaos framework is expected to invoke the metric-KB trigger
@@ -25,6 +73,19 @@ Notes:
     top 3 by ranking are investigated.
   - Mechanical guardrail: any sub-Investigator making <2 tool calls has its
     verdict forced to INCONCLUSIVE.
+  - Determinism-first principle: scoring (component_overlap, total_score),
+    path prioritization, path walking, symptom classification, blast-radius
+    compute, and all guardrails are mechanical. The LLM is used only for
+    prose/semantic judgment (NA hypothesis ranking, IG plan authoring,
+    Investigator reasoning, Synthesis, blast-radius narrator), and each LLM
+    output is bounded by a typed Pydantic schema (extra="forbid") or a
+    guardrail that can reject + resample.
+
+Key ADRs:
+  - screener_starvation_partial_metric_collection.md (Phase 0 starved status)
+  - path_prioritizer_walks_all_candidates.md (Phase 0.6 walk-all-candidates)
+  - ig_probe_grounding_metric_inventory_and_liveness.md (Phase 4 grounding)
+  - blast_radius_downstream_impact_phase8.md (Phase 8)
 """
 
 from __future__ import annotations

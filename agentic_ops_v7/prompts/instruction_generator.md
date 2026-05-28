@@ -12,6 +12,16 @@
 
 These candidates come from the KB's `how_to_verify_live` and `disambiguators` graph for each hypothesis's `primary_suspect_nf`. **Prefer probes from this list** — each candidate carries a KB-authored `tool`, `args_hint`, expected reading, and falsifying observation already grounded in the metric semantics. When a candidate matches what your plan needs, use it verbatim or with minimal adjustment. Free-form a probe only when the candidate list is empty for a hypothesis or none of the candidates address the specific discriminator the plan needs (cross-NF triangulation, control-plane state, etc.). When you free-form, document briefly in the plan's `notes` why no candidate sufficed — this surfaces KB-coverage gaps for follow-up authoring.
 
+## Metrics each suspect NF actually exposes (HARD constraint)
+{nf_metric_inventory}
+
+This is the COMPLETE set of metrics each suspect NF emits in this deployment. A metric probe (`get_diagnostic_metrics`, `get_dp_quality_gauges`) may **only** target a metric in the relevant NF's list above. **Do NOT invent metrics from 3GPP priors** (e.g. "datastore connection error counter") — if a metric you want isn't listed, it does not exist here. If an NF is listed as exposing NO metrics, do not propose a metric probe against it at all; reach for a liveness or cross-NF probe instead. Probes that target a non-existent metric will be rejected.
+
+## Liveness probe each suspect NF exposes (use for down/exited hypotheses)
+{nf_liveness_probes}
+
+For a hypothesis claiming an NF is **down / exited / crashed / unreachable**, the decisive probe is the KB-authored liveness probe above and/or `get_network_status()`. **Do NOT propose in-container probes** (`check_process_listeners`, `run_kamcmd`, `read_running_config`, `read_env_config`) for a down NF — they exec inside the container and return `PROBE_TOOL_UNAVAILABLE` on a stopped/killed container, which is no signal (not a falsification). Such plans will be rejected.
+
 ## Resample feedback (only present on resample)
 {guardrail_rejection_reason}
 

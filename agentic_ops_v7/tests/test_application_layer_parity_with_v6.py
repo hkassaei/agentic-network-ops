@@ -138,6 +138,13 @@ _INTENTIONALLY_DIVERGENT = {
     # section (ADR `stack_config_tool_for_agents.md`) — pinned by
     # `test_v7_investigator_prompt_has_deployment_config_rule` below.
     "prompts/investigator.md",
+    # ADR `ig_probe_grounding_metric_inventory_and_liveness.md` — the IG
+    # prompt gains `{nf_metric_inventory}` + `{nf_liveness_probes}`
+    # placeholders and two grounding rules (metric probes only against
+    # metrics an NF exposes; down-NF hypotheses use the KB liveness probe,
+    # not in-container probes). Pinned by
+    # `test_v7_ig_prompt_has_probe_grounding_blocks` below.
+    "prompts/instruction_generator.md",
     # ADR `make_gemini_model_version_configurable` (commit 7edacd7) —
     # every subagent's model parameter was lifted from a literal to an
     # env-driven value. v7 carries the change; v6 doesn't.
@@ -484,6 +491,19 @@ def test_v7_instruction_generator_toolset_has_get_deployment_config():
         "`tools.get_deployment_config` per ADR "
         "`stack_config_tool_for_agents.md`."
     )
+
+
+def test_v7_ig_prompt_has_probe_grounding_blocks():
+    """ADR `ig_probe_grounding_metric_inventory_and_liveness.md` — the IG
+    prompt must carry the two KB-grounding placeholders and their rules,
+    so the IG can't free-form probes against metrics that don't exist or
+    in-container probes on down NFs."""
+    prompt = (_V7_ROOT / "prompts" / "instruction_generator.md").read_text()
+    assert "{nf_metric_inventory}" in prompt
+    assert "{nf_liveness_probes}" in prompt
+    # The two rules' load-bearing phrases.
+    assert "target a metric in the relevant nf" in prompt.lower()
+    assert "do not propose in-container probes" in prompt.lower()
 
 
 def test_v7_synthesis_prompt_compound_requires_distinct_second_nf():

@@ -93,6 +93,7 @@ from .guardrails.empty_output import (
 )
 from .guardrails.evidence_citations import validate_evidence
 from .guardrails.ig_validator import audit_fanout, lint_ig_plan
+from .guardrails.probe_grounding import lint_ig_probe_grounding
 from .guardrails.investigator_minimum import (
     MIN_TOOL_CALLS_PER_INVESTIGATOR,
     apply_min_tool_call_guardrail,
@@ -273,16 +274,29 @@ def _accumulate_phase_traces(state: dict, new_traces: list) -> None:
     state["phase_traces_so_far"] = current
 
 
-def _ig_combined_guardrail(plan_set):
-    """IG-side guardrail chain: substantive lint, then output sanitizer.
+def _ig_combined_guardrail(plan_set, na_red_nfs=None):
+    """IG-side guardrail chain: substantive lint, KB grounding, sanitizer.
 
-    Substantive linter runs first so a real structural issue takes
-    precedence over a sanitizer hit (avoids double-rejection feedback
-    that confuses the LLM).
+    Order: structural lint (A1/A2) → probe grounding (metric inventory +
+    liveness) → output sanitizer. Substantive checks run before the
+    sanitizer so a real issue takes precedence over a leaky-field hit
+    (avoids double-rejection feedback that confuses the LLM).
+
+    `na_red_nfs` (NFs whose layer the NA rated `red`) feeds the liveness
+    grounding's down-class detection alongside statement keywords.
+    ADR: ig_probe_grounding_metric_inventory_and_liveness.md
     """
     lint_result = lint_ig_plan(plan_set)
     if lint_result.verdict is not GuardrailVerdict.PASS:
         return lint_result
+
+    grounding = lint_ig_probe_grounding(plan_set, na_red_nfs=na_red_nfs)
+    if grounding.verdict is not GuardrailVerdict.PASS:
+        log.info(
+            "IG probe-grounding REJECT: %d finding(s)",
+            len((grounding.notes or {}).get("grounding_findings", [])),
+        )
+        return grounding
 
     s_result = sanitize_plan_set(plan_set)
     if s_result.verdict is not GuardrailVerdict.PASS:
@@ -2162,7 +2176,8 @@ async def _run_bounded_reinvestigation(
         phase_label="Phase 6.5 Reinvestigation IG",
         run_phase=_run_phase,
         parser=_parse_plan_set,
-        guardrail=_ig_combined_guardrail,
+        guardrail=lambda ps: _ig_combined_guardrail(
+            ps, na_red_nfs=set(state.get("_na_red_nfs") or [])),
         max_resamples=1,
         on_guardrail_exhausted="accept",
     )
@@ -2324,6 +2339,13 @@ async def investigate(
         # here so the IG prompt's `{probe_candidates}` template always
         # resolves.
         "probe_candidates": "",
+        # IG probe-grounding blocks (ADR
+        # ig_probe_grounding_metric_inventory_and_liveness.md) — the full
+        # per-NF metric inventory and KB liveness probes, populated before
+        # Phase 4. Initialized here so the IG prompt's
+        # `{nf_metric_inventory}` / `{nf_liveness_probes}` always resolve.
+        "nf_metric_inventory": "",
+        "nf_liveness_probes": "",
         # ── Synthesis prompt substitutions ─────────────────────────────
         # The unified Synthesis agent reads one prompt with two branches.
         # Application-layer-only keys are populated by Phases 3–6 in the
@@ -2670,6 +2692,39 @@ async def investigate(
         {hid: len(cs) for hid, cs in candidates_by_hypothesis.items()},
     )
 
+    # Ground IG probe selection in KB facts (ADR
+    # ig_probe_grounding_metric_inventory_and_liveness.md): the COMPLETE
+    # per-NF metric inventory (so metric probes can't target non-existent
+    # metrics) and the KB-authored liveness probes (so down-NF hypotheses
+    # use them instead of in-container probes that can't run on a stopped
+    # container). Unlike `{probe_candidates}` (~29% how_to_verify_live
+    # coverage), these are 100%-coverage constraints, enforced by
+    # `lint_ig_probe_grounding`.
+    from .guardrails.probe_grounding import (
+        red_layer_nfs,
+        render_liveness_probes_for_prompt,
+        render_metric_inventory_for_prompt,
+    )
+    try:
+        state["nf_metric_inventory"] = (
+            render_metric_inventory_for_prompt(hypotheses, _ranking_kb)
+            if _ranking_kb is not None else ""
+        )
+    except Exception as _e:
+        log.warning("metric-inventory render failed (non-fatal): %s", _e)
+        state["nf_metric_inventory"] = ""
+    try:
+        state["nf_liveness_probes"] = render_liveness_probes_for_prompt(hypotheses)
+    except Exception as _e:
+        log.warning("liveness-probe render failed (non-fatal): %s", _e)
+        state["nf_liveness_probes"] = ""
+    # NFs whose ontology layer the NA rated `red` — a down-class signal
+    # for the liveness guardrail, combined with statement keywords.
+    try:
+        state["_na_red_nfs"] = sorted(red_layer_nfs(na_report))
+    except Exception:
+        state["_na_red_nfs"] = []
+
     # Two layered guards run on IG's output:
     #
     #   (a) Empty-output retry. ADK's `LlmAgent` silently bails on an
@@ -2705,7 +2760,8 @@ async def investigate(
         phase_label="Phase 4 InstructionGenerator",
         run_phase=_run_phase,
         parser=_parse_plan_set,
-        guardrail=_ig_combined_guardrail,
+        guardrail=lambda ps: _ig_combined_guardrail(
+            ps, na_red_nfs=set(state.get("_na_red_nfs") or [])),
         max_resamples=1,
         on_guardrail_exhausted="accept",
     )

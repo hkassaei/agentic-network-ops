@@ -1,8 +1,8 @@
 {
   "embedder_name": "tfidf-v1",
-  "embed_dim": 310,
+  "embed_dim": 259,
   "case_count": 102,
   "score_threshold": 80,
-  "built_at": "2026-05-20T02:50:32.106164+00:00",
+  "built_at": "2026-05-30T03:07:34.735974+00:00",
   "builder_version": "r2-v1"
 }

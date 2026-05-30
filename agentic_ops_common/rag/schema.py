@@ -182,6 +182,27 @@ class RetrievedCase(BaseModel):
     walker_attributed_hop_node: Optional[str] = None
     resolved_flow_id: Optional[str] = None
 
+    # ── Infrastructure-NF status (the discriminating fingerprint for
+    #    backing-store / control-plane container failures) ────────────
+    # Map of NF name → container status, extracted from the episode's
+    # structured `faults[]` block (container_kill / container_stop with
+    # verified down-state). Empty for episodes where no container exited
+    # (network-impairment scenarios, healthy baselines, etc.).
+    # Source: ADR `rag_infrastructure_fingerprint_enrichment.md` §
+    # "Per-case (index-side) extraction". At index time only "exited"
+    # ever populates; "restarting"/"absent" are reserved for future
+    # runtime extensions and kept in the Literal for forward-compatibility.
+    infra_status: dict[str, Literal["exited", "restarting", "absent"]] = Field(
+        default_factory=dict,
+        description=(
+            "NF name → container down-status, e.g. {'dns': 'exited'}. "
+            "Populated from episode['faults'][] at index time when "
+            "fault_type ∈ {container_kill, container_stop} and "
+            "verification_result confirmed the down state. "
+            "Empty for network-impairment / healthy cases."
+        ),
+    )
+
     # ── Agent's diagnosis ────────────────────────────────────────────
     diagnosis_summary: Optional[str] = None
     diagnosis_primary_suspect_nf: Optional[str] = None
@@ -217,18 +238,28 @@ class RetrievedCase(BaseModel):
           <flag signature 1>
           <flag signature 2>
           ...
+          infra:<nf>:<status>            ← zero or more lines, sorted
+          ...
           scenario: <scenario_name>
           classifier: <classifier_label or 'unknown'>
 
-        Flag signatures are the load-bearing similarity signal; the
-        scenario and classifier suffixes are weak tie-breakers for
-        cases whose flag patterns are identical but routing context
-        differs (e.g. a screener pattern that classifies `transport`
-        in v7 but had no classifier in v6).
+        Flag signatures are the load-bearing similarity signal. The
+        `infra:` lines (ADR `rag_infrastructure_fingerprint_enrichment.md`)
+        are the discriminating tokens for infrastructure-NF failures
+        (DNS, mongo, etc.) whose visible screener signature is dominated
+        by downstream-NF symptoms — `infra:dns:exited` appears in zero
+        non-DNS cases in the corpus, so it dominates TF-IDF ranking when
+        present on both sides. The scenario and classifier suffixes
+        remain as weak tie-breakers for cases whose flag patterns are
+        identical but routing context differs.
         """
         lines: list[str] = []
         for flag in self.anomaly_top_flags:
             lines.append(flag.signature())
+        # Sorted for embedding stability — same dict serialises to
+        # byte-identical retrieval-key text across rebuilds.
+        for nf in sorted(self.infra_status.keys()):
+            lines.append(f"infra:{nf}:{self.infra_status[nf]}")
         lines.append(f"scenario: {self.scenario_name}")
         lines.append(f"classifier: {self.classifier_label or 'unknown'}")
         return "\n".join(lines)

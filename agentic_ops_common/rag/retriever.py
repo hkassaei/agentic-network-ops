@@ -115,6 +115,7 @@ class EpisodeRetriever:
         min_similarity: float = 0.65,
         scenario_hint: Optional[str] = None,
         classifier_label: Optional[str] = None,
+        infra_status_hint: Optional[dict[str, str]] = None,
     ) -> list[SearchHit]:
         """Convenience: build a retrieval query from a live screener's
         flag list (or any equivalent representation) and retrieve.
@@ -128,9 +129,19 @@ class EpisodeRetriever:
         the query (mirroring `RetrievedCase.retrieval_key_text()`'s
         layout) — useful when the orchestrator knows them at retrieval
         time. Both are optional; omitting them just drops the suffix.
+
+        `infra_status_hint` adds `infra:<nf>:<status>` line(s) to the
+        query — the discriminating fingerprint for backing-store /
+        infrastructure-NF failures (ADR
+        `rag_infrastructure_fingerprint_enrichment.md`). Sourced at
+        runtime from a `get_network_status()` call. Empty dict / None
+        emits nothing (correct encoding for "no infra fault observed").
         """
         query_text = _build_query_text_from_flags(
-            flags, scenario_hint=scenario_hint, classifier_label=classifier_label,
+            flags,
+            scenario_hint=scenario_hint,
+            classifier_label=classifier_label,
+            infra_status_hint=infra_status_hint,
         )
         if not query_text:
             return []
@@ -260,13 +271,23 @@ def _build_query_text_from_flags(
     *,
     scenario_hint: Optional[str] = None,
     classifier_label: Optional[str] = None,
+    infra_status_hint: Optional[dict[str, str]] = None,
 ) -> str:
     """Render a list of flags as a query string in the same shape that
     `RetrievedCase.retrieval_key_text()` uses for the indexed corpus.
 
     The flag's signature is `component.metric:direction:severity`,
-    matching what the indexer embedded. Suffix lines (scenario,
-    classifier) are appended only when their hints are provided.
+    matching what the indexer embedded. `infra:<nf>:<status>` lines
+    (sorted) come next when `infra_status_hint` is non-empty — same
+    layout as `RetrievedCase.retrieval_key_text()` so query and corpus
+    tokens align byte-for-byte. Suffix lines (scenario, classifier) are
+    appended only when their hints are provided.
+
+    Absence vs presence of the `infra:` block is semantically meaningful:
+    an empty / None `infra_status_hint` is the correct encoding for "no
+    infra fault observed" (the common healthy-stack case). Emitting an
+    explicit `infra:none` token would match itself in the corpus and
+    pull false-healthy precedents higher.
     """
     signatures: list[str] = []
     for f in flags:
@@ -274,10 +295,20 @@ def _build_query_text_from_flags(
         if sig:
             signatures.append(sig)
 
-    if not signatures and not scenario_hint and not classifier_label:
+    infra_lines: list[str] = []
+    if infra_status_hint:
+        for nf in sorted(infra_status_hint.keys()):
+            status = infra_status_hint[nf]
+            if not nf or not status:
+                continue
+            infra_lines.append(f"infra:{nf}:{status}")
+
+    if (not signatures and not infra_lines
+            and not scenario_hint and not classifier_label):
         return ""
 
     lines: list[str] = list(signatures)
+    lines.extend(infra_lines)
     if scenario_hint:
         lines.append(f"scenario: {scenario_hint}")
     if classifier_label:

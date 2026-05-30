@@ -14,6 +14,10 @@ You reason over SIX inputs:
 ### Anomaly Screener
 {anomaly_report}
 
+{infra_status_snapshot}
+
+If the section above names one or more containers as `exited` / `absent` / `restarting`, treat that NF as a **direct fault locus with very high prior** (lesson L10): investigate why it exited, not what's around it. The screener flags you see in this episode are very likely downstream consequences of that container being down. If the section says "All network containers are running", proceed with the screener flags as the primary signal.
+
 ### Fired Events
 {fired_events}
 

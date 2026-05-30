@@ -1382,6 +1382,101 @@ def _resolve_rag_index_dir() -> Optional[Path]:
     return None
 
 
+async def _phase25a_capture_infra_status(
+    state: dict, all_phases: list,
+) -> None:
+    """Phase 2.5a — capture container down-state for RAG + NA grounding.
+
+    Single async `get_network_status()` call, parsed into:
+
+      - `state["infra_status"]` — dict[str, "exited"] of NFs whose
+        container is exited / absent. Consumed by Phase 2.5's RAG
+        query as `infra_status_hint=` (ADR
+        `rag_infrastructure_fingerprint_enrichment.md`).
+      - `state["infra_status_snapshot"]` — short markdown block injected
+        into the NA prompt's `{infra_status_snapshot}` placeholder.
+        Always non-empty: renders "all containers running" under the
+        same header when nothing is down, so the NA prompt section is
+        present in every run.
+
+    Best-effort: any tool failure leaves both state slots at their init
+    defaults (`{}` and `""`) and the rest of the pipeline behaves as if
+    the snapshot wasn't available. RAG falls back to today's flag-only
+    query; NA falls back to its own `get_network_status` tool call.
+    """
+    phase_start = time.time()
+    down_status: dict[str, str] = {}
+    rendered = ""
+    summary = "all_running"
+    try:
+        from agentic_ops_common.tools.container_status import get_network_status
+        ns_raw = await get_network_status()
+        # Tool returns a JSON string with shape (agentic_ops/tools.py:204):
+        #   {
+        #     "phase":          "ready" | "down",
+        #     "running":        [container_names…],   # State.Status == "running"
+        #     "down_or_absent": [container_names…],   # everything else, mashed
+        #     "containers":     {name: status, …},    # the per-NF detail
+        #   }
+        # We read from `containers` (not the lists) because it preserves
+        # the specific status — exited / restarting / absent — that the
+        # `infra:<nf>:<status>` token type encodes.
+        try:
+            ns_obj = json.loads(ns_raw) if isinstance(ns_raw, str) else ns_raw
+        except (json.JSONDecodeError, TypeError):
+            ns_obj = None
+        if isinstance(ns_obj, dict):
+            containers = ns_obj.get("containers") or {}
+            if isinstance(containers, dict):
+                for name, status in containers.items():
+                    if not isinstance(name, str) or not isinstance(status, str):
+                        continue
+                    s = status.strip().lower()
+                    # "exited" / "absent" / "restarting" are the schema's
+                    # Literal values; "dead" / "removing" / "created" are
+                    # rare terminal/transitional states that all mean
+                    # "process is gone" — fold them into "exited" so the
+                    # corpus's infra:<nf>:exited tokens match them.
+                    if s in ("exited", "dead", "removing", "created"):
+                        down_status[name.lower()] = "exited"
+                    elif s == "absent":
+                        down_status[name.lower()] = "absent"
+                    elif s == "restarting":
+                        down_status[name.lower()] = "restarting"
+                    # "running" / "paused" / anything else: skip
+                    # (paused is intentionally not down-class — the
+                    # process is in memory; the corpus has no precedent.)
+        if down_status:
+            rendered_lines = ["### Current container status", ""]
+            for nf in sorted(down_status.keys()):
+                rendered_lines.append(f"- `{nf}`: **{down_status[nf]}**")
+            rendered = "\n".join(rendered_lines) + "\n"
+            summary = "down=" + ",".join(
+                f"{nf}:{down_status[nf]}" for nf in sorted(down_status.keys())
+            )
+        else:
+            rendered = (
+                "### Current container status\n\n"
+                "All network containers are running.\n"
+            )
+    except Exception as e:  # pragma: no cover — defensive
+        log.warning(
+            "Phase 2.5a: get_network_status failed (non-fatal): %s",
+            e, exc_info=True,
+        )
+        summary = "tool_failed"
+
+    state["infra_status"] = down_status
+    state["infra_status_snapshot"] = rendered
+    all_phases.append(PhaseTrace(
+        agent_name="InfraStatusSnapshot",
+        started_at=phase_start,
+        finished_at=time.time(),
+        duration_ms=int((time.time() - phase_start) * 1000),
+        output_summary=summary,
+    ))
+
+
 def _phase25_rag_inject_prior_episodes(
     state: dict, all_phases: list,
 ) -> None:
@@ -1492,12 +1587,18 @@ def _phase25_rag_inject_prior_episodes(
             classifier_label = label
 
     min_similarity = _resolve_rag_min_similarity()
+    # Infrastructure-NF down-status from Phase 2.5a (ADR
+    # rag_infrastructure_fingerprint_enrichment.md). Empty dict =
+    # all containers running; passed through to retriever, which
+    # correctly emits no `infra:` line for that case.
+    infra_status_hint = state.get("infra_status") or None
     try:
         hits = retriever.retrieve_for_flags(
             flags,
             k=_RAG_TOP_K,
             min_similarity=min_similarity,
             classifier_label=classifier_label,
+            infra_status_hint=infra_status_hint,
         )
     except Exception as e:
         log.warning("Phase 2.5: retrieve raised: %s", e, exc_info=True)
@@ -2407,6 +2508,19 @@ async def investigate(
         # `{nf_metric_inventory}` / `{nf_liveness_probes}` always resolve.
         "nf_metric_inventory": "",
         "nf_liveness_probes": "",
+        # Infrastructure-NF status snapshot (ADR
+        # rag_infrastructure_fingerprint_enrichment.md) — populated by
+        # `_phase25a_capture_infra_status` from a single get_network_status()
+        # tool call at the top of Phase 2.5. Two state slots:
+        #   - `infra_status`: dict[str,str] used by RAG retrieval as
+        #     `infra_status_hint=`. Empty dict = no infra fault observed.
+        #   - `infra_status_snapshot`: rendered markdown block injected
+        #     into the NA prompt via `{infra_status_snapshot}`. Always
+        #     non-empty (renders an "all running" line under the same
+        #     header when the dict is empty) so the NA prompt section
+        #     is always present.
+        "infra_status": {},
+        "infra_status_snapshot": "",
         # ── Synthesis prompt substitutions ─────────────────────────────
         # The unified Synthesis agent reads one prompt with two branches.
         # Application-layer-only keys are populated by Phases 3–6 in the
@@ -2516,6 +2630,14 @@ async def investigate(
     # -------- Phase 2: CorrelationAnalyzer (Python, feeds NA) --------
     correlation = _phase2_correlation_analyzer(events, episode_id, all_phases)
     state["correlation_analysis"] = correlation.hypotheses_text
+
+    # -------- Phase 2.5a: Infrastructure-NF status snapshot --------
+    # Single `get_network_status()` tool call captured before RAG so
+    # both RAG (as the discriminating `infra:<nf>:<status>` token in
+    # the query) and the NetworkAnalyst prompt (via
+    # `{infra_status_snapshot}`) consume the same observation.
+    # ADR: rag_infrastructure_fingerprint_enrichment.md
+    await _phase25a_capture_infra_status(state, all_phases)
 
     # -------- Phase 2.5: RAG inject prior similar episodes --------
     # Best-effort retrieval of past chaos-episode cases with similar

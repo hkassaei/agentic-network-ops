@@ -372,6 +372,79 @@ def _extract_fault_type_correct(score_obj: object) -> Optional[bool]:
     return bool(v) if v is not None else None
 
 
+# ── Infrastructure-NF status extraction ──────────────────────────────
+#
+# ADR: rag_infrastructure_fingerprint_enrichment.md
+#
+# Backfill source: every chaos episode JSON carries a `faults[]` block
+# with structured fault metadata + a `verification_result` field that
+# records the observed container state at fault time. This is the
+# ground-truth signal — far more reliable than scraping NA tool traces
+# or markdown.
+#
+# Extraction rule: emit `{target: "exited"}` when
+#   1. fault_type ∈ {"container_kill", "container_stop"}, AND
+#   2. verified is True, AND
+#   3. verification_result contains "got 'exited'" (the harness's
+#      observed-state confirmation).
+# All other fault types (network impairments, container_pause) emit
+# nothing — the screener fingerprint is already the right signal for
+# those, and adding an `infra:` line would create phantom matches.
+
+# Fault types that, when verified-down, mean the container produced
+# the down state observable to `get_network_status()`.
+_INFRA_DOWN_FAULT_TYPES: frozenset[str] = frozenset({
+    "container_kill", "container_stop",
+})
+
+# The verification_result phrasing the chaos harness writes when a
+# container reached the `exited` state. Matched as a substring so
+# adjacent phrasing changes don't break extraction.
+_VERIFIED_EXITED_MARKER = "got 'exited'"
+
+
+def _extract_infra_status_from_faults(
+    episode_data: dict,
+) -> dict[str, str]:
+    """Extract `{nf: "exited"}` entries from an episode's faults[] block.
+
+    Only emits an entry when ALL three conditions hold:
+      - `fault_type` ∈ {container_kill, container_stop}
+      - `verified` is True
+      - `verification_result` contains "got 'exited'"
+
+    Targets not in `_KNOWN_NFS` are dropped defensively — protects the
+    corpus from junk strings if a scenario library entry ever names a
+    target that isn't a recognized NF.
+
+    Returns `{}` for episodes with no infra-down faults (network
+    impairments, healthy baselines, missing `faults[]`).
+    """
+    out: dict[str, str] = {}
+    faults = episode_data.get("faults") or []
+    if not isinstance(faults, list):
+        return out
+    for fault in faults:
+        if not isinstance(fault, dict):
+            continue
+        fault_type = fault.get("fault_type")
+        if fault_type not in _INFRA_DOWN_FAULT_TYPES:
+            continue
+        if fault.get("verified") is not True:
+            continue
+        vr = fault.get("verification_result") or ""
+        if not isinstance(vr, str) or _VERIFIED_EXITED_MARKER not in vr:
+            continue
+        target = fault.get("target")
+        if not isinstance(target, str) or not target:
+            continue
+        target = target.lower()
+        if target not in _KNOWN_NFS:
+            continue
+        out[target] = "exited"
+    return out
+
+
 # ── JSON parser ──────────────────────────────────────────────────────
 
 def _parse_json(path: Path) -> Optional[RetrievedCase]:
@@ -524,6 +597,7 @@ def _parse_json(path: Path) -> Optional[RetrievedCase]:
             score_pct=score_pct,
             fault_type_correct=_extract_fault_type_correct(cr.get("score")),
             total_tokens=total_tokens,
+            infra_status=_extract_infra_status_from_faults(data),
         )
     except Exception as e:
         log.warning("validation_failed: %s — %s", path, e)

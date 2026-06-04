@@ -68,6 +68,8 @@ If v7 diagnoses this correctly without ontology / KB additions, that is genuinel
 
 ### Injection mechanism
 
+**Why +47 min specifically?** Arbitrary. It is large enough to clear the first three thresholds that any principled choice would care about — past the ~5-min auth-system clock-skew tolerance (OAuth `iat`/`nbf` slack, Kerberos, the typical TLS handshake clock buffer), past the `ntpd` / `chrony` "panic step" threshold of 1000 s (≈16:40) at which the NTP daemon refuses to self-correct, and past the Kamailio `date_check` default of 30 min that 400-rejects SIP messages with drifted `Date` headers — without going so far that the failure becomes trivially diagnosable (e.g. crossing a 24-hour cert-validity window, which would scream "TLS failure" from every SBI log). 47 lands comfortably in the "obviously wrong, not catastrophically wrong" zone. Any value in roughly the 35 min – 8 h range would exercise the same surfaces. The non-round number is cosmetic — feels less like a staged demo in chaos logs.
+
 **Approach A — Container with `SYS_TIME` capability (preferred if PyHSS image rebuild is acceptable):**
 
 ```bash

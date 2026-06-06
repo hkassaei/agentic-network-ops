@@ -11,11 +11,14 @@ from agentic_chaos.scenarios.library import (
 
 
 class TestScenarioLibrary:
-    def test_has_14_scenarios(self):
-        # 11 baseline + 3 path-walk-ADR scenarios:
-        #   Phase 5: P-CSCF Packet Loss
-        #   Phase 6: RTPEngine Latency Injection, UPF Bandwidth Cap
-        assert len(SCENARIOS) == 14
+    def test_has_18_scenarios(self):
+        # 11 baseline
+        # + 3 path-walk-ADR scenarios (Phase 5: P-CSCF Packet Loss;
+        #   Phase 6: RTPEngine Latency Injection, UPF Bandwidth Cap)
+        # + 4 CDR-0001 novel scenarios (Asymmetric Path Loss,
+        #   Selective Subscriber Corruption, PMTU Black-Hole,
+        #   PyHSS Clock Skew observability)
+        assert len(SCENARIOS) == 18
 
     def test_all_names_unique(self):
         names = list(SCENARIOS.keys())
@@ -32,7 +35,7 @@ class TestScenarioLibrary:
 
     def test_list_scenarios_returns_all(self):
         items = list_scenarios()
-        assert len(items) == 14
+        assert len(items) == 18
         assert all("name" in s for s in items)
         assert all("category" in s for s in items)
 
@@ -53,6 +56,8 @@ class TestScenarioLibrary:
             "container_kill", "container_stop", "container_pause", "container_restart",
             "network_latency", "network_loss", "network_corruption",
             "network_bandwidth", "network_partition",
+            # CDR-0001 novel fault types
+            "subscriber_credential_corruption", "clock_skew", "pmtu_blackhole",
         }
         for name, s in SCENARIOS.items():
             for f in s.faults:

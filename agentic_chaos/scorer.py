@@ -169,13 +169,47 @@ _FAULT_TYPE_DESCRIPTIONS = {
     "container_pause": "Component unresponsive (appears running but not processing requests)",
     "container_restart": "Component temporarily disrupted (brief outage, then recovery)",
     "network_latency": "Elevated network latency on the component's interfaces",
-    "network_loss": "Packet loss on the component's network path",
+    "network_loss": (
+        "Packet loss on the component's network path. If a peer_ip parameter is "
+        "set, loss applies ONLY in the egress direction toward that peer — the "
+        "reverse direction (peer→component) is unaffected. The discriminating "
+        "signal is bidirectional probe divergence: ping FROM A gives one answer; "
+        "ping FROM B gives a different answer for the same link."
+    ),
     "network_corruption": "Packet corruption on the component's network path",
     "network_bandwidth": "Bandwidth constraint on the component's network path",
     "network_partition": "Network partition — component isolated from specified peers",
     "config_corruption": "Configuration error causing service malfunction",
     "subscriber_delete": "Subscriber data missing from database",
     "collection_drop": "Database collection/table dropped",
+    # CDR-0001 novel fault types
+    "subscriber_credential_corruption": (
+        "One specific subscriber's authentication credential (K) is corrupted in "
+        "the HSS. THAT subscriber fails AKA with MAC failure; all OTHER "
+        "subscribers continue working normally. The blast radius is per-IMSI, "
+        "not per-NF. Container health stays green; aggregate auth metrics may "
+        "not cross anomaly thresholds. Per-subscriber comparison is the "
+        "diagnostic — one UE breaks, the other works."
+    ),
+    "clock_skew": (
+        "One NF's wall clock is significantly skewed from peers. In this lab "
+        "(PyHSS counter-based SQN; cleartext SCTP Diameter; no Kamailio "
+        "date_check module loaded), this is OBSERVABILITY-ONLY — no functional "
+        "impact. Log timestamps and Diameter Session-Id high-32 fields drift; "
+        "UE registrations and calls continue normally. The CORRECT diagnosis "
+        "is 'no functional fault; clock-drift observability anomaly on <NF>.' "
+        "Diagnosing a functional PyHSS auth outage or Diameter outage on this "
+        "signature is a FALSE POSITIVE."
+    ),
+    "pmtu_blackhole": (
+        "Path MTU Discovery is defeated by lowered MTU + dropped ICMP "
+        "fragmentation-needed replies. Small packets pass; large packets "
+        "(over ~1240 B) are silently dropped. Voice (small RTP ~200 B) is "
+        "unaffected; large SIP INVITEs with full SDP, NAS QoS containers, "
+        "and other large signaling messages vanish. The discriminator is "
+        "PAYLOAD SIZE — 'voice works but signaling fails' is the diagnostic "
+        "shape that maps to no other failure mode."
+    ),
 }
 
 

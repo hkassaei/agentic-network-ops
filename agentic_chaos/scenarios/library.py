@@ -25,6 +25,7 @@ _ICSCF_IP = "172.22.0.19"
 _SCSCF_IP = "172.22.0.20"
 _PCSCF_IP = "172.22.0.21"
 _MYSQL_IP = "172.22.0.17"
+_NR_GNB_IP = "172.22.0.23"
 
 # -------------------------------------------------------------------------
 # Single-NF scenarios
@@ -325,6 +326,209 @@ call_quality_degradation = Scenario(
 
 
 # -------------------------------------------------------------------------
+# Novel scenarios (CDR-0001 — added 2026-06-05)
+# -------------------------------------------------------------------------
+
+asymmetric_path_loss_amf_to_gnb = Scenario(
+    name="Asymmetric Path Loss (AMF→gNB)",
+    description=(
+        "Apply 60% packet loss to AMF's egress destined for the gNB IP "
+        "ONLY — packets from AMF to gNB are lossy; packets from gNB to "
+        "AMF are clean. Implemented via `tc prio` + `tc filter dst "
+        "$NR_GNB_IP/32 → flowid 1:1` + `netem loss 60%` on class 1:1, "
+        "so only matching flows hit the netem qdisc. From the gNB's "
+        "POV: AMF-originated SCTP heartbeats are dropped, NGAP DL NAS "
+        "messages don't arrive, association marked DOWN. From AMF's "
+        "POV: gNB-originated SCTP heartbeats arrive cleanly, NGAP "
+        "association looks UP. The two sides disagree about whether "
+        "they are connected. This is the FIRST scenario where "
+        "`ping nr_gnb FROM amf` and `ping amf FROM nr_gnb` produce "
+        "divergent answers — breaks the agent's implicit symmetric-"
+        "reachability assumption. CDR-0001 §3."
+    ),
+    category=FaultCategory.NETWORK,
+    blast_radius=BlastRadius.MULTI_NF,
+    faults=[
+        FaultSpec(
+            fault_type="network_loss",
+            target="amf",
+            params={"loss_pct": 60, "peer_ip": _NR_GNB_IP},
+            ttl_seconds=600,
+        ),
+    ],
+    expected_symptoms=[
+        "SCTP heartbeats AMF→gNB: 60% lost; gNB→AMF: clean",
+        "gNB declares NGAP association DOWN after ~3 missed heartbeats",
+        "AMF still considers the gNB association UP",
+        "`ping nr_gnb` FROM amf: ~60% loss",
+        "`ping amf` FROM nr_gnb: 0% loss (the discriminating signal)",
+        "New UE attaches: Initial UE Message reaches AMF, "
+        "Authentication Request never reaches UE → UE retries at "
+        "T3510 (15s) until cell re-select",
+        "Existing PDU sessions: intact (N3 data plane is UPF↔gNB, "
+        "not AMF↔gNB)",
+        "Container health, CPU, memory: nominal everywhere",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=600,
+)
+
+selective_subscriber_corruption_ue1 = Scenario(
+    name="Selective Subscriber Corruption (UE1)",
+    description=(
+        "Corrupt UE1's K (long-term authentication key) in PyHSS's MySQL "
+        "`auc` table while leaving UE2 untouched. UE2 calls work end-to-"
+        "end. UE1 enters a registration loop and never completes "
+        "Authentication — AMF logs 5GMM cause #20 (MAC failure). The "
+        "first scenario where the failure is PER-SUBSCRIBER, not per-"
+        "NF: every container is healthy, every link is clean, the "
+        "aggregate `pyhss_auth_failures_total` ticks too slowly to "
+        "cross the screener threshold over a 2-min observation "
+        "window. The fault lives in DATA, not infrastructure. Forces "
+        "the agent to compare UE1 vs UE2 side-by-side and reach for "
+        "`query_subscriber` for the diverging UE. Heal restores the "
+        "original K from the snapshot taken at inject time, then "
+        "restarts UE1's container to clear AMF's cached security "
+        "context. CDR-0001 §2."
+    ),
+    category=FaultCategory.APPLICATION,
+    blast_radius=BlastRadius.SINGLE_NF,
+    faults=[
+        FaultSpec(
+            fault_type="subscriber_credential_corruption",
+            target="pyhss",
+            params={"imsi": "001011234567891", "ue_container": "e2e_ue1"},
+            ttl_seconds=600,
+        ),
+    ],
+    expected_symptoms=[
+        "UE1 NAS Authentication Response carries wrong RES → AMF "
+        "logs `5GMM cause #20 MAC failure`",
+        "UE1 reattach loop: RRC Connection Setup repeatedly for "
+        "UE1's TMSI",
+        "UE2: green across the board, IMS registration steady, "
+        "calls work",
+        "`ran_ue` gauge oscillates between 1.0 and 2.0 as UE1 retries",
+        "`ims_usrloc_pcscf:registered_contacts` settles at 1.0 (UE2 only)",
+        "All container health: green. PyHSS itself is fine.",
+        "Aggregate `pyhss_auth_failures_total` ticks slowly — may not "
+        "cross screener threshold; per-IMSI counter would (we don't "
+        "currently expose one — see CDR-0001 implementation notes)",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=600,
+)
+
+pmtu_blackhole_n3 = Scenario(
+    name="PMTU Black-Hole on N3",
+    description=(
+        "Drop UPF's eth0 MTU from 1500 to 1280 and add iptables "
+        "rules that silently drop outbound ICMP `fragmentation-"
+        "needed` replies. Path MTU Discovery is defeated: large "
+        "packets are dropped silently and the sender never learns "
+        "to shrink them. Voice (small RTP ~200 B) sounds perfect. "
+        "Large SIP INVITEs with full SDP, NAS messages with QoS "
+        "rules, and any payload over ~1240 B vanish. The classic "
+        "PMTU black-hole pattern: voice works, signaling fails. "
+        "First scenario with a SIZE-DEPENDENT failure mode — every "
+        "existing scenario degrades all packets uniformly. Forces "
+        "v7 to reason about packet-size as a fault axis, "
+        "distinguishing it from loss (which would affect both "
+        "voice and signaling proportionally), partition (which "
+        "would kill both), and latency (which would degrade voice "
+        "quality first). CDR-0001 §4.\n\n"
+        "WHY eth0 IS N3 in this lab (CDR-0001 Task 1.2): the UPF's "
+        "GTP-U endpoint binds and advertises on `UPF_IP=172.22.0.8` "
+        "(see `network/.env` and `network/upf/upf.yaml` gtpu.server "
+        "block). 172.22.0.8 is the docker bridge address that the "
+        "upf container exposes on eth0 — so all N3 GTP-U traffic "
+        "between gNB (172.22.0.23) and UPF rides eth0. The TUN "
+        "interfaces `ogstun` and `ogstun2` are the INNER APN "
+        "delivery points (where the UPF emits decapsulated user "
+        "traffic), not part of the N3 GTP-U path. To verify on a "
+        "different deployment: `docker exec upf ip route` should "
+        "show 172.22.0.0/24 via eth0 — that's the N3 link to gNB."
+    ),
+    category=FaultCategory.COMPOUND,
+    blast_radius=BlastRadius.SINGLE_NF,
+    faults=[
+        FaultSpec(
+            fault_type="pmtu_blackhole",
+            target="upf",
+            params={"mtu": 1280, "iface": "eth0"},
+            ttl_seconds=300,
+        ),
+    ],
+    expected_symptoms=[
+        "Voice calls in progress (small RTP): perfectly clean",
+        "`fivegs_ep_n3_gtp_indatapktn3upf` continues incrementing "
+        "(small packets pass)",
+        "New VoNR call setup: large SIP INVITE never arrives, "
+        "UAC retransmits, 408 Request Timeout",
+        "Re-INVITE on hold/resume: dies the same way",
+        "New PDU Session Establishment with full QoS: NAS Accept "
+        "dropped, session never completes",
+        "`tcpdump` on UPF N3: large packets enter, no ICMP-Frag-Needed "
+        "leaves, senders retransmit indefinitely",
+        "Container health, NF Prometheus: green — no counter says "
+        "'I dropped a too-big packet'",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=300,
+)
+
+pyhss_clock_skew_observability = Scenario(
+    name="PyHSS Clock Skew (Observability)",
+    description=(
+        "Step PyHSS's wall clock forward by 47 minutes via libfaketime. "
+        "Verified in CDR-0001 §1: this lab's PyHSS uses pure counter-"
+        "based SQN (no time dependency), Diameter Cx is cleartext SCTP "
+        "(no certs), and Kamailio's `date_check` module is not loaded. "
+        "Result: NO functional impact. All UE registrations and calls "
+        "continue working. The fault is purely OBSERVABILITY-degrading "
+        "— PyHSS log timestamps and Diameter Session-Id high-32 fields "
+        "drift 47 minutes into the future. The screener and the "
+        "log-correlation surface will look anomalous, but no protocol "
+        "actually breaks. NEGATIVE-CONTROL test: the correct v7 verdict "
+        "is INCONCLUSIVE / 'observability anomaly, no functional fault.' "
+        "If v7 hallucinates a PyHSS auth or Diameter outage to explain "
+        "the timestamp drift, that's a false-positive failure mode we "
+        "need to harden against. **Requires one-time PyHSS Dockerfile "
+        "prep (libfaketime + LD_PRELOAD + /etc/faketimerc); see "
+        "CDR-0001 §1 Injection mechanism.** Without prep, fault injection "
+        "fails fast with a clear message; heal is a harmless no-op."
+    ),
+    category=FaultCategory.APPLICATION,
+    blast_radius=BlastRadius.SINGLE_NF,
+    faults=[
+        FaultSpec(
+            fault_type="clock_skew",
+            target="pyhss",
+            params={"skew_seconds": 2820},  # +47 min
+            ttl_seconds=600,
+        ),
+    ],
+    expected_symptoms=[
+        "PyHSS `date` is 47 min ahead of every other NF",
+        "PyHSS log timestamps appear in the future",
+        "Diameter Session-Id high-32 carries future-relative values "
+        "(cosmetic)",
+        "All UE registrations + calls continue working normally",
+        "5G-AKA functions normally (PyHSS uses counter-based SQN)",
+        "SIP Digest auth functions normally (Kamailio date_check not loaded)",
+        "Container health, CPU, memory: nominal everywhere",
+        "CORRECT diagnosis is 'no functional fault' — not a PyHSS outage",
+    ],
+    observation_traffic_seconds=120,
+    observation_window_seconds=30,
+    ttl_seconds=600,
+)
+
+
+# -------------------------------------------------------------------------
 # Global scenarios
 # -------------------------------------------------------------------------
 
@@ -487,6 +691,12 @@ SCENARIOS: dict[str, Scenario] = {
         call_quality_degradation,
         rtpengine_latency_injection,
         upf_bandwidth_cap,
+        # CDR-0001 — novel scenarios (2026-06-05)
+        asymmetric_path_loss_amf_to_gnb,
+        selective_subscriber_corruption_ue1,
+        pmtu_blackhole_n3,
+        pyhss_clock_skew_observability,
+        # Global
         mongodb_gone,
         dns_failure,
         ims_network_partition,

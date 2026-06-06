@@ -229,6 +229,53 @@ async def verify_tc_with_pid(pid: int) -> dict:
 
 
 # -------------------------------------------------------------------------
+# Application-state verification
+# -------------------------------------------------------------------------
+
+async def verify_subscriber_credential_corrupted(
+    imsi: str, expected_ki: str
+) -> dict:
+    """Verify a subscriber's K column in PyHSS MySQL equals expected_ki.
+
+    Used to confirm `corrupt_subscriber_credential` took effect — after
+    injection, the verifier re-reads the row and confirms the K is now
+    the corrupted value (not the original).
+
+    Args:
+        imsi: Subscriber IMSI.
+        expected_ki: The K value we expect to find (32-char hex).
+
+    Returns:
+        {verified: bool, actual_ki: str | None, detail: str}
+    """
+    import shlex
+    safe_imsi = shlex.quote(imsi)
+    db_args = "-u pyhss -pims_db_pass ims_hss_db"
+    sql = (
+        f"SELECT a.ki FROM auc a "
+        f"JOIN subscriber s ON s.auc_id = a.auc_id "
+        f"WHERE s.imsi = {safe_imsi};"
+    )
+    cmd = f"docker exec mysql mysql {db_args} -N -B -e {shlex.quote(sql)}"
+    rc, out = await shell(cmd)
+    if rc != 0:
+        return {
+            "verified": False,
+            "actual_ki": None,
+            "detail": f"Lookup failed (rc={rc}): {out[:200]}",
+        }
+    actual = out.strip().splitlines()[0].strip() if out.strip() else None
+    verified = actual is not None and actual.upper() == expected_ki.upper()
+    return {
+        "verified": verified,
+        "actual_ki": actual,
+        "detail": (
+            f"K for IMSI {imsi}: actual={actual!r}, expected={expected_ki!r}"
+        ),
+    }
+
+
+# -------------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------------
 

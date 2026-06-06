@@ -105,6 +105,139 @@ async def drop_collection_mongo(collection: str = "subscribers") -> dict:
 # PyHSS (IMS subscriber store)
 # -------------------------------------------------------------------------
 
+async def corrupt_subscriber_credential(
+    imsi: str,
+    ue_container: str | None = None,
+) -> dict:
+    """Corrupt one subscriber's K (authentication key) in PyHSS's MySQL.
+
+    Targets exactly one row in the `auc` table — UE1 fails authentication
+    while every other UE keeps working. Per CDR-0001 §2 and Task 1.1.
+
+    Mechanism (per CDR-0001 Task 1.1):
+      1. SELECT the current `ki` for the IMSI (snapshotted for heal).
+      2. Flip the high bit of the first hex byte (XOR 0x80) — guaranteed
+         different, still a valid 32-char hex string. Won't collide with
+         the UE's actual SIM key.
+      3. UPDATE auc SET ki = <corrupted> WHERE auc_id = <id>.
+      4. **If a UE container is given, chain `docker restart <ue>` into
+         the inject mechanism itself.** Without this, UE1 stays attached
+         using its cached NAS security context — the corrupted K only
+         bites on the next periodic NAS auth, which is HOURS away (much
+         longer than the 120 s observation window). With the restart,
+         UE1 boots fresh, tries to attach with its USIM K against the
+         now-corrupted HSS K, AKA fails, AMF logs `5GMM cause #20 MAC
+         failure`. Symptoms surface within ~15-25 s of inject.
+      5. Heal command restores the original ki and restarts the UE again
+         so AMF re-attaches cleanly against the restored K (otherwise
+         AMF's cached security context — now pointing at the corrupted
+         K — keeps the UE in the failed state).
+
+    Args:
+        imsi: Target subscriber IMSI (e.g. '001011234567891').
+        ue_container: Optional UE container to restart at inject AND heal
+            (e.g. 'e2e_ue1'). When omitted, the inject only mutates the
+            DB — the fault will be observably silent until next periodic
+            re-auth.
+
+    Returns:
+        {success, mechanism, heal_cmd, detail, original_ki, corrupted_ki, auc_id}
+    """
+    if not imsi.isdigit() or not (10 <= len(imsi) <= 15):
+        raise ValueError(f"Invalid IMSI: '{imsi}' (must be 10-15 digits)")
+
+    # Validate ue_container up-front (used in both mechanism and heal).
+    # An invalid name caught late would leave the DB corrupted with no
+    # registered heal — fail fast before any SQL is issued.
+    if ue_container is not None and ue_container not in ("e2e_ue1", "e2e_ue2"):
+        raise ValueError(f"Unsupported ue_container: {ue_container}")
+
+    safe_imsi = shlex.quote(imsi)
+    db_args = "-u pyhss -pims_db_pass ims_hss_db"
+
+    # Step 1: look up auc_id and current ki via a JOIN over auc + subscriber.
+    # `-N -B` strips column headers and uses tab separation for easy parsing.
+    select_sql = (
+        f"SELECT a.auc_id, a.ki FROM auc a "
+        f"JOIN subscriber s ON s.auc_id = a.auc_id "
+        f"WHERE s.imsi = {safe_imsi};"
+    )
+    lookup_cmd = (
+        f"docker exec mysql mysql {db_args} -N -B -e {shlex.quote(select_sql)}"
+    )
+    rc, out = await shell(lookup_cmd)
+    if rc != 0:
+        return {
+            "success": False,
+            "mechanism": lookup_cmd,
+            "heal_cmd": "true",  # no-op heal
+            "detail": f"Lookup failed (rc={rc}): {out[:200]}",
+        }
+
+    rows = [line.strip() for line in out.splitlines() if line.strip()]
+    if not rows:
+        return {
+            "success": False,
+            "mechanism": lookup_cmd,
+            "heal_cmd": "true",
+            "detail": f"No auc row for IMSI {imsi}",
+        }
+    parts = rows[0].split()
+    if len(parts) < 2:
+        return {
+            "success": False,
+            "mechanism": lookup_cmd,
+            "heal_cmd": "true",
+            "detail": f"Unexpected lookup output: {rows[0]!r}",
+        }
+    auc_id, original_ki = parts[0], parts[1]
+
+    # Step 2: compute corrupted K — flip high bit of the first byte
+    if len(original_ki) != 32 or not all(c in "0123456789abcdefABCDEF" for c in original_ki):
+        return {
+            "success": False,
+            "mechanism": lookup_cmd,
+            "heal_cmd": "true",
+            "detail": f"Original ki is not 32-char hex: {original_ki!r}",
+        }
+    first_byte = int(original_ki[:2], 16)
+    corrupted_first = f"{first_byte ^ 0x80:02X}"
+    corrupted_ki = corrupted_first + original_ki[2:]
+
+    # Step 3: apply UPDATE — and, if a UE container is given, also restart
+    # it to force re-attach with the corrupted K (CDR-0001 Task 1.1).
+    update_sql = f"UPDATE auc SET ki = '{corrupted_ki}' WHERE auc_id = {auc_id};"
+    mechanism = (
+        f"docker exec mysql mysql {db_args} -e {shlex.quote(update_sql)}"
+    )
+    if ue_container:
+        mechanism = f"{mechanism} && docker restart {ue_container}"
+
+    # Step 4: build heal — restore K, and bounce the UE for a clean re-attach
+    # against the restored K (symmetric with the inject's restart).
+    heal_sql = f"UPDATE auc SET ki = '{original_ki}' WHERE auc_id = {auc_id};"
+    heal_cmd = (
+        f"docker exec mysql mysql {db_args} -e {shlex.quote(heal_sql)}"
+    )
+    if ue_container:
+        heal_cmd = f"{heal_cmd} && docker restart {ue_container}"
+
+    rc, output = await shell(mechanism)
+    return {
+        "success": rc == 0,
+        "mechanism": mechanism,
+        "heal_cmd": heal_cmd,
+        "detail": (
+            f"Corrupted K for IMSI {imsi} (auc_id={auc_id}). "
+            f"Original snapshotted in heal_cmd."
+        ),
+        # Surfaced for the verifier:
+        "original_ki": original_ki,
+        "corrupted_ki": corrupted_ki,
+        "auc_id": auc_id,
+    }
+
+
 async def delete_subscriber_pyhss(
     subscriber_id: int, pyhss_ip: str = "172.22.0.18"
 ) -> dict:

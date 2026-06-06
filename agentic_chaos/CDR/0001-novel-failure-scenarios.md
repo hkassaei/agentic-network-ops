@@ -25,7 +25,7 @@ This CDR proposes four scenarios that each break a different one of those assump
 
 | # | Scenario | Assumption it breaks | New reasoning forced |
 |---|----------|---------------------|----------------------|
-| 1 | NTP Clock Skew on PyHSS | Space-only | Temporal reasoning |
+| 1 | PyHSS Clock Skew (observability) | Space-only **and** all-signals-mean-something | Distinguishing benign observability noise from real fault (negative control) |
 | 2 | Selective Subscriber Corruption | Global | Per-subscriber comparison |
 | 3 | Asymmetric Path Loss (AMF→gNB) | Symmetric | Directional probing |
 | 4 | PMTU Black-Hole on N3 | Payload-uniform | Size-stratified reasoning |
@@ -34,117 +34,246 @@ Each one is grounded in a documented production failure pattern. Each one extend
 
 ---
 
-## Scenario 1 — NTP Clock Skew on PyHSS
+## Operational Prerequisites for Live-Stack Runs
+
+The scenarios above are implemented and unit-tested against mocked shell — but **three of the four require additional one-time prep before they can produce meaningful results against the live stack**. The fourth (Asymmetric Path Loss) is ready as-is. This section captures the prep work as explicit tasks so future readers know what blockers stand between "the code exists" and "the run produces useful evidence."
+
+### Prep status at a glance
+
+**As of 2026-06-05, all four scenarios are operationally ready.** Three of them required follow-up code/Dockerfile work after the initial CDR; that work is now landed. The PyHSS clock-skew scenario additionally requires the operator to rebuild + redeploy the PyHSS image so the Dockerfile change takes effect on the running stack.
+
+| Scenario | Live-stack readiness | Task status |
+|---|---|---|
+| Asymmetric Path Loss (AMF→gNB) | ✅ **Ready** | Task 1.4 — never needed prep |
+| Selective Subscriber Corruption | ✅ **Ready** | ✅ Task 1.1 done — inject mechanism now chains `docker restart e2e_ue1` so UE1 re-attaches with the corrupted K and AKA failures surface within ~20 s |
+| PMTU Black-Hole on N3 | ✅ **Ready** | ✅ Task 1.2 done — verified from `network/upf/upf.yaml` (`gtpu.server.advertise: UPF_ADVERTISE_IP=172.22.0.8`) that the docker bridge interface (eth0) IS the N3 GTP-U path. Scenario description now documents the reasoning. |
+| PyHSS Clock Skew (Observability) | ✅ **Ready** *(after rebuild)* | ✅ Task 1.3 done — `network/pyhss/Dockerfile` now installs libfaketime and sets `LD_PRELOAD` + `FAKETIME_*` env vars. **Operator must `docker compose build pyhss && docker compose up -d pyhss` to pick up the change.** |
+
+### Task 1.1 ✅ — Selective Subscriber Corruption: add UE re-attach trigger to inject
+
+**Problem.** Changing UE1's K in MySQL does not by itself cause UE1 to fail authentication. UE1 stays attached to the 5G core using its cached NAS security context; re-authentication only happens on the next periodic NAS auth (which is hours, not the 120 s observation window). For symptoms to manifest within the chaos run, the inject must force UE1 to re-attach.
+
+**Options:**
+
+| Option | Effort | Quality |
+|---|---|---|
+| **(a) `docker restart e2e_ue1` chained into inject** | ~5 LoC — symmetric with what the heal already does | Simple, reliable, but slightly heavier-handed than needed. UE1 drops UERANSIM-side context too, not just NAS. |
+| (b) Send a NAS Detach via gNB / send `nr-cli` deregister command to UERANSIM | ~30 LoC, requires verifying nr-cli command is available in the UE container | Cleaner — only NAS state cycles; faster than container restart. |
+| (c) Wait for periodic re-auth | 0 LoC | Not viable — periodic re-auth interval >> observation window. |
+
+**Recommended:** (a) — `docker restart e2e_ue1` chained into inject's mechanism. Already proven to work as a heal-side step; symmetric inject-side use is one extension.
+
+**Resolution (2026-06-05):** Implemented option (a). `corrupt_subscriber_credential` in `agentic_chaos/tools/application_tools.py` now chains `&& docker restart <ue_container>` into the inject mechanism whenever `ue_container` is provided. Validation of `ue_container` moved to the top of the function so an invalid name raises before any SQL is issued (no risk of partial-state corruption with no registered heal). Unit-test coverage added in `TestCorruptSubscriberCredential::test_happy_path_corrupts_first_byte`, `test_invalid_ue_container_raises_before_any_sql`, `test_no_ue_container_omits_restart_from_mechanism`, and `TestHealCommandShape::test_credential_heal_restores_exact_original_k` (which now also asserts inject-side restart).
+
+**Acceptance (operator validation, against live stack):**
+- [x] Inject mechanism includes the UE restart (recorded so it appears in the episode trace) — verified by unit test
+- [ ] After ~10-20 s of observation, AMF logs show `5GMM cause #20 (MAC failure)` for UE1's IMSI
+- [ ] `ran_ue` drops to 1.0 (UE2 only)
+- [ ] UE2's session is provably untouched (calls in progress continue, registered_contacts stays steady at 2.0 → 1.0)
+- [ ] After heal, both UEs back to `2.0`
+
+### Task 1.2 ✅ — PMTU Black-Hole: confirm or generalize the target interface
+
+**Problem.** `inject_pmtu_blackhole` defaults to `iface="eth0"`. On Open5GS UPF, the N3 GTP-U tunnel may ride a separate interface (`ogstun`, `ogstun2`, etc., per the `network/.env` `UPF_*_APN_IF_NAME` variables). If we drop MTU on the wrong iface, the inject succeeds, the verifier confirms it, and the scenario reports green — but the actual N3 GTP-U path stays untouched. **A false-positive injection is the worst possible outcome** because it makes the agent run worthless without anyone noticing.
+
+**Options:**
+
+| Option | Effort | Quality |
+|---|---|---|
+| (a) Manually verify on the live stack which iface carries N3, document the answer, leave `eth0` as default | 10 min | Brittle — assumes the interface is stable across deployments |
+| **(b) Pass the iface explicitly in the scenario library** | ~5 LoC | Simple, explicit, and the scenario YAML becomes the documented contract |
+| (c) Discover N3 iface dynamically from `network_ontology/data/deployment.yaml` (or `network/.env`) | ~30 LoC + ontology-key dependency | Cleanest long-term, but adds a runtime ontology lookup to a fault primitive |
+
+**Recommended:** (b) — set `params["iface"]` explicitly in the scenario library after a one-time live-stack check. Defer (c) to a future ADR once we have a second scenario that needs the same interface-discovery surface (otherwise it's premature abstraction).
+
+**Resolution (2026-06-05):** Implemented option (b). Verified from `network/upf/upf.yaml` that the UPF's GTP-U server binds and advertises on `UPF_ADVERTISE_IP=172.22.0.8` (the docker bridge address that the upf container holds on eth0). The TUN interfaces `ogstun` and `ogstun2` are the *inner* APN delivery points, NOT part of the N3 GTP-U path. Conclusion: eth0 IS N3 in this lab. The scenario already had `params["iface"]="eth0"` set explicitly; the scenario description in `agentic_chaos/scenarios/library.py` now documents the reasoning AND the verification command (`docker exec upf ip route` should show 172.22.0.0/24 via eth0). The fallback for a different deployment is to update `params["iface"]` accordingly.
+
+**Acceptance (operator validation, against live stack):**
+- [x] Scenario description documents *why* eth0 is the right iface AND *how to verify* on a different deployment — added to `pmtu_blackhole_n3.description` in `library.py`
+- [x] The PMTU scenario's `params["iface"]` is set to the verified value (`"eth0"`)
+- [x] Inject mechanism + heal both reference the same iface — verified by unit test (`TestHealCommandShape::test_pmtu_heal_restores_snapshotted_mtu`)
+- [ ] During fault: small RTP packets through UPF continue flowing; large signaling fails
+- [ ] After heal: original MTU is restored on the verified iface
+
+### Task 1.3 ✅ — PyHSS Clock Skew: ship the libfaketime Dockerfile prep
+
+**Problem.** The current PyHSS container has no libfaketime installed and no LD_PRELOAD env, so `inject_clock_skew`'s precheck returns `MISSING` and the inject fails fast (the documented and correct behavior for an unprepped container). The scenario is therefore unrunnable until the prep lands.
+
+**Prep change** (modify `network/pyhss/Dockerfile`):
+
+```dockerfile
+# After the existing apt-get install block:
+RUN apt-get install -y libfaketime \
+    && touch /etc/faketimerc \
+    && chmod 666 /etc/faketimerc
+
+ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1 \
+    FAKETIME_NO_CACHE=1 \
+    FAKETIME_TIMESTAMP_FILE=/etc/faketimerc
+```
+
+Then rebuild + redeploy:
+```bash
+docker compose -p vonr -f network/sa-vonr-deploy.yaml build pyhss
+docker compose -p vonr -f network/sa-vonr-deploy.yaml up -d pyhss
+./scripts/post-deploy-verify.sh
+```
+
+**Risk note.** `LD_PRELOAD` is loaded into *every* binary executed in the container. libfaketime is well-tested and widely deployed, but: (a) sanity-check PyHSS startup logs after the prep lands — PyHSS should boot identically with `FAKETIME` unset / file empty, and (b) be aware that any subprocess PyHSS spawns will also be intercepted. If PyHSS shells out to anything time-sensitive (it doesn't appear to, but worth a quick audit), that subprocess's clock will skew too.
+
+**Resolution (2026-06-05):** Implemented the Dockerfile changes above in `network/pyhss/Dockerfile`. The image now installs libfaketime, creates a world-writable `/etc/faketimerc`, and sets the three `LD_PRELOAD` / `FAKETIME_*` env vars. The `/etc/faketimerc` file is empty at build time so libfaketime is behaviorally a no-op until the chaos inject writes an offset to it. **Operator still needs to rebuild + redeploy PyHSS** for the change to land on the running stack:
+
+```bash
+docker compose -p vonr -f network/sa-vonr-deploy.yaml build pyhss
+docker compose -p vonr -f network/sa-vonr-deploy.yaml up -d pyhss
+./scripts/post-deploy-verify.sh
+```
+
+**Acceptance (operator validation, against live stack — gated on the rebuild above):**
+- [ ] `docker exec pyhss bash -c 'grep -q faketime /proc/1/environ && echo READY'` prints `READY`
+- [ ] `docker exec pyhss test -w /etc/faketimerc && echo writable` prints `writable`
+- [ ] PyHSS health check still passes (`docker logs pyhss` shows clean startup; Diameter Cx peers register)
+- [ ] `inject_clock_skew("pyhss", skew_seconds=2820)` now returns `success=True` instead of the "not configured for libfaketime" message
+- [ ] Verifier confirms `docker exec pyhss date` is ≥ 45 min ahead of host
+- [ ] After heal (`: > /etc/faketimerc`), clocks back in sync
+
+### Task 1.4 — Asymmetric Path Loss: nothing required
+
+The scenario is ready for live-stack runs as-is. Recommended **first scenario to drive end-to-end** because it produces the cleanest signal-to-effort ratio for evaluating v7's response to the four new failure modes.
+
+---
+
+## Scenario 1 — PyHSS Clock Skew (Observability Disruption / Negative Control)
 
 ### One-liner
 
-Step PyHSS's wall clock forward by 47 minutes while leaving every other container in sync. Existing 5G NAS and IMS sessions keep working. New registrations fail with cryptic Diameter / SIP authentication errors that don't look like anything the agent has seen before.
+Step PyHSS's wall clock forward by 47 minutes while leaving every other container in sync. **In this specific lab, no functional outage results** — PyHSS uses pure counter-based SQN, runs Diameter over cleartext SCTP (no certs), and Kamailio's `date_check` module is not loaded. PyHSS log timestamps and Diameter Session-Id high-32 fields drift; that's it. The scenario therefore acts as a **negative-control / observability-disruption test**: does v7 correctly diagnose *"no fault"* even when one NF's timestamps look wildly anomalous to log correlators and screeners?
 
-### Why this scenario matters — a brief history of clock skew in telecom
+### Why clock skew matters in telecom — even when (this) lab is immune
 
-Clocks are the silent third-rail of telco operations. Three reasons:
+Clocks are the silent third-rail of telco operations. The general patterns:
 
-1. **5G NR TDD radio frames are time-aligned across cells.** ±1.5 µs is the typical inter-cell synchronization budget (3GPP TS 38.133 §7.5). When base-station Stratum-1 timing wanders past that, neighboring cells transmit on top of each other during the same TDD subframe — uplink and downlink collide.
+1. **5G NR TDD radio frames are time-aligned across cells.** ±1.5 µs is the typical inter-cell synchronization budget (3GPP TS 38.133 §7.5). When base-station Stratum-1 timing wanders past that, neighboring cells transmit on top of each other during the same TDD subframe.
 
-2. **Diameter sessions carry timestamps.** Session-Id (RFC 6733 §8.8) embeds a `<DiameterIdentity>;<high32>;<low32>;<optional value>` quadruple where the 64-bit number is "monotonically increasing, but the value SHOULD be derived from local time." When two Diameter peers disagree by tens of minutes on time, retransmission, log correlation, and accounting all start lying.
+2. **Diameter sessions carry timestamps.** Session-Id (RFC 6733 §8.8) embeds a quadruple `<DiameterIdentity>;<high32>;<low32>;<opt>` whose high-32 SHOULD be derived from local time. Clock drift makes log correlation, retransmission accounting, and audit trails lie — even when the protocol itself doesn't break.
 
-3. **5G-AKA SQN management is timestamp-flavored.** TS 33.102 §6.3.5 defines the SQN windowing scheme; large clock drift on the HSS makes the SQN-out-of-sync recovery path the *normal* path. The Authentication Reject reason code "MAC failure" / "Synch failure" looks indistinguishable from a real credential compromise — but the actual cause is the clock.
+3. **5G-AKA SQN management may be time-based** (TS 33.102 Annex C.3.2 defines a time-based SQN scheme `SEQ = floor(NOW/Δ)`) — but the standard also defines a counter-based scheme (Annex C.1) and most production HSSes use the latter. **PyHSS 1.0.2 uses pure counter-based SQN** — see verification below.
 
 **Production precedents:**
 
-- **The 2012 leap second.** Linux kernel `hrtimer` bug caused `futex_wait` loops to spin a CPU to 100%. Reddit, LinkedIn, Mozilla, Foursquare, and a number of telco platforms running on Linux took hours to recover. The fix was `date -s "$(date)"` — literally setting the clock to itself, to nudge the kernel out of the bad state. Many ops teams learned that night that "we have monitoring on every NF" doesn't help if the monitoring agent's *own* clock is broken.
+- **The 2012 leap second.** Linux kernel `hrtimer` bug caused `futex_wait` loops to spin a CPU to 100%. Reddit, LinkedIn, Mozilla, Foursquare, and several telco platforms on Linux took hours to recover. The fix was `date -s "$(date)"` — literally setting the clock to itself, to nudge the kernel out of the bad state.
 
-- **GPS Week Number Rollover — April 6, 2019.** The GPS week-number field is 10 bits and wraps every 1024 weeks (≈19.7 years). Receivers without firmware updates jumped back ~19 years on April 6, 2019. Many cellular base stations use GPS-disciplined oscillators as Stratum-1 references; carriers that hadn't audited their receiver firmware saw localized outages. Same root cause as the 1999 rollover, just two decades later.
+- **GPS Week Number Rollover — April 6, 2019.** The GPS week-number field is 10 bits and wraps every 1024 weeks (≈19.7 years). Receivers without firmware updates jumped back ~19 years. Many cellular base stations use GPS-disciplined oscillators as Stratum-1 references; carriers that hadn't audited firmware saw localized outages.
 
-- **General industry pattern.** GPS receivers lose lock during severe ionospheric storms (Kp ≥ 7). When the holdover oscillator drifts past the TDD budget, cells start transmitting at the wrong time. Symptom at the NOC: random handover failures and uplink throughput collapse in specific cell sectors — not in a pattern that maps to any one piece of equipment. The clue is in `gpsd` logs, which nobody looks at first.
+- **General industry pattern.** GPS receivers lose lock during severe ionospheric storms (Kp ≥ 7). Holdover oscillator drift past the TDD budget makes cells transmit at the wrong time; symptom is random handover failures and uplink throughput collapse in specific sectors. The clue is in `gpsd` logs, which nobody looks at first.
 
-The general lesson: **clock faults look like crypto faults, routing faults, or radio faults — anything but what they are.** They are perfectly designed to mislead the first three hypotheses an engineer (or an LLM) reaches for.
+The general lesson: **clock faults look like crypto faults, routing faults, or radio faults — anything but what they are.**
 
-### What this scenario tests in v7
+### Verification of this lab's PyHSS — what we checked
 
-The v7 pipeline has no notion of time as a fault axis. `symptom_classifier.py` buckets symptoms into `transport_layer` / `application_layer` / `mixed` — there is no `time_sync` bucket. The `metric_inventory` per NF doesn't expose `clock_offset_seconds`. The Investigator's standard probes (`ping`, `dig`, `curl`, log greps) won't surface the skew because they don't read `date`.
+Before implementing this scenario as "PyHSS auth breaks under clock skew," we audited the actual PyHSS source (`github.com/nickvsnetworking/pyhss` @ tag `1.0.2`, pinned in `network/pyhss/Dockerfile:63`). Findings:
 
-If v7 diagnoses this correctly without ontology / KB additions, that is genuinely impressive emergent reasoning. The more likely outcome — v7 misattributes to "credential corruption" or "Diameter peer link failure" — is itself the most useful possible signal: it tells us exactly which ontology entry we need to add (`time_sync` failure mode, with `clock_offset_seconds` as the diagnostic metric).
+- **SQN is purely counter-based.** `lib/database.py:1578-1630` increments SQN by exactly **+100 per authentication** (`self.Update_AuC(auc_id, sqn=key_data['sqn']+100)`). Zero references to `time()`, `datetime`, or `floor(now/Δ)` in the SQN/Milenage path. This is TS 33.102 Annex C.1 (sequence-counter), not Annex C.3.2 (time-based). **Clock skew has zero effect on AKA in this lab.**
+- **No NTP daemon inside the PyHSS container.** No `ntpd`/`chrony` references in source. Container inherits clock from the host kernel; nothing inside the container will resist or report a step. The "ntpd panic-step at 1000 s" threshold has no observer in this lab.
+- **Diameter Cx is cleartext SCTP.** `services/diameterService.py:406` opens a bare SCTP listen socket with no TLS wrap. **No cert NotBefore/NotAfter checks** to fail from clock skew.
+- **Kamailio `date_check` module is not loaded.** Neither `kamailio/scscf/scscf.cfg` nor `pcscf.cfg` loads the `permissions` module. **SIP `Date` header drift will not trigger a 400 reject** in this stack.
+
+So the previously claimed symptoms — "MAC failure on new attaches," "Kamailio 400-rejects on `Date` drift," "TLS handshake failures on SBI" — would *not* actually fire in this specific lab.
+
+### What this scenario tests in v7 — re-framed
+
+What does happen with +47 min on PyHSS in this lab:
+
+- All UE registrations and call setups succeed normally
+- PyHSS log timestamps drift 47 min into the future; downstream log aggregators and the chaos episode recorder see PyHSS events 47 min ahead of every other NF
+- Diameter Session-Id high-32 fields carry future-relative values (cosmetic; not protocol-breaking)
+- `docker exec pyhss date` vs every other NF: 47-min discrepancy
+- That's it. The fault is **observability-degrading, not functionality-degrading.**
+
+This makes the scenario a **negative-control / "don't hallucinate a fault" test for v7**. Specifically:
+
+- v7's `AnomalyScreener` may flag PyHSS log-derived metrics as anomalous if any of them are timestamp-bearing (rate-derived metrics, freshness gauges)
+- v7's `SymptomClassifier` has no `time_sync` bucket; flags will spill into `mixed` or `application_layer`
+- v7's `NetworkAnalyst` will be tempted to hypothesize PyHSS faults to explain the timestamp anomalies
+
+**The correct v7 verdict is `INCONCLUSIVE` or "no functional fault detected; observability anomaly on PyHSS clock"** — not "PyHSS auth failure" or "PyHSS Diameter outage." Scoring this scenario as a *false-positive* test (does the agent over-diagnose?) is more valuable than scoring it as a *true-positive* test, because it exposes failure modes of v7's hypothesis-generation under noisy-but-benign signals.
 
 ### Injection mechanism
 
-**Why +47 min specifically?** Arbitrary. It is large enough to clear the first three thresholds that any principled choice would care about — past the ~5-min auth-system clock-skew tolerance (OAuth `iat`/`nbf` slack, Kerberos, the typical TLS handshake clock buffer), past the `ntpd` / `chrony` "panic step" threshold of 1000 s (≈16:40) at which the NTP daemon refuses to self-correct, and past the Kamailio `date_check` default of 30 min that 400-rejects SIP messages with drifted `Date` headers — without going so far that the failure becomes trivially diagnosable (e.g. crossing a 24-hour cert-validity window, which would scream "TLS failure" from every SBI log). 47 lands comfortably in the "obviously wrong, not catastrophically wrong" zone. Any value in roughly the 35 min – 8 h range would exercise the same surfaces. The non-round number is cosmetic — feels less like a staged demo in chaos logs.
+**Why +47 min specifically?** Arbitrary. The original justification cited three thresholds (5-min auth-system slack, ~17-min `ntpd` panic, 30-min Kamailio `date_check`) — but the PyHSS verification above shows none of those thresholds have an enforcer in this lab. Any value large enough to be visible in log diffs would do equally well. Keeping +47 for cosmetic continuity with the historical NOC framing; treat as a free knob in `[+10 min, +24 h]`.
 
-**Approach A — Container with `SYS_TIME` capability (preferred if PyHSS image rebuild is acceptable):**
+**Approach: `libfaketime` LD_PRELOAD.** Cleanest mechanism — no host-side capabilities, no kernel-clock step (which would affect every container sharing the host clock, since Docker has no per-container clock by default unless time namespaces are used). Requires PyHSS to be started with libfaketime pre-loaded and pointed at a runtime-writable timestamp file.
+
+**Required PyHSS prep (one-time, modifies the Dockerfile + compose env):**
+
+```dockerfile
+# In network/pyhss/Dockerfile, after the apt-get install block:
+RUN apt-get install -y libfaketime && touch /etc/faketimerc && chmod 666 /etc/faketimerc
+ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1 \
+    FAKETIME_NO_CACHE=1 \
+    FAKETIME_TIMESTAMP_FILE=/etc/faketimerc
+```
+
+With `FAKETIME_NO_CACHE=1`, every `gettimeofday()` call re-reads the file — no process restart needed when the offset changes.
+
+**Injection (runtime):**
 
 ```bash
-# Add to pyhss compose service:
-#   cap_add: [SYS_TIME]
-# Then:
-docker exec pyhss date -s "@$(( $(date +%s) + 2820 ))"   # +47 min
+docker exec pyhss sh -c 'echo "+47m" > /etc/faketimerc'
 ```
 
-**Approach B — `libfaketime` LD_PRELOAD (no host-side capabilities needed):**
+**Verification:**
 
 ```bash
-# Inject by restarting PyHSS with LD_PRELOAD set, or via runtime FAKETIME file:
-docker exec pyhss sh -c 'echo "+47m" > /etc/faketime.rc'
-docker exec pyhss kill -HUP 1                              # PyHSS re-reads on signal
+HOST_NOW=$(date +%s)
+PYHSS_NOW=$(docker exec pyhss date +%s)
+test $((PYHSS_NOW - HOST_NOW)) -gt 2700   # > 45 min ahead → verified
 ```
 
-**Approach C — Pure netem-equivalent for clocks (no container modification):** Patch `chrony`/`ntpd` egress to drop or delay, and rely on PyHSS's own NTP client to drift naturally over hours. Too slow for a chaos run; rejected.
+If `FAKETIME_TIMESTAMP_FILE` is not configured in PyHSS, the inject returns `success=False` with a clear message pointing at this section of the CDR. The scenario then fails fast and the heal step is a harmless no-op (writes an empty file that doesn't exist on an unprepped container — error swallowed).
 
-**New fault primitive:** `clock_skew` in a new `tools/time_tools.py`. Signature:
-
-```python
-async def inject_clock_skew(
-    target: str,
-    skew_seconds: int,           # positive = forward, negative = backward
-    ttl_seconds: int = 600,
-    method: str = "faketime",    # "faketime" | "sys_time"
-) -> Fault: ...
-```
-
-### Expected symptoms
+### Expected symptoms (after re-framing)
 
 | Surface | Observation |
 |---------|-------------|
-| Existing UE1 / UE2 NAS + IMS sessions | Green. Calls in progress continue. `ims_usrloc_pcscf:registered_contacts == 2.0` stays steady. **This is the misleading signal.** |
-| New UE registration attempts | Fail at Authentication stage. AMF logs `5GMM cause #20 (MAC failure)` or `#21 (Synch failure)` depending on which side rejects. |
-| PyHSS Diameter logs | Session-Id timestamps 47 min in the future; CSCFs and AUSF process MAR/SAR responses but `pyhss_diameter_response_latency_ms` shows wild values because the latency calc uses local-now minus response-timestamp. |
-| IMS digest auth (if a SIP REGISTER is retried) | `Date` header drift > RFC 3261 §20.17 tolerance — Kamailio may 400-reject. |
-| `docker exec pyhss date` vs other NFs | Discrepancy obvious — but only if the agent thinks to ask. |
-| All container health checks | Green. CPU, memory, restart count: nominal. |
+| All UE registrations + active sessions | Green. No functional impact. |
+| PyHSS log timestamps | 47 min in the future relative to every other NF. |
+| `docker exec pyhss date` vs other NFs | 47-min discrepancy — the discriminating signal **if** the agent reaches for it. |
+| Any rate metric derived from PyHSS log timestamps | May appear as zero rate (timestamps too far in future to be in current window) or as a sudden spike (depending on aggregation logic). |
+| Diameter Session-Id high-32 in PyHSS responses | Future-relative values; cosmetic. |
+| All container health checks, CPU, memory | Nominal. |
+| AKA, Diameter Cx, SIP Digest auth | All function normally. **No 5GMM #20/#21, no Kamailio 400-reject, no SBI TLS failure.** |
 
 ### Ground-truth label
 
 ```yaml
-root_cause: pyhss_clock_skew
-failure_domain: infrastructure / time_sync
-severity: degraded                              # new-attach-only; existing sessions unaffected
+root_cause: pyhss_clock_skew_observability
+failure_domain: infrastructure / observability
+severity: healthy                              # no functional impact in this lab
 affected_components: [pyhss]
 fault_type: clock_skew
-mechanism: libfaketime +47m
-discriminating_signal: clock_offset_seconds(pyhss) >> clock_offset_seconds(peers)
+mechanism: libfaketime +47m via /etc/faketimerc
+expected_correct_diagnosis: "no functional fault; PyHSS clock skew observability anomaly"
+discriminating_signal: docker_exec_date(pyhss) - docker_exec_date(any_other_nf) > 2700s
 ```
 
 ### Heal procedure
 
 ```bash
-# Approach A:
-docker exec pyhss ntpdate -u pool.ntp.org \
-  || docker exec pyhss date -s "@$(date +%s)"   # restore from host now
+# Restore zero offset; libfaketime re-reads next gettimeofday() (FAKETIME_NO_CACHE=1)
+docker exec pyhss sh -c ': > /etc/faketimerc'
 
-# Approach B:
-docker exec pyhss rm /etc/faketime.rc
-docker exec pyhss kill -HUP 1
-
-# Universal fallback (recorded in SQLite registry):
-docker restart pyhss                            # clock re-syncs from host on boot
+# Universal fallback (also recorded in SQLite registry):
+docker restart pyhss
 ```
 
-Heal is idempotent. TTL reaper auto-heals at 600 s if the run is interrupted.
+Heal is idempotent. On unprepped containers (no `/etc/faketimerc`), `: > /etc/faketimerc` either no-ops or creates an empty file — either way harmless.
 
 ### Implementation notes
 
-- Toolbelt audit (`scripts/audit-container-tooling.sh`) must add `date` (universal) and ideally `ntpq` / `chronyc` to the required binary list for time-sensitive NFs.
-- Add `clock_offset_seconds` to `network_ontology/data/metrics.yaml` per NF, with `fault_layer: infrastructure` and `agent_exposed: true`. Source can be a one-liner sidecar that polls `(date +%s) - $(curl -s host_time_endpoint)`.
-- Add a `time_sync` failure mode to `causal_chains.yaml` with observable symptoms (MAC failure on new attaches, session-id drift, large delta vs. peers).
+- **Scenario is opt-in.** Not added to `scripts/run-all-chaos-scenarios.sh` by default — requires the Dockerfile prep above. Runnable explicitly via `python -m agentic_chaos run "PyHSS Clock Skew (Observability)" --agent v7`.
+- **Future companion scenario** — once SBI OAuth posture in Open5GS is audited, propose a separate scenario targeting whichever NF *does* enforce time agreement (likely AMF/AUSF if SBI OAuth `nbf`/`exp` validation is wired up).
+- **No mandatory ontology additions** for this scenario alone, since the "correct" v7 verdict is "no fault" — but `observability_clock_drift` is still a useful causal-chain entry to inhibit false positives.
 
 ---
 
@@ -422,14 +551,14 @@ Recorded as a two-step heal in the fault registry. Idempotent: re-running heal o
 
 ## Implementation Roadmap
 
-Ordered by cheapest-first / earliest payoff:
+**Current state (2026-06-05): all four scenarios are CODE-COMPLETE, unit-tested, AND prep-complete.** The only remaining gate is operator-side: rebuild + redeploy PyHSS for the clock-skew Dockerfile change to take effect (the other three scenarios run against the existing stack as-is).
 
-| # | Scenario | Effort | Net new code | KB additions | Earliest meaningful return |
-|---|----------|--------|--------------|--------------|-----------------------------|
-| 1 | Asymmetric Path Loss | Small | ~30 LoC (`direction` arg to existing `network_loss`) | `asymmetric` symptom bucket | First scenario to expose path-walk single-direction bias |
-| 2 | Selective Subscriber Corruption | Medium | ~80 LoC (new `application_tools` action + snapshot/restore + healer special case) | `selective` blast radius + `per_subscriber` symptom shape | First scenario to force per-UE divergence reasoning |
-| 3 | NTP Clock Skew | Medium | ~100 LoC (new `time_tools.py`, `libfaketime` plumbing, audit-tooling additions) | `time_sync` failure mode + `clock_offset_seconds` metric | First time-domain fault; high learning value |
-| 4 | PMTU Black-Hole | Medium | ~80 LoC (compound primitive in `datapath_tools.py`) + a size-stratified counter | `size_dependent` symptom shape; new size-bucket metric | Forces size-aware reasoning; most "creative" expected behavior from v7 |
+| # | Scenario | Code status | Live-stack prep | Net new code | KB additions |
+|---|----------|-------------|-----------------|--------------|--------------|
+| 1 | Asymmetric Path Loss | ✅ Done | ✅ Task 1.4 — none needed | ~30 LoC (`peer_ip` arg on `network_loss`) | `asymmetric_path_degradation` causal chain + `asymmetric_path` signature |
+| 2 | Selective Subscriber Corruption | ✅ Done | ✅ Task 1.1 — inject now restarts UE for re-attach | ~80 LoC (new `application_tools` action + snapshot/restore + heal w/ UE restart) | `subscriber_data_corruption` causal chain + `selective_subscriber_failure` signature |
+| 3 | PMTU Black-Hole | ✅ Done | ✅ Task 1.2 — N3=eth0 verified from `upf.yaml`; scenario description documents reasoning | ~80 LoC (compound primitive in `datapath_tools.py`) | `pmtu_blackhole` causal chain + `pmtu_blackhole_n3` signature |
+| 4 | PyHSS Clock Skew (observability) | ✅ Done | ✅ Task 1.3 — Dockerfile updated; **operator rebuild + redeploy required** | ~60 LoC (new `time_tools.py`) | `observability_clock_drift` causal chain + `clock_drift_observability_only` signature |
 
 Total: roughly one engineer-week to implement all four end-to-end, including the ontology additions and the toolbelt-audit updates. The two `Medium` ones could be split across two engineers in parallel; the `Small` one is genuinely a few hours including a test run.
 
@@ -439,10 +568,10 @@ Each one breaks a different implicit assumption of the v7 pipeline:
 
 - **Asymmetric Path Loss** — symmetric reachability
 - **Selective Subscriber Corruption** — global blast radius
-- **NTP Clock Skew** — space-only failures
+- **PyHSS Clock Skew** — over-diagnosis on benign noisy signals (negative control)
 - **PMTU Black-Hole** — payload-uniform failures
 
-None of the four reduces to any of the others. Each one names a *specific* ontology / metric / classifier gap. After these four land, the agent should be substantially more robust to the classes of failure that NOCs actually call out at 3 a.m.
+None of the four reduces to any of the others. Each one names a *specific* ontology / metric / classifier gap (or, for scenario 1, a *false-positive* failure mode). After these four land, the agent should be substantially more robust to the classes of failure — and non-failures — that NOCs actually call out at 3 a.m.
 
 ---
 
@@ -462,17 +591,39 @@ None of the four reduces to any of the others. Each one names a *specific* ontol
 
 For each of the four scenarios, "shipped" means:
 
-- [ ] Scenario added to `agentic_chaos/scenarios/library.py`
-- [ ] Fault primitive(s) implemented in the appropriate `tools/*_tools.py`, with corresponding heal logic and registry-recorded heal command
-- [ ] Ontology additions landed in `network_ontology/data/` and re-seeded (`./scripts/reseed-ontology.sh`)
-- [ ] Toolbelt audit (`scripts/audit-container-tooling.sh`) updated for any new required binaries
-- [ ] Scorer categories added where applicable
+**Code (all four scenarios — current status as of 2026-06-05):**
+
+- [x] Scenario added to `agentic_chaos/scenarios/library.py`
+- [x] Fault primitive(s) implemented in the appropriate `tools/*_tools.py`, with corresponding heal logic and registry-recorded heal command
+- [x] Ontology additions landed in `network_ontology/data/` (`causal_chains.yaml` + `symptom_signatures.yaml`)
+- [x] Scorer fault-type descriptions extended (`agentic_chaos/scorer.py:_FAULT_TYPE_DESCRIPTIONS`)
+- [x] Three scenarios added to the batch runner (`scripts/run-all-chaos-scenarios.sh`); clock skew left opt-in pending prep
+- [x] Unit-test coverage: 39 targeted tests in `agentic_chaos/tests/test_cdr_0001_scenarios.py` — per-function, per-verifier, dispatch-routing, well-formedness, full lifecycle (inject → verify → heal → post-heal), heal-command-shape
+- [x] Ontology re-seeded after YAML changes (`./scripts/reseed-ontology.sh`) — *operator step on first run*
+
+**Live-stack prerequisites (per Operational Prerequisites section):**
+
+- [x] **Task 1.1** ✅ — Selective Subscriber Corruption: inject mechanism now chains `&& docker restart <ue_container>` after the UPDATE (`agentic_chaos/tools/application_tools.py:corrupt_subscriber_credential`)
+- [x] **Task 1.2** ✅ — PMTU Black-Hole: N3=eth0 confirmed from `network/upf/upf.yaml` (`gtpu.server.advertise: UPF_ADVERTISE_IP=172.22.0.8`); scenario description in `library.py` now documents the reasoning AND the verification command
+- [x] **Task 1.3** ✅ — PyHSS Clock Skew: `network/pyhss/Dockerfile` installs libfaketime, creates writable `/etc/faketimerc`, sets `LD_PRELOAD` + `FAKETIME_NO_CACHE` + `FAKETIME_TIMESTAMP_FILE` env vars. **Operator action remaining:** `docker compose build pyhss && docker compose up -d pyhss` to pick up the change.
+- [x] **Task 1.4** ✅ — Asymmetric Path Loss: no prep needed
+
+**Live-stack validation (per scenario, once prep above is done):**
+
 - [ ] At least one successful end-to-end run against v7 from a healthy stack, with the episode JSON + markdown written to `agentic_ops_v7/docs/agent_logs/`
-- [ ] At least one chaos batch run (`./scripts/run-all-chaos-scenarios.sh v7`) completes with the new scenario included
-- [ ] Heal is verified idempotent — running heal twice on the same fault produces no errors
+- [ ] Heal is verified idempotent against live state — running heal twice on the same live fault produces no errors and leaves the stack clean
+- [ ] At least one chaos batch run (`./scripts/run-all-chaos-scenarios.sh v7`) completes including the new scenarios (excluding clock skew until Task 1.3 lands)
 
 ---
 
 ## Status After Review
+
+**Status: Implementation complete; all prerequisite work landed (2026-06-05).**
+
+- All four scenarios are code-complete, unit-tested (40 tests passing), and operationally prepped
+- Three scenarios run against the existing stack as-is: Asymmetric Path Loss, Selective Subscriber Corruption, PMTU Black-Hole
+- PyHSS Clock Skew requires a one-time PyHSS image rebuild + redeploy to pick up the libfaketime Dockerfile change
+
+**Recommended first end-to-end run against the live stack:** Asymmetric Path Loss (AMF→gNB) — cheapest, most idempotent heal, and exercises the v7 path-walker against its known directional-probing gap.
 
 Awaiting review. Comments inline or as a follow-up CDR.

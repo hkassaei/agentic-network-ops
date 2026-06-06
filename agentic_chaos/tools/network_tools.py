@@ -77,12 +77,19 @@ async def inject_latency(
     }
 
 
-async def inject_packet_loss(container: str, loss_pct: float) -> dict:
+async def inject_packet_loss(
+    container: str,
+    loss_pct: float,
+    peer_ip: str | None = None,
+) -> dict:
     """Add packet loss to a container's eth0 interface.
 
     Args:
         container: Container name.
         loss_pct: Percentage of packets to drop (0.1-100).
+        peer_ip: If set, apply loss ONLY to packets destined for this IP
+            (egress-direction, asymmetric loss). If None, apply uniformly
+            on egress to all peers (symmetric — the existing behavior).
 
     Returns:
         {success, mechanism, heal_cmd, pid, detail}
@@ -95,8 +102,23 @@ async def inject_packet_loss(container: str, loss_pct: float) -> dict:
     pid = await _resolve_pid(container)
     ns = _nsenter(pid)
 
-    mechanism = f"{ns} tc qdisc add dev eth0 root netem loss {loss_pct}%"
-    heal_cmd = f"{ns} tc qdisc del dev eth0 root"
+    if peer_ip is None:
+        # Existing symmetric path
+        mechanism = f"{ns} tc qdisc add dev eth0 root netem loss {loss_pct}%"
+        heal_cmd = f"{ns} tc qdisc del dev eth0 root"
+    else:
+        # Asymmetric path — install prio root, attach netem to class 1:1,
+        # filter only packets destined for peer_ip into 1:1. Everything
+        # else goes through the default classes uncharged. tc qdisc del
+        # root tears the whole tree down idempotently.
+        validate_ip(peer_ip)
+        mechanism = (
+            f"{ns} tc qdisc add dev eth0 root handle 1: prio "
+            f"&& {ns} tc qdisc add dev eth0 parent 1:1 handle 10: netem loss {loss_pct}% "
+            f"&& {ns} tc filter add dev eth0 parent 1:0 protocol ip prio 1 "
+            f"u32 match ip dst {peer_ip}/32 flowid 1:1"
+        )
+        heal_cmd = f"{ns} tc qdisc del dev eth0 root"
 
     rc, output = await shell(mechanism)
     return {

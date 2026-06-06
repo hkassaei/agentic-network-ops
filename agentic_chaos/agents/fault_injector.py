@@ -31,6 +31,7 @@ from ..tools.docker_tools import (
     docker_restart,
     docker_stop,
 )
+from ..tools.application_tools import corrupt_subscriber_credential
 from ..tools.network_tools import (
     inject_bandwidth_limit,
     inject_corruption,
@@ -42,6 +43,7 @@ from ..tools.verification_tools import (
     verify_container_status,
     verify_latency,
     verify_reachable,
+    verify_subscriber_credential_corrupted,
     verify_tc_active,
     verify_tc_with_pid,
     verify_unreachable,
@@ -219,13 +221,35 @@ class FaultInjector(BaseAgent):
                 target, params["delay_ms"], params.get("jitter_ms", 0)
             )
         elif fault_type == "network_loss":
-            return await inject_packet_loss(target, params["loss_pct"])
+            return await inject_packet_loss(
+                target,
+                params["loss_pct"],
+                peer_ip=params.get("peer_ip"),
+            )
         elif fault_type == "network_corruption":
             return await inject_corruption(target, params["corrupt_pct"])
         elif fault_type == "network_bandwidth":
             return await inject_bandwidth_limit(target, params["rate_kbit"])
         elif fault_type == "network_partition":
             return await inject_partition(target, params["target_ip"])
+        elif fault_type == "subscriber_credential_corruption":
+            return await corrupt_subscriber_credential(
+                imsi=params["imsi"],
+                ue_container=params.get("ue_container"),
+            )
+        elif fault_type == "clock_skew":
+            from ..tools.time_tools import inject_clock_skew
+            return await inject_clock_skew(
+                target,
+                skew_seconds=params["skew_seconds"],
+            )
+        elif fault_type == "pmtu_blackhole":
+            from ..tools.datapath_tools import inject_pmtu_blackhole
+            return await inject_pmtu_blackhole(
+                target,
+                mtu=params.get("mtu", 1280),
+                iface=params.get("iface", "eth0"),
+            )
         else:
             return {"success": False, "detail": f"Unknown fault type: {fault_type}"}
 
@@ -254,6 +278,29 @@ class FaultInjector(BaseAgent):
                 r = await verify_unreachable(target, target_ip)
                 return {"verified": r["unreachable"], "detail": r["detail"]}
             return await verify_tc_active(target)
+        elif fault_type == "subscriber_credential_corruption":
+            # Re-read the K column; verify it equals what we corrupted to.
+            corrupted = inject_result.get("corrupted_ki")
+            imsi = params.get("imsi", "")
+            if not corrupted or not imsi:
+                return {"verified": False, "detail": "Missing corrupted_ki or imsi"}
+            r = await verify_subscriber_credential_corrupted(imsi, corrupted)
+            return {"verified": r["verified"], "detail": r["detail"]}
+        elif fault_type == "clock_skew":
+            # Verify by comparing container `date` vs host `date`.
+            from ..tools.time_tools import verify_clock_skew
+            r = await verify_clock_skew(
+                target, min_skew_seconds=params["skew_seconds"] - 60
+            )
+            return {"verified": r["verified"], "detail": r["detail"]}
+        elif fault_type == "pmtu_blackhole":
+            from ..tools.datapath_tools import verify_pmtu_blackhole
+            r = await verify_pmtu_blackhole(
+                target,
+                iface=params.get("iface", "eth0"),
+                expected_mtu=params.get("mtu", 1280),
+            )
+            return {"verified": r["verified"], "detail": r["detail"]}
         else:
             return {"verified": False, "detail": f"No verifier for {fault_type}"}
 

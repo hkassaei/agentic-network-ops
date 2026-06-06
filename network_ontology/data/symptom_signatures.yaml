@@ -225,3 +225,90 @@ signatures:
           the MySQL backend may be slow. Check pyhss logs for query delays.
         tools: [read_container_logs]
     related_chain: ims_signaling_chain_degraded
+
+  # =========================================================================
+  # CDR-0001 NOVEL SIGNATURES (added 2026-06-05)
+  # =========================================================================
+
+  asymmetric_path:
+    diagnosis: "Asymmetric path degradation — loss/latency in one direction only between two NFs"
+    failure_domain: transport
+    confidence: high
+    match_all:
+      - probe: "measure_rtt(source=A, dest=B)"
+        condition: "loss > 10% OR rtt > expected_baseline + 50ms"
+      - probe: "measure_rtt(source=B, dest=A)"
+        condition: "loss < 5% AND rtt within baseline"
+    rule_out:
+      - tool: read_container_logs
+        check: "Confirm one side declares SCTP/TCP association DOWN while the other reports it UP"
+    related_chain: asymmetric_path_degradation
+    note: "The discriminating signal is divergence between bidirectional probes — symmetric reachability assumptions FAIL here. Both endpoints must be probed."
+
+  selective_subscriber_failure:
+    diagnosis: "Subscriber data corruption — per-IMSI authentication failure with healthy aggregate metrics"
+    failure_domain: subscriber_data
+    confidence: very_high
+    match_all:
+      - log_pattern: "MAC failure"
+        at: amf
+      - condition: "Same IMSI repeated across multiple AKA failure log lines"
+      - metric: ran_ue
+        condition: "< expected_baseline (oscillating)"
+      - metric: ims_usrloc_pcscf:registered_contacts
+        condition: "< expected_baseline by exactly 1"
+    rule_out:
+      - tool: query_subscriber
+        check: "Compare K/OPC field for failing IMSI vs. a known-working IMSI — divergence confirms"
+      - tool: get_nf_metrics
+        check: "pyhss container health green, no NF-wide auth-rate anomaly — confirms it's NOT a PyHSS outage"
+    related_chain: subscriber_data_corruption
+    note: "SELECTIVE failure — one UE breaks, others work. Aggregate counters may NOT cross screener thresholds. Per-IMSI comparison is the diagnostic."
+
+  pmtu_blackhole_n3:
+    diagnosis: "PMTU black-hole on the data plane — small packets pass, large packets silently dropped"
+    failure_domain: data_plane
+    confidence: high
+    match_all:
+      - probe: "get_dp_quality_gauges"
+        condition: "voice (small-RTP) MOS and loss_ratio at baseline"
+      - metric: fivegs_ep_n3_gtp_indatapktn3upf
+        condition: "still incrementing (small packets are flowing)"
+    match_any:
+      - log_pattern: "Request Timeout|408"
+        at: pcscf
+        condition: "new SIP INVITE transactions timing out"
+      - condition: "New PDU Session Establishment never completes (large NAS Accept dropped)"
+        at: amf
+    rule_out:
+      - tool: measure_rtt
+        check: "Small ICMP packets succeed — rules out partition and pure loss"
+    related_chain: pmtu_blackhole
+    note: "SIZE-DEPENDENT failure. Discriminator vs. partition: small packets pass. Discriminator vs. uniform loss: voice unaffected. Discriminator vs. latency: no delay, just silent drop above ~1240 B."
+
+  clock_drift_observability_only:
+    diagnosis: "Observability-only clock drift — one NF's wall clock differs from peers; no functional impact"
+    failure_domain: infrastructure / observability
+    confidence: high
+    match_all:
+      - probe: "shell(container=X, cmd='date +%s')"
+        condition: "delta vs host or peer NFs > 300 seconds"
+      - metric: ran_ue
+        condition: "at expected baseline"
+      - metric: amf_session
+        condition: "at expected baseline"
+      - metric: ims_usrloc_pcscf:registered_contacts
+        condition: "at expected baseline"
+    rule_out:
+      - tool: get_nf_metrics
+        check: "All FUNCTIONAL metrics steady — only timestamp-derived rates may look anomalous"
+      - tool: read_container_logs
+        check: "No auth failures, no Diameter timeouts, no SIP rejections — confirms benign drift"
+    related_chain: observability_clock_drift
+    note: |
+      NEGATIVE-CONTROL signature. The correct diagnosis under this
+      pattern is 'no functional fault detected; clock-drift observability
+      anomaly on <NF>.' Diagnosing a functional outage on this signature
+      is a FALSE POSITIVE — the agent must distinguish benign noise from
+      real fault. See CDR-0001 §1 for the verification that established
+      this is observability-only in the current lab.

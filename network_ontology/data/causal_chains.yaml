@@ -1914,3 +1914,274 @@ causal_chains:
       - "derived.rtpengine_loss_ratio > 0.05 AND pcscf_sip_error_ratio == 0 AND UPF N3 counters unchanged → rtpengine-specific media fault"
       - "derived.rtpengine_loss_ratio > 0.05 AND UPF out/in GTP counters also degraded → fault is upstream (N3 path or gNB), rtpengine is an observer"
       - "MOS drops but loss_ratio stays at 0 → check jitter, not packet loss"
+
+  # =========================================================================
+  # CDR-0001 NOVEL FAILURE MODES (added 2026-06-05)
+  # =========================================================================
+
+  asymmetric_path_degradation:
+    description: |
+      Packet loss or latency that applies only in ONE direction between
+      two NFs. Causes the two endpoints to disagree about whether the
+      link is healthy: A says "I can't reach B" while B says "A is fine,
+      it pings me clean." Common in SDN underlays where forward and
+      reverse paths take different routes, in cross-AZ cloud deployments
+      where one direction has congested queues, or after a one-way BFD
+      failure that didn't propagate into the routing table. Breaks the
+      symmetric-reachability assumption that every existing failure
+      mode in this ontology implicitly relies on.
+    affected_interface: any L3 link between two NFs
+    affected_protocol: any IP-bearing protocol (SCTP/NGAP, GTP-U, SIP)
+    failure_domain: transport
+    severity: degraded
+
+    possible_causes:
+      - "SDN underlay using non-reversible ECMP hash"
+      - "Asymmetric MPLS LSP with one degraded transit hop"
+      - "Cross-AZ cloud peering with one-way queue congestion"
+      - "One-way BFD failure that didn't trigger a route update"
+      - "Stateful firewall with asymmetric rule order"
+      - "IPsec SA re-key race — one direction encrypts, the other can't decrypt yet"
+
+    observable_symptoms:
+      immediate:
+        - symptom: "Endpoint A→B ping shows >10% loss; endpoint B→A ping shows 0% loss (or vice versa)"
+          source: measure_rtt
+          note: "Bidirectional probing from BOTH endpoints is the only reliable signal."
+        - symptom: "SCTP/TCP association marked DOWN on one side, UP on the other"
+          source: read_container_logs
+          at: any
+        - symptom: "Protocol heartbeats arrive on one side but not the other"
+          source: read_container_logs
+          lag: "association-timeout dependent (~3-15s)"
+
+      cascading:
+        - branch: "control_plane"
+          condition: "Loss direction is from control-plane source (e.g. AMF→gNB)"
+          effect: |
+            New attachments fail; existing sessions on the data plane
+            (N3 UPF↔gNB) survive because they don't traverse the
+            affected control-plane link.
+          mechanism: |
+            Initial UE Message reaches the destination; the reply
+            (Authentication Request) is dropped on egress; UE retries
+            at NAS timer and eventually re-selects cell.
+          observable_metrics:
+            - ran_ue            # may stay steady or oscillate
+            - gnb               # disagreement: 1.0 from gNB POV, may be 0.0 from AMF POV
+            - amf_session       # existing sessions unaffected
+
+    diagnostic_approach:
+      - tool: measure_rtt
+        args: {container: "<source_A>", target_ip: "<dest_B_ip>"}
+        purpose: "Probe direction A→B"
+        priority: 1
+      - tool: measure_rtt
+        args: {container: "<source_B>", target_ip: "<dest_A_ip>"}
+        purpose: "Probe direction B→A — divergence vs. step 1 IS the diagnostic signal"
+        priority: 2
+      - tool: get_nf_metrics
+        purpose: "Compare association state at both endpoints — disagreement is the discriminator"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "ping_loss(A→B) >> ping_loss(B→A) → asymmetric path; the lossy direction is the egress qdisc / SDN forward path"
+      - "Both endpoints disagree about association state (one UP, one DOWN) → strongly suspect asymmetry"
+
+  subscriber_data_corruption:
+    description: |
+      One or a small subset of subscribers have corrupted credential
+      data in the HSS / UDR, while every other subscriber is unaffected.
+      Manifests as per-IMSI authentication failures. Every container is
+      healthy; every link is clean; the aggregate pyhss/HSS auth-failure
+      counter ticks slowly because most subscribers still succeed. The
+      fault lives in DATA, not infrastructure. This is the first failure
+      mode in the ontology where the blast radius is SELECTIVE — one UE
+      breaks, others continue.
+    affected_interface: Cx / Sh (HSS APIs)
+    affected_protocol: 5G-AKA / EPS-AKA / SIP Digest
+    failure_domain: subscriber_data
+    severity: partial
+
+    possible_causes:
+      - "Botched OSS/BSS provisioning run that updated some subscribers and skipped others"
+      - "HSS↔HLR replication lag during regional failover"
+      - "Bad CRUD operation from a customer-care console"
+      - "Database chunk split / shard migration leaving stale data"
+      - "Manual DB tinkering by an operator (no audit trail)"
+
+    observable_symptoms:
+      immediate:
+        - symptom: "Per-IMSI authentication failures concentrated on one or few subscribers"
+          source: read_container_logs
+          at: amf
+        - symptom: "Other subscribers register and call normally"
+          source: get_nf_metrics
+        - symptom: "Aggregate pyhss_auth_failures_total ticks slowly — may not cross screener threshold"
+          source: get_nf_metrics
+          at: pyhss
+        - symptom: "AMF logs '5GMM cause #20 MAC failure' or '#21 Synch failure' for the affected IMSI"
+          source: read_container_logs
+
+      cascading:
+        - branch: "ue_reattach_loop"
+          condition: "Affected UE is online and attempting registration"
+          effect: |
+            RRC Connection Setup repeats every T3510 (15s) for the
+            affected IMSI's TMSI; ran_ue oscillates between N-1 and N
+            as the UE drops in and out.
+          mechanism: |
+            UE attaches, AMF triggers AKA, AUSF/UDM/PyHSS return a
+            challenge derived from the corrupted K; UE's USIM computes
+            RES with its OWN (correct) K → mismatch → AMF rejects with
+            MAC failure → UE detaches and retries.
+          observable_metrics:
+            - ran_ue
+            - amf_session
+            - ims_usrloc_pcscf:registered_contacts
+
+    diagnostic_approach:
+      - tool: read_container_logs
+        args: {container: "amf", grep: "MAC failure|Synch failure"}
+        purpose: "Identify which IMSI(s) are failing AKA — the discriminating signal"
+        priority: 1
+      - tool: get_nf_metrics
+        purpose: "Compare ran_ue vs amf_session vs registered_contacts — divergent values per UE are the signal"
+        priority: 2
+      - tool: query_subscriber
+        args: {imsi: "<failing_imsi>"}
+        purpose: "Inspect the subscriber's credential record directly"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "One specific IMSI fails auth in a loop, others succeed → subscriber data corruption (NOT a NF-level fault)"
+      - "Per-IMSI MAC/Synch failure with healthy aggregate metrics → data, not infrastructure"
+
+  pmtu_blackhole:
+    description: |
+      Path MTU Discovery is defeated by the combination of (1) a lower
+      effective MTU on some hop along the path and (2) silently dropped
+      ICMP "fragmentation needed" replies. Small packets pass cleanly;
+      large packets are silently lost. The sender never learns to back
+      off. Voice (small RTP, ~200 B) is unaffected; large SIP messages,
+      NAS QoS-rule containers, large data-plane payloads vanish. The
+      first failure mode in the ontology with PAYLOAD-SIZE as the
+      discriminator.
+    affected_interface: any IP-bearing link with a size-mismatched hop
+    affected_protocol: any (size-dependent only)
+    failure_domain: data_plane
+    severity: degraded
+
+    possible_causes:
+      - "New IPsec tunnel adding 56 B of overhead with no inner-MTU update"
+      - "VxLAN-encapsulated overlay reducing effective MTU by 50 B"
+      - "Security-hardening change dropping all ICMP at an edge, killing PMTUD"
+      - "MPLS LSP with insufficient buffer headroom on a transit router"
+      - "Cloud VPC peering across regions with different jumbo-frame settings"
+
+    observable_symptoms:
+      immediate:
+        - symptom: "Voice calls in progress sound perfect (small RTP packets)"
+          source: get_dp_quality_gauges
+          note: "MISLEADING — masks the underlying fault"
+        - symptom: "New VoNR call setups time out at 408 (large SIP INVITE with SDP)"
+          source: read_container_logs
+          at: pcscf
+        - symptom: "New PDU Session Establishment never completes (large NAS Accept)"
+          source: read_container_logs
+          at: amf
+        - symptom: "tcpdump on the affected interface shows large packets entering, no ICMP-Frag-Needed leaving"
+          source: tcpdump  # if available
+
+      cascading:
+        - branch: "control_plane_large_messages"
+          condition: "Any new IMS or NAS procedure requiring a payload > MTU"
+          effect: |
+            Transaction times out at protocol layer; retransmissions
+            also fail (same size, same drop). Voice paths using small
+            packets are unaffected.
+          mechanism: |
+            Large packet exceeds path MTU; intermediate hop normally
+            sends ICMP Frag-Needed back; that ICMP is dropped at the
+            same hop; sender keeps transmitting the same too-large
+            packet until protocol gives up.
+          observable_metrics:
+            - pcscf.avg_register_time_ms     # spikes for large REGISTERs
+            - icscf.rcv_requests_register_per_ue  # drops for large registrations
+
+    diagnostic_approach:
+      - tool: get_dp_quality_gauges
+        purpose: "Confirm voice (small RTP) is clean — rules out pure loss / pure partition"
+        priority: 1
+      - tool: read_container_logs
+        args: {container: "pcscf", grep: "408|timeout|retransmission"}
+        purpose: "Detect large-message failures while voice continues"
+        priority: 2
+      - tool: get_nf_metrics
+        purpose: "Verify GTP-U N3 in-counter keeps incrementing (small packets pass) but signaling metrics show timeouts"
+        priority: 3
+
+    key_diagnostic_signal:
+      - "Voice OK + new signaling fails + container health green → size-dependent drop (PMTU black-hole)"
+      - "GTP-U N3 in-counter still incrementing while new SIP/NAS transactions time out → some packets pass, others don't, by size"
+
+  observability_clock_drift:
+    description: |
+      One NF's wall clock is significantly skewed from the rest of the
+      stack. In some deployments this breaks Diameter session matching,
+      TLS handshakes (cert NotBefore/NotAfter), and SIP Date-header
+      checks. In THIS lab, PyHSS uses counter-based SQN, Diameter Cx is
+      cleartext SCTP, and Kamailio's date_check module is not loaded
+      (see CDR-0001 §1 verification) — so the skew is OBSERVABILITY-
+      ONLY: log timestamps drift, Session-Id high-32 fields drift,
+      screeners may flag derived rate metrics as anomalous, but no
+      protocol breaks. This entry exists primarily as a NEGATIVE
+      CONTROL — to inhibit hallucinated functional-fault diagnoses
+      when the observable signature is benign timestamp drift.
+    affected_interface: none (observability surface only)
+    affected_protocol: none (log + accounting layers only)
+    failure_domain: infrastructure / observability
+    severity: healthy  # no functional impact in this lab
+
+    possible_causes:
+      - "NTP daemon failure on the affected NF"
+      - "Manual operator clock-set"
+      - "libfaketime or time-namespace experiment"
+      - "GPS-disciplined oscillator failure feeding the host clock"
+
+    observable_symptoms:
+      immediate:
+        - symptom: "docker exec <nf> date returns a timestamp differing from the host or other NFs"
+          source: shell  # diagnostic, not a probe in metric_inventory
+        - symptom: "NF's log timestamps appear in the future / past relative to other NFs"
+          source: read_container_logs
+        - symptom: "Anomaly screener may flag timestamp-derived rate metrics on the affected NF"
+          source: get_nf_metrics
+        - symptom: "All functional metrics (registrations, sessions, calls) remain at baseline"
+          source: get_nf_metrics
+
+      cascading:
+        - branch: "no_functional_impact"
+          condition: "PyHSS uses counter-based SQN; SBI is cleartext; Kamailio date_check not loaded"
+          effect: |
+            5G-AKA, Diameter Cx, SIP Digest all function normally. UE
+            registrations and calls proceed. Only the observability
+            surface (logs, Session-Id, derived rates) is affected.
+          mechanism: |
+            With no protocol enforcing time agreement between this NF
+            and its peers, drift has no functional consequence — only
+            log correlators and timestamp-bearing fields lie.
+          observable_metrics: []
+
+    diagnostic_approach:
+      - tool: shell  # diagnostic only — not a standard agent tool yet
+        args: {container: "<suspected_nf>", cmd: "date +%s"}
+        purpose: "Compare to host clock and to other NFs; large delta confirms drift"
+        priority: 1
+      - tool: get_nf_metrics
+        purpose: "Confirm all functional metrics (ran_ue, amf_session, registered_contacts) are at baseline despite log/timestamp anomalies"
+        priority: 2
+
+    key_diagnostic_signal:
+      - "One NF's clock differs from peers by >5 min AND every functional metric is at baseline → observability drift, NOT a functional fault"
+      - "Hallucinated diagnoses of 'PyHSS auth outage' or 'Diameter outage' under these conditions are FALSE POSITIVES — see CDR-0001 §1"

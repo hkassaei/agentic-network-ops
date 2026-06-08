@@ -11,6 +11,40 @@ from pydantic import BaseModel
 
 
 # ---------------------------------------------------------------------------
+# Operator-boundary constants — names that are explicitly OUT_OF_SCOPE
+# for direct agent probes.
+#
+# Per ADR `synthesis_undetected_fault_verdict.md` (Task A): RAN equipment
+# (`nr_gnb`) and customer UEs (`e2e_ue1`, `e2e_ue2`) live outside the NOC's
+# tool surface. A real NOC running a 5G core has no shell on the gNB or
+# on customer phones; the lab models that boundary by excluding them from
+# `AgentDeps.all_containers`.
+#
+# Tools that accept a target-container argument (`measure_rtt`,
+# `get_network_status`, etc.) return a structured `OUT_OF_SCOPE:` response
+# for these names — a STATIC architectural signal the investigator can
+# pattern-match without confusing it with episodic gaps (typo, container
+# crashed, tool error). Single source of truth: this constant.
+# ---------------------------------------------------------------------------
+
+OUT_OF_SCOPE_CONTAINERS: frozenset[str] = frozenset({
+    "nr_gnb",
+    "e2e_ue1",
+    "e2e_ue2",
+})
+
+# Per-name inference pointer — the in-scope probe the agent should reach
+# for when it wants to assess state of an OUT_OF_SCOPE component.
+# Surfaced verbatim in tool error messages and in `get_network_status`
+# JSON so the agent has the redirection at the point of rejection.
+OUT_OF_SCOPE_INFERENCE: dict[str, str] = {
+    "nr_gnb":  "RAN — outside NOC; infer via amf.gnb gauge (1.0 = N2 association up)",
+    "e2e_ue1": "UE — outside NOC; infer via amf.ran_ue gauge + run_kamcmd(pcscf, 'stats.get_statistics ims_usrloc_pcscf:')",
+    "e2e_ue2": "UE — outside NOC; infer via amf.ran_ue gauge + run_kamcmd(pcscf, 'stats.get_statistics ims_usrloc_pcscf:')",
+}
+
+
+# ---------------------------------------------------------------------------
 # Agent dependencies — injected into every tool via RunContext
 # ---------------------------------------------------------------------------
 

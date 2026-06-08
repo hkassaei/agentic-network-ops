@@ -14,13 +14,49 @@ from pathlib import Path
 
 import httpx
 
-from .models import AgentDeps
+from .models import (
+    AgentDeps,
+    OUT_OF_SCOPE_CONTAINERS,
+    OUT_OF_SCOPE_INFERENCE,
+)
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 _MAX_OUTPUT_LINES = 500
+
+
+def _out_of_scope_response(name: str, *, role: str) -> str:
+    """Structured rejection for probes that target an OUT_OF_SCOPE container.
+
+    ADR `synthesis_undetected_fault_verdict.md`, Task A. The agent sees
+    the `OUT_OF_SCOPE:` prefix and learns to treat this as a STATIC
+    architectural fact (not an episodic gap) — investigator outcome
+    classifier (Task B) keys on the prefix.
+
+    Args:
+        name: The out-of-scope container the agent tried to reach.
+        role: 'source' or 'target' — included in the message so the
+            agent's reasoning trace records which side of the probe
+            the boundary was hit on.
+
+    Returns:
+        A multi-line string starting with `OUT_OF_SCOPE:` that names
+        the boundary, instructs the agent not to retry, and points at
+        the in-scope inference path for this NF.
+    """
+    inference = OUT_OF_SCOPE_INFERENCE.get(name, "no inference pointer authored")
+    return (
+        f"OUT_OF_SCOPE: '{name}' ({role}) lives outside the NOC's tool "
+        f"surface (RAN/UE boundary). This is a STATIC architectural fact, "
+        f"not an episodic gap — do not retry. Infer its state from "
+        f"in-scope metrics:\n"
+        f"  - {inference}\n"
+        f"Use `get_nf_metrics(['amf'])` to read AMF gauges (`gnb`, "
+        f"`ran_ue`) or `run_kamcmd(pcscf, 'stats.get_statistics "
+        f"ims_usrloc_pcscf:')` for IMS-registration state."
+    )
 
 
 async def _shell(cmd: str, cwd: str | None = None) -> tuple[int, str]:
@@ -237,6 +273,13 @@ async def get_network_status(
         "running": running,
         "down_or_absent": down,
         "containers": results,
+        # OUT_OF_SCOPE block — per ADR synthesis_undetected_fault_verdict.md
+        # Task A. Names + inference pointers for the RAN/UE containers
+        # that this tool deliberately does NOT poll. Surfaced so the
+        # agent never asks "is nr_gnb missing because it crashed, or
+        # because the tool doesn't track it?" — the answer is here,
+        # paired with the in-scope probe to use instead.
+        "out_of_scope": dict(OUT_OF_SCOPE_INFERENCE),
     }
     return json.dumps(summary, indent=2)
 
@@ -1068,6 +1111,13 @@ async def measure_rtt(
         message identifying what went wrong (unknown container, IP
         literal supplied, ping binary missing, etc.).
     """
+    # Source-container check: an out-of-scope source should never be
+    # asked of the agent (the LLM was trained against `all_containers`
+    # which excludes them), but if one slips through return the same
+    # OUT_OF_SCOPE signal as for an out-of-scope target — agents must
+    # not be encouraged to retry against RAN/UE resources.
+    if container in OUT_OF_SCOPE_CONTAINERS:
+        return _out_of_scope_response(container, role="source")
     if container not in deps.all_containers:
         return (
             f"Unknown source container '{container}'. "
@@ -1107,6 +1157,15 @@ async def measure_rtt(
             f"IP, infer it from a previous tool output rather than "
             f"guessing. (ADR: agent_tool_args_must_be_names_not_ips.md)"
         )
+
+    # OUT_OF_SCOPE check fires BEFORE the generic "unknown container"
+    # rejection so the agent gets the structured, actionable signal
+    # ("infer via amf.gnb gauge", "do not retry") instead of being told
+    # the target is "unknown" — which it would interpret as an episodic
+    # gap and try again with a different probe. See ADR
+    # synthesis_undetected_fault_verdict.md, Task A.
+    if target in OUT_OF_SCOPE_CONTAINERS:
+        return _out_of_scope_response(target, role="target")
 
     if target not in deps.all_containers:
         return (

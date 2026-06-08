@@ -41,6 +41,16 @@ Your verdict will be forced to `INCONCLUSIVE` if you make fewer than 2 tool call
    - Name the gap explicitly in your `reasoning` text (which probe, which container, which missing binary) so the orchestrator can surface it as a falsification-plan execution failure rather than letting the missing signal silently rebrand as "no contradiction".
    - If the only probes you could run came back `tool_unavailable`, your verdict should be `INCONCLUSIVE` (you cannot falsify what you could not test). Do not return `NOT_DISPROVEN` based on probes that didn't execute.
 
+6. **OUT_OF_SCOPE probes are a STATIC architectural fact, not an episodic gap.** If a probe's tool result begins with `OUT_OF_SCOPE:` — or `get_network_status` lists the target in its `out_of_scope` block — the target lives outside the NOC's tool surface (RAN equipment, customer UE). This is true on every probe attempt and will not change. For that probe:
+   - Set `outcome="out_of_scope"` on the `ProbeResult`.
+   - Set `compared_to_expected="AMBIGUOUS"` (the OUT_OF_SCOPE response alone is not evidence for/against the hypothesis).
+   - **Do NOT retry the same target with a different tool** — every direct probe will return the same OUT_OF_SCOPE signal. The tool message includes an inference pointer (e.g. "infer via amf.gnb gauge"); follow it.
+   - **Verdict-rollup rule (critical):** when a hypothesis targets an OUT_OF_SCOPE NF (e.g. `nr_gnb`), use in-scope metric inference to falsify or confirm:
+     - Hypothesis `"nr_gnb is down"` + AMF metric `gnb == 1.0` and `ran_ue > 0` → **DISPROVEN** (the AMF confirms an active N2 association with attached UEs; the gNB is by inference reachable). Reasoning must name "target is out-of-scope for direct probes; in-scope inference (gnb=1.0, ran_ue=2 from AMF metrics) is inconsistent with the hypothesis."
+     - Hypothesis `"UE1 is broken"` + `ims_usrloc_pcscf:registered_contacts == 2` → **DISPROVEN** (both UEs are IMS-registered; UE1 is by inference healthy).
+     - OUT_OF_SCOPE + no in-scope inference available, OR + in-scope inference is itself ambiguous → **INCONCLUSIVE** (you genuinely cannot falsify; defer).
+   - The point of the OUT_OF_SCOPE rule is that you have a clear DISPROVEN path via in-scope inference. Do not let the tool-rejection inflate to INCONCLUSIVE — that would propagate as a false-positive culprit at Synthesis. See ADR `synthesis_undetected_fault_verdict.md`.
+
 ## Tool constraint
 
 You may only use these tools:
@@ -214,7 +224,7 @@ probes_executed:
     tool_call: "measure_rtt(\"pcscf\", \"icscf\")"
     observation: '[EVIDENCE: measure_rtt("pcscf", "icscf") -> "100% packet loss"]'
     compared_to_expected: CONTRADICTS | CONSISTENT | AMBIGUOUS
-    outcome: consistent | contradicts | ambiguous | tool_unavailable | error
+    outcome: consistent | contradicts | ambiguous | tool_unavailable | error | out_of_scope
     commentary: "Pcscf cannot reach icscf, proves P-CSCF partition"
   - ...
 alternative_suspects: [<name of NF, only if verdict = DISPROVEN>]

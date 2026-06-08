@@ -114,6 +114,48 @@ Score the diagnosis on these dimensions:
    score True. Ties, ambiguity, or "root cause is undetermined" are scored
    False even if the correct NF appears elsewhere in the block.
 
+   **Special case — `verdict_kind: "undetected_fault"`** (ADR
+   `synthesis_undetected_fault_verdict.md`). When the agent's diagnosis
+   carries `verdict_kind: "undetected_fault"`, the agent is explicitly
+   saying "I could not pinpoint a fault; please investigate further" —
+   the humble admission, not a fabricated culprit.
+
+   **Score `root_cause_correct=False` regardless of scenario class.**
+   `root_cause_correct` measures whether the agent IDENTIFIED the
+   simulated failure mode. An `undetected_fault` verdict explicitly
+   does not identify anything — the agent abstained. Even on a
+   negative-control scenario where the operationally-correct posture
+   IS abstention, the agent didn't say "PyHSS clock skew, no
+   functional impact" — it said "I couldn't find anything." Those
+   are different claims and only the first one identifies the
+   simulated failure mode.
+
+   **But the `root_cause_rationale` field MUST distinguish honest
+   hedging from fabrication.** This is the load-bearing scoring
+   signal for the operational difference between two failure modes
+   that both score False on this dimension:
+
+   - **`undetected_fault` (honest hedge)** — the agent acknowledged
+     it could not pinpoint a fault. Operationally safe; defers to
+     a human. Rationale should say something like: *"Agent emitted
+     `undetected_fault` and did not identify the simulated failure
+     mode (X). False on this dimension, but the agent honestly
+     hedged rather than fabricating a wrong culprit — meaningfully
+     better than the prior failure mode where the agent named a
+     wrong NF as the root cause."*
+
+   - **`promoted`/`confirmed` with WRONG NF (fabrication)** —
+     the agent named a culprit that does not match the simulated
+     failure mode. Operationally dangerous; would trigger
+     remediation against an innocent component. Rationale should
+     say: *"Agent fabricated NF-X as the root cause; the simulated
+     failure mode was Y. False on this dimension AND operationally
+     unsafe — a wrong-culprit diagnosis is worse than abstention."*
+
+   The boolean is False either way, but the rationale carries the
+   operational distinction for downstream evaluators (humans
+   reviewing scorecards, dashboards summarizing run quality, etc.).
+
 2. **severity_correct** (bool): Did the agent's severity assessment match the
    actual impact? A complete outage (container killed, network partitioned) =
    "down"/"outage"/"unreachable"/"100% loss". A degradation (packet loss,

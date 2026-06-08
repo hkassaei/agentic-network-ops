@@ -192,6 +192,9 @@ from .guardrails.synthesis_compound_consistency import (
     lint_compound_additional_causes,
     lint_compound_verdict_consistency,
 )
+from .guardrails.synthesis_no_overclaim import (
+    lint_synthesis_no_overclaim,
+)
 from .guardrails.base import GuardrailVerdict
 from .models import (
     CorrelationAnalysis,
@@ -3108,11 +3111,27 @@ async def investigate(
     _captured_network_analysis_app = state.get("network_analysis")
 
     def _synthesis_combined_guardrail(report):
-        # (a) Localized-verdict consistency — fires FIRST because
-        # verdict_kind=localized on the app-layer branch is a pure
-        # hallucination (the LLM is inventing kernel-counter evidence
-        # that the walker never produced). Reject before the
-        # pool-membership / cap guardrails get involved.
+        # (a-) No-overclaim — fires before everything else. ADR
+        # `synthesis_undetected_fault_verdict.md`. If no Investigator
+        # verdict is NOT_DISPROVEN, the agent MUST emit
+        # `verdict_kind=undetected_fault` and cannot promote a
+        # least-disconfirmed candidate. Conversely, undetected_fault
+        # is invalid when there IS a NOT_DISPROVEN verdict on the table.
+        # Walker-evidence verdicts (`localized`, `compound`) short-
+        # circuit PASS inside the guardrail.
+        no_overclaim = lint_synthesis_no_overclaim(report, verdicts)
+        if no_overclaim.verdict is not GuardrailVerdict.PASS:
+            log.info(
+                "Synthesis no-overclaim REJECT: %s",
+                no_overclaim.reason[:200],
+            )
+            return no_overclaim
+
+        # (a) Localized-verdict consistency — verdict_kind=localized on
+        # the app-layer branch is a pure hallucination (the LLM is
+        # inventing kernel-counter evidence that the walker never
+        # produced). Reject before the pool-membership / cap guardrails
+        # get involved.
         consistency = lint_localized_verdict_consistency(
             report, _captured_path_walk_report_app,
         )
@@ -3530,10 +3549,19 @@ async def _phase8_impact_assessment(
         return
 
     narration_source = "template"
+    verdict_kind_for_narrative = (
+        diagnosis.get("verdict_kind") if isinstance(diagnosis, dict) else None
+    )
     if not br.root_cause_nfs:
-        # Inconclusive — undetermined impact, no LLM call.
-        br.narrative = render_template_narrative(br)
-        narration_source = "undetermined"
+        # No root cause — no LLM call. Pass verdict_kind through so the
+        # template can distinguish `undetected_fault` (humble admission;
+        # recommend manual NOC review) from generic inconclusive.
+        br.narrative = render_template_narrative(br, verdict_kind_for_narrative)
+        narration_source = (
+            "undetected_fault"
+            if verdict_kind_for_narrative == "undetected_fault"
+            else "undetermined"
+        )
     else:
         narrative: Optional[str] = None
         try:

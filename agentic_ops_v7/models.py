@@ -20,7 +20,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Re-export common trace models
 from agentic_ops_common.models import (  # noqa: F401
@@ -269,15 +269,20 @@ class ProbeResult(BaseModel):
 
     - `outcome` — whether the probe actually produced a signal at all.
       Closed enum: consistent / contradicts / ambiguous /
-      tool_unavailable / error. Only `tool_unavailable` and `error` are
-      structurally meaningful today (they get filtered out of evidence-
-      strength scoring); the other three mirror `compared_to_expected`
-      and exist so the field can fully replace it in a follow-up.
+      tool_unavailable / error / out_of_scope. Only `tool_unavailable`,
+      `error`, and `out_of_scope` are structurally meaningful today
+      (they get filtered out of evidence-strength scoring); the other
+      three mirror `compared_to_expected` and exist so the field can
+      fully replace it in a follow-up.
 
-    The Investigator prompt teaches the LLM to set
-    `outcome="tool_unavailable"` whenever a tool result begins with
-    `PROBE_TOOL_UNAVAILABLE:` (the contract from
-    `agentic_ops/tools.py::_tool_unavailable`).
+    The Investigator prompt teaches the LLM to set:
+      - `outcome="tool_unavailable"` whenever a tool result begins with
+        `PROBE_TOOL_UNAVAILABLE:` (contract: `agentic_ops/tools.py::_tool_unavailable`)
+      - `outcome="out_of_scope"` whenever a tool result begins with
+        `OUT_OF_SCOPE:` (contract: ADR `synthesis_undetected_fault_verdict.md`,
+        Task A — for RAN/UE containers outside the NOC boundary).
+        Verdict-rollup rule: OUT_OF_SCOPE + in-scope contradiction
+        (e.g. AMF metrics inconsistent with the hypothesis) = DISPROVEN.
     """
     probe_description: str
     tool_call: str = ""                     # what was called
@@ -286,7 +291,9 @@ class ProbeResult(BaseModel):
         "CONSISTENT", "CONTRADICTS", "AMBIGUOUS"
     ] = "AMBIGUOUS"
     outcome: Literal[
-        "consistent", "contradicts", "ambiguous", "tool_unavailable", "error"
+        "consistent", "contradicts", "ambiguous",
+        "tool_unavailable", "error",
+        "out_of_scope",
     ] = "ambiguous"
     commentary: str = ""
 
@@ -436,6 +443,7 @@ class DiagnosisReport(BaseModel):
     )
     verdict_kind: Literal[
         "confirmed", "promoted", "inconclusive", "localized", "compound",
+        "undetected_fault",
     ] = Field(
         default="inconclusive",
         description=(
@@ -445,7 +453,13 @@ class DiagnosisReport(BaseModel):
             "branch (path-walk produced a hop attribution). `compound` "
             "is when walker AND application-layer both produced distinct "
             "evidence of separate root causes — see ADR "
-            "multi_fault_orchestration.md."
+            "multi_fault_orchestration.md. `undetected_fault` is the "
+            "humble-admission branch: investigation completed but no "
+            "hypothesis was CONFIRMED and no correlation root cause "
+            "emerged. The agent says 'I could not pinpoint a fault — "
+            "please investigate further' rather than promoting a "
+            "least-disconfirmed candidate. See ADR "
+            "synthesis_undetected_fault_verdict.md."
         ),
     )
     affected_components: list[AffectedComponent] = Field(
@@ -483,6 +497,40 @@ class DiagnosisReport(BaseModel):
             "bundle. See ADR multi_fault_orchestration.md."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_undetected_fault_shape(self) -> "DiagnosisReport":
+        """Enforce schema constraints for verdict_kind == 'undetected_fault'.
+
+        Per ADR `synthesis_undetected_fault_verdict.md`: when the agent
+        cannot pinpoint a fault, it must NOT name a suspect or attach
+        localization/compound-root-cause structure. The verdict is a
+        humble admission, not a partial diagnosis.
+        """
+        if self.verdict_kind == "undetected_fault":
+            if self.primary_suspect_nf is not None:
+                raise ValueError(
+                    "verdict_kind='undetected_fault' requires "
+                    "primary_suspect_nf=None (the agent did not pinpoint a "
+                    f"fault); got primary_suspect_nf={self.primary_suspect_nf!r}"
+                )
+            if self.affected_components:
+                raise ValueError(
+                    "verdict_kind='undetected_fault' requires "
+                    "affected_components=[] (no fault was confirmed); "
+                    f"got {len(self.affected_components)} component(s)"
+                )
+            if self.localization is not None:
+                raise ValueError(
+                    "verdict_kind='undetected_fault' requires "
+                    "localization=None (no path-walk attribution)"
+                )
+            if self.additional_root_causes:
+                raise ValueError(
+                    "verdict_kind='undetected_fault' requires "
+                    "additional_root_causes=[] (no roots to add)"
+                )
+        return self
 
 
 # ============================================================================

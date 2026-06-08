@@ -262,11 +262,28 @@ def compute_blast_radius(diagnosis: dict, state: dict) -> BlastRadius:
     )
 
 
-def render_template_narrative(br: BlastRadius) -> str:
+def render_template_narrative(
+    br: BlastRadius,
+    verdict_kind: Optional[str] = None,
+) -> str:
     """Deterministic prose fallback used when the narrator LLM is
     unavailable or its output fails the grounding guardrail. Built purely
-    from the structured fields — grounded by construction."""
+    from the structured fields — grounded by construction.
+
+    `verdict_kind` lets the caller tailor the no-root-cause branch:
+    `undetected_fault` (ADR `synthesis_undetected_fault_verdict.md`)
+    gets an action-oriented "manual NOC review recommended" line so
+    the downstream consumer (operator, scoring rubric, GUI overlay)
+    knows the diagnosis is the agent's humble admission, not just
+    an inconclusive procedural failure.
+    """
     if not br.root_cause_nfs:
+        if verdict_kind == "undetected_fault":
+            return (
+                "No specific fault was localized during this episode. "
+                "Anomalous signals were observed but could not be attributed "
+                "to a confirmed root cause. Manual NOC review recommended."
+            )
         return "Downstream impact undetermined — no root cause was localized."
 
     rc = ", ".join(f"`{n}`" for n in br.root_cause_nfs)

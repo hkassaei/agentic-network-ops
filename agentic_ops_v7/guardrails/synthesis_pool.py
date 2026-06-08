@@ -295,6 +295,16 @@ def lint_synthesis_pool_membership(
     if report.verdict_kind == "compound":
         return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
 
+    # `undetected_fault` (ADR `synthesis_undetected_fault_verdict.md`)
+    # is the humble-admission branch — the agent explicitly does NOT
+    # name a suspect, so candidate-pool membership has no meaning.
+    # The dedicated `lint_synthesis_no_overclaim` guardrail enforces
+    # the no-confirmed-hypothesis invariant that gates this verdict.
+    # Schema-level model validator on DiagnosisReport already enforces
+    # primary_suspect_nf is None, affected_components is empty, etc.
+    if report.verdict_kind == "undetected_fault":
+        return GuardrailResult(verdict=GuardrailVerdict.PASS, output=report)
+
     pool_nfs = [m.nf for m in pool.members]
     pool_nfs_set = set(pool_nfs)
 

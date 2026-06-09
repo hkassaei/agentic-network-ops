@@ -42,6 +42,37 @@ _AGENT_LOG_DIRS = {
     "v7": _OPERATE_DIR / "agentic_ops_v7" / "docs" / "agent_logs",
 }
 
+# Max scenario-slug length before truncation. Bumped from 30 → 60 so the
+# parenthetical qualifiers on current scenario names (e.g. "PyHSS Clock
+# Skew (Observability)") survive without being chopped mid-word. All
+# current scenarios fit; bump again if a new scenario name exceeds 60.
+_MAX_SLUG_LEN = 60
+
+
+def _slugify_scenario_name(name: str) -> str:
+    """Convert a scenario name into a safe-and-readable filename component.
+
+    Steps:
+      1. Lowercase, replace spaces and dashes with underscores.
+      2. Truncate to `_MAX_SLUG_LEN` characters.
+      3. If truncation left an unmatched `(`, drop the partial parenthetical
+         tail and trailing underscores. Without this guard, the slugger
+         could produce filenames like `..._(observabilit.md` — a
+         half-truncated paren-group that looks broken.
+
+    No regex / Path.sanitize because every existing chaos scenario name
+    contains only ASCII alphanumerics, spaces, dashes, parens, and the
+    occasional arrow character (`→`). Filesystems handle those fine.
+    """
+    slug = name.lower().replace(" ", "_").replace("-", "_")[:_MAX_SLUG_LEN]
+    if slug.count("(") != slug.count(")"):
+        # Truncation cut into a parenthetical. Drop from the last `(`
+        # backwards, plus any trailing underscores that would dangle.
+        last_open = slug.rfind("(")
+        if last_open >= 0:
+            slug = slug[:last_open].rstrip("_")
+    return slug
+
 
 class EpisodeRecorder(BaseAgent):
     """Assembles a complete Episode from session.state and writes it to disk."""
@@ -104,8 +135,14 @@ class EpisodeRecorder(BaseAgent):
         agent_logs_dir = _AGENT_LOG_DIRS.get(agent_version, _EPISODES_DIR)
         agent_logs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build filename from scenario slug
-        slug = scenario.get("name", "unknown").lower().replace(" ", "_").replace("-", "_")[:30]
+        # Build filename from scenario slug. Limit bumped from 30 → 60 so
+        # current scenario names with parenthetical qualifiers (e.g.
+        # "PyHSS Clock Skew (Observability)", "Selective Subscriber
+        # Corruption (UE1)", "Asymmetric Path Loss (AMF→gNB)") fit
+        # without losing their disambiguating tail. After slicing, drop
+        # any half-closed parenthetical so we never produce a filename
+        # like `..._(observabilit.md` with a dangling open paren.
+        slug = _slugify_scenario_name(scenario.get("name", "unknown"))
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         base_name = f"run_{ts}_{slug}"
 

@@ -14,6 +14,14 @@ let playTimer = null;
 let onDotArrived = null;
 let viewMode = 'topology';  // 'topology' | 'sequence' | 'focused'
 
+// Animation generation token. Bumped on every (re)render that clears the SVG
+// or the flow layer. Each dot animation captures the generation it was born in
+// and bails out of its end handlers if a newer render has since occurred. This
+// prevents dots that were detached mid-flight (by .remove(), which does NOT
+// cancel a running d3 transition) from firing the shared onDotArrived advance
+// trigger and racing playback ahead of the visible dot.
+let _animGen = 0;
+
 // Cached container dimensions — set once on init and resize.
 // Prevents layout reflows from repeatedly reading clientWidth/clientHeight.
 let _topoW = 0, _topoH = 0;
@@ -270,6 +278,10 @@ function renderFlowTopology() {
   if (!topoData || !topoData.nodes) return;
 
   const svg = d3.select('#topo-svg');
+  // Interrupt any in-flight dot and invalidate stale animations before the
+  // SVG is torn down — .remove() alone leaves detached transitions running.
+  svg.selectAll('.flow-dot').interrupt();
+  _animGen++;
   svg.selectAll('*').remove();
 
   const width = _topoW;
@@ -349,6 +361,10 @@ function highlightFlow() {
   if (!topoData || !currentFlow) return;
 
   const svg = d3.select('#topo-svg');
+  // Interrupt any in-flight dot and invalidate stale animations before the
+  // flow layer is cleared — .remove() alone leaves detached transitions running.
+  svg.selectAll('.flow-dot').interrupt();
+  _animGen++;
   const flowLayer = svg.select('.flow-layer');
   flowLayer.selectAll('*').remove();
 
@@ -432,6 +448,7 @@ function highlightFlow() {
           segDurations.push(Math.sqrt(dx*dx + dy*dy) / PIXELS_PER_MS);
         }
         const savedStepIdx = i;
+        const myGen = _animGen;
         const isLastStep = i === currentFlow.steps.length - 1;
 
         function animateForward() {
@@ -443,6 +460,7 @@ function highlightFlow() {
               .attr('cx', waypoints[w].x).attr('cy', waypoints[w].y);
           }
           t.on('end', function() {
+            if (myGen !== _animGen) return;
             if (onDotArrived) onDotArrived();
             if (isLastStep || playing) return;
             animateBackward();
@@ -458,6 +476,7 @@ function highlightFlow() {
               .attr('cx', waypoints[w].x).attr('cy', waypoints[w].y);
           }
           t.on('end', function() {
+            if (myGen !== _animGen) return;
             if (currentStepIdx === savedStepIdx) animateForward();
           });
         }
@@ -485,6 +504,10 @@ function renderSequenceDiagram() {
   }
 
   const svg = d3.select('#topo-svg');
+  // Interrupt any in-flight dot and invalidate stale animations before the
+  // SVG is torn down — .remove() alone leaves detached transitions running.
+  svg.selectAll('.flow-dot').interrupt();
+  _animGen++;
   svg.selectAll('*').remove();
 
   const width = _topoW;
@@ -638,6 +661,7 @@ function renderSequenceDiagram() {
       }
 
       const savedIdx = currentStepIdx;
+      const myGen = _animGen;
       const isLastStep = currentStepIdx === totalSteps - 1;
 
       function animFwd() {
@@ -647,6 +671,7 @@ function renderSequenceDiagram() {
             .attr('cx', waypoints[w].x).attr('cy', waypoints[w].y);
         }
         t.on('end', function () {
+          if (myGen !== _animGen) return;
           if (onDotArrived) onDotArrived();
           if (isLastStep || playing) return;
           animBwd();
@@ -660,6 +685,7 @@ function renderSequenceDiagram() {
             .attr('cx', waypoints[w].x).attr('cy', waypoints[w].y);
         }
         t.on('end', function () {
+          if (myGen !== _animGen) return;
           if (currentStepIdx === savedIdx) animFwd();
         });
       }
@@ -717,6 +743,10 @@ function highlightFlowFocused() {
   if (!topoData || !currentFlow) return;
 
   const svg = d3.select('#topo-svg');
+  // Interrupt any in-flight dot and invalidate stale animations before the
+  // flow layer is cleared — .remove() alone leaves detached transitions running.
+  svg.selectAll('.flow-dot').interrupt();
+  _animGen++;
   const flowLayer = svg.select('.flow-layer');
   flowLayer.selectAll('*').remove();
 
@@ -849,6 +879,7 @@ function highlightFlowFocused() {
       .attr('cx', startPt.x).attr('cy', startPt.y);
 
     const savedIdx = currentStepIdx;
+    const myGen = _animGen;
     const isLastStep = currentStepIdx === currentFlow.steps.length - 1;
 
     function animFwd() {
@@ -860,6 +891,7 @@ function highlightFlowFocused() {
           };
         })
         .on('end', function () {
+          if (myGen !== _animGen) return;
           if (onDotArrived) onDotArrived();
           if (isLastStep || playing) return;
           animBwd();
@@ -875,6 +907,7 @@ function highlightFlowFocused() {
           };
         })
         .on('end', function () {
+          if (myGen !== _animGen) return;
           if (currentStepIdx === savedIdx) animFwd();
         });
     }
